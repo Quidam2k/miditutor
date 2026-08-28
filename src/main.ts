@@ -1,10 +1,23 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, session } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 
 if (started) {
   app.quit();
 }
+
+// Web MIDI is gated behind a Chromium permission. Without a handler that
+// grants 'midi'/'midiSysex', navigator.requestMIDIAccess() (used by WebMidi.js)
+// is denied and no keyboard input ever reaches the renderer.
+const grantMidiPermissions = () => {
+  const ses = session.defaultSession;
+  ses.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'midi' || permission === 'midiSysex');
+  });
+  ses.setPermissionCheckHandler((_wc, permission) => {
+    return permission === 'midi' || permission === 'midiSysex';
+  });
+};
 
 const createWindow = () => {
   const mainWindow = new BrowserWindow({
@@ -41,7 +54,10 @@ const createWindow = () => {
   });
 };
 
-app.on('ready', createWindow);
+app.on('ready', () => {
+  grantMidiPermissions();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
