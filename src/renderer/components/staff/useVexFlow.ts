@@ -1,5 +1,28 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { Renderer, Stave, StaveNote, Voice, Formatter, Accidental } from 'vexflow';
+// vexflow@5 ships a types entry that re-exports its classes via `export *`.
+// Under moduleResolution:"bundler" — once OSMD (with its own nested vexflow) is
+// in the dependency tree — TypeScript stops surfacing those members, as named
+// imports or as statics on the default export, even though both exist and work
+// at runtime (vite/esbuild resolve them fine; the staff renders correctly).
+// Isolate that tooling quirk here with a typed shim rather than leaking `any`
+// or contorting the rest of the file. Revisit if vexflow/TS resolves it.
+import Vex from 'vexflow';
+
+// vexflow's `exports` map also blocks deep type subpaths, so we can't even pull
+// the real class types by path. Type the statics loosely here; this file's own
+// logic stays typed, only the vexflow class refs go untyped.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+interface VexFlowStatics {
+  Renderer: any;
+  Stave: any;
+  StaveNote: any;
+  Voice: any;
+  Formatter: any;
+  Accidental: any;
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+const { Renderer, Stave, StaveNote, Voice, Formatter, Accidental } =
+  Vex as unknown as VexFlowStatics;
 import { Pitch, Clef } from '../../types/music';
 import { pitchToVexFlowKey, getVexFlowAccidental } from '../../engine/MusicTheory';
 

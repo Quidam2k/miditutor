@@ -9,13 +9,30 @@ if (started) {
 // Web MIDI is gated behind a Chromium permission. Without a handler that
 // grants 'midi'/'midiSysex', navigator.requestMIDIAccess() (used by WebMidi.js)
 // is denied and no keyboard input ever reaches the renderer.
+// Scoped to the app's own origin (dev = the Vite server, prod = file://) so we
+// never grant MIDI to arbitrary remote content the window might navigate to.
+const isOwnOrigin = (origin: string | undefined): boolean => {
+  if (!origin) return false;
+  if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+    try {
+      if (origin === new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin) return true;
+    } catch {
+      /* fall through to file:// check */
+    }
+  }
+  return origin.startsWith('file://');
+};
+
+const isMidiPermission = (permission: string): boolean =>
+  permission === 'midi' || permission === 'midiSysex';
+
 const grantMidiPermissions = () => {
   const ses = session.defaultSession;
-  ses.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'midi' || permission === 'midiSysex');
+  ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
+    callback(isMidiPermission(permission) && isOwnOrigin(details.requestingUrl));
   });
-  ses.setPermissionCheckHandler((_wc, permission) => {
-    return permission === 'midi' || permission === 'midiSysex';
+  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
+    return isMidiPermission(permission) && isOwnOrigin(requestingOrigin);
   });
 };
 
