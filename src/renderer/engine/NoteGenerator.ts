@@ -33,8 +33,8 @@ export function generateRandomNote(options: NoteGeneratorOptions): Pitch {
  */
 export function generateInterval(
   options: NoteGeneratorOptions,
-  minSemitones: number = 1,
-  maxSemitones: number = 12,
+  minSemitones = 1,
+  maxSemitones = 12,
 ): [Pitch, Pitch] {
   const first = generateRandomNote(options);
 

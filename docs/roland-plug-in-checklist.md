@@ -22,9 +22,10 @@ stop there and note what happened — that tells us exactly where the problem is
 - [ ] Turn the piano on.
 
 ## Tell the piano to send its notes to the computer
-- [ ] Turn **Local Control OFF** on the piano. (This stops each key from playing
-      twice — once from the piano and once echoed back by the app. The piano's
-      manual covers how, around page 12.)
+- [ ] Leave **Local Control ON** (the factory setting). MidiTutor does not play
+      your keys back through the computer, so with Local Control OFF the piano
+      would go silent. (Only turn it off if a future version adds app sound for
+      your playing and you hear every note twice.)
 
 ## Confirm Windows sees the piano
 - [ ] Open Windows **Device Manager** and look for the piano listed as a sound
