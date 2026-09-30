@@ -1,0 +1,249 @@
+{
+ "version": 1,
+ "note": "Pantheon #3566. roots[] >1 = enharmonic; the drill says either name. group = the teacher's key-colour pattern (W/B), metadata only.",
+ "items": [
+  {
+   "id": "triad:C",
+   "kind": "triad",
+   "roots": [
+    "C"
+   ],
+   "quality": "major",
+   "group": "WWW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:F",
+   "kind": "triad",
+   "roots": [
+    "F"
+   ],
+   "quality": "major",
+   "group": "WWW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:G",
+   "kind": "triad",
+   "roots": [
+    "G"
+   ],
+   "quality": "major",
+   "group": "WWW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Dm",
+   "kind": "triad",
+   "roots": [
+    "D"
+   ],
+   "quality": "minor",
+   "group": "WWW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Em",
+   "kind": "triad",
+   "roots": [
+    "E"
+   ],
+   "quality": "minor",
+   "group": "WWW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Am",
+   "kind": "triad",
+   "roots": [
+    "A"
+   ],
+   "quality": "minor",
+   "group": "WWW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:D",
+   "kind": "triad",
+   "roots": [
+    "D"
+   ],
+   "quality": "major",
+   "group": "WBW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:E",
+   "kind": "triad",
+   "roots": [
+    "E"
+   ],
+   "quality": "major",
+   "group": "WBW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:A",
+   "kind": "triad",
+   "roots": [
+    "A"
+   ],
+   "quality": "major",
+   "group": "WBW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Cm",
+   "kind": "triad",
+   "roots": [
+    "C"
+   ],
+   "quality": "minor",
+   "group": "WBW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Fm",
+   "kind": "triad",
+   "roots": [
+    "F"
+   ],
+   "quality": "minor",
+   "group": "WBW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Gm",
+   "kind": "triad",
+   "roots": [
+    "G"
+   ],
+   "quality": "minor",
+   "group": "WBW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:F#",
+   "kind": "triad",
+   "roots": [
+    "F#",
+    "Gb"
+   ],
+   "quality": "major",
+   "group": "BBB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:D#m",
+   "kind": "triad",
+   "roots": [
+    "D#",
+    "Eb"
+   ],
+   "quality": "minor",
+   "group": "BBB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:C#",
+   "kind": "triad",
+   "roots": [
+    "C#",
+    "Db"
+   ],
+   "quality": "major",
+   "group": "BWB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Eb",
+   "kind": "triad",
+   "roots": [
+    "Eb"
+   ],
+   "quality": "major",
+   "group": "BWB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Ab",
+   "kind": "triad",
+   "roots": [
+    "Ab"
+   ],
+   "quality": "major",
+   "group": "BWB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:C#m",
+   "kind": "triad",
+   "roots": [
+    "C#"
+   ],
+   "quality": "minor",
+   "group": "BWB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:F#m",
+   "kind": "triad",
+   "roots": [
+    "F#"
+   ],
+   "quality": "minor",
+   "group": "BWB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:G#m",
+   "kind": "triad",
+   "roots": [
+    "G#"
+   ],
+   "quality": "minor",
+   "group": "BWB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:B",
+   "kind": "triad",
+   "roots": [
+    "B"
+   ],
+   "quality": "major",
+   "group": "WBB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Bm",
+   "kind": "triad",
+   "roots": [
+    "B"
+   ],
+   "quality": "minor",
+   "group": "WWB",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Bb",
+   "kind": "triad",
+   "roots": [
+    "Bb"
+   ],
+   "quality": "major",
+   "group": "BWW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  },
+  {
+   "id": "triad:Bbm",
+   "kind": "triad",
+   "roots": [
+    "Bb"
+   ],
+   "quality": "minor",
+   "group": "BBW",
+   "source": "teacher's 2026-09-25 triads by colour"
+  }
+ ]
+}

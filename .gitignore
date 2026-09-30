@@ -90,3 +90,7 @@ typings/
 
 # Electron-Forge
 out/
+
+# Piano drill practice history (personal; repo is public) - Pantheon #3566
+data/
+__pycache__/
