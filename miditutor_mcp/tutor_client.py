@@ -156,10 +156,12 @@ def clear_task() -> dict:
 
 
 def load_piece(
-    title: str, musicxml: str, photo_data_url: str | None = None
+    title: str, musicxml: str | None = None, photo_data_url: str | None = None
 ) -> dict:
-    """Load a piece, with an optional photo of the score."""
-    body = {"title": title, "musicxml": musicxml}
+    """Load a piece: MusicXML, a photo alone (OMR not read), or both."""
+    body: dict = {"title": title}
+    if musicxml is not None:
+        body["musicxml"] = musicxml
     if photo_data_url is not None:
         body["photo"] = photo_data_url
     return request("POST", "/piece", body)

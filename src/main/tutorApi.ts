@@ -305,13 +305,17 @@ export class TutorApi {
       send({ task: this.task });
     } else if (route === 'POST /piece') {
       const { title, musicxml, photo } = await this.body(req);
-      if (typeof title !== 'string' || typeof musicxml !== 'string' ||
-          (!musicxml.includes('<score-partwise') && !musicxml.includes('<score-timewise')) ||
-          (photo !== undefined && typeof photo !== 'string')) {
+      const hasScore = typeof musicxml === 'string' &&
+        (musicxml.includes('<score-partwise') || musicxml.includes('<score-timewise'));
+      const hasPhoto = typeof photo === 'string' && /^data:image\/(png|jpeg|webp|gif);base64,/.test(photo);
+      // A photo alone is a piece too: OMR has not read it (yet), but the photo still shows.
+      if (typeof title !== 'string' || (musicxml !== undefined && !hasScore) ||
+          (photo !== undefined && !hasPhoto) || (!hasScore && !hasPhoto)) {
         throw new HttpError(400, 'Invalid piece');
       }
-      this.opts.sendToRenderer({ type: 'piece', title, musicxml,
-        ...(typeof photo === 'string' ? { photo } : {}) });
+      this.opts.sendToRenderer({ type: 'piece', title,
+        musicxml: typeof musicxml === 'string' ? musicxml : '',
+        ...(hasPhoto ? { photo } : {}) });
       send({ ok: true });
     } else if (route === 'POST /inject') {
       if (!this.opts.allowInject) throw new HttpError(404, 'Not found');

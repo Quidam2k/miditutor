@@ -190,5 +190,88 @@ def tutor_clear() -> dict:
     return _tutor(tutor_client.clear_task)
 
 
+_MUSICXML_SUFFIXES = {".musicxml", ".xml", ".mxl"}
+_MIDI_SUFFIXES = {".mid", ".midi"}
+_PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+_PHOTO_MAX_SIDE = 2000  # px; keeps the photo well under the API's 5 MB body limit
+
+
+def _photo_data_url(path: Path) -> str:
+    """The photo as a JPEG data URL, downscaled so it travels to the app quickly."""
+    import base64
+    import io
+
+    from PIL import Image, ImageOps
+
+    with Image.open(path) as image:
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        image.thumbnail((_PHOTO_MAX_SIDE, _PHOTO_MAX_SIDE))
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=85)
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+@mcp.tool()
+def tutor_load_piece(path: str, title: str | None = None) -> dict:
+    """Put a piece on Todd's Score tab from a file on this machine.
+
+    .musicxml / .xml / .mxl: the score as is. .mid / .midi: converted to a
+    piano grand staff first. .jpg / .png: the photo is always shown (Photo
+    toggle), and OMR is tried for the notes; if OMR fails the result has
+    omr_error and the piece is photo-only. HEIC is not supported: export the
+    photo as JPEG first. Returns what was pushed, or an error.
+    """
+    source = Path(path).expanduser()
+    if not source.is_file():
+        return {"error": f"No file at {source}"}
+    name = title or source.stem
+    suffix = source.suffix.lower()
+
+    if suffix in _MUSICXML_SUFFIXES:
+        from importer.musicxml import MusicXMLError, read_musicxml
+
+        try:
+            xml = read_musicxml(source)
+        except MusicXMLError as exc:
+            return {"error": str(exc)}
+        return _push_piece(name, musicxml=xml)
+
+    if suffix in _MIDI_SUFFIXES:
+        from importer.midi import midi_to_musicxml
+
+        try:
+            xml = midi_to_musicxml(source, title=name)
+        except (ValueError, OSError) as exc:
+            return {"error": f"Could not convert MIDI: {exc}"}
+        return _push_piece(name, musicxml=xml)
+
+    if suffix in _PHOTO_SUFFIXES:
+        from importer.omr import OMRError, photo_to_musicxml
+
+        try:
+            photo = _photo_data_url(source)
+        except OSError as exc:  # PIL raises OSError for unreadable or unknown images
+            return {"error": f"Could not read the photo: {exc}"}
+        try:
+            xml = photo_to_musicxml(source)
+        except OMRError as exc:
+            return _push_piece(name, photo=photo, omr_error=str(exc))
+        return _push_piece(name, musicxml=xml, photo=photo)
+
+    return {"error": f"Unsupported file type '{suffix or '(none)'}': use .musicxml, .mxl, .mid, .jpg or .png"}
+
+
+def _push_piece(
+    title: str, musicxml: str | None = None, photo: str | None = None, omr_error: str | None = None
+) -> dict:
+    pushed = _tutor(tutor_client.load_piece, title, musicxml, photo)
+    if "error" in pushed:
+        return pushed
+    result = {"ok": True, "title": title, "score": musicxml is not None, "photo": photo is not None}
+    if omr_error is not None:
+        result["omr_error"] = omr_error
+    return result
+
+
 if __name__ == "__main__":
     mcp.run()

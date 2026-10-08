@@ -11,6 +11,7 @@ interface TutorBridge {
   note: (ev: unknown) => void;
   screen: (state: unknown) => void;
   device: (d: unknown) => void;
+  openPiece: () => Promise<{ title: string; musicxml: string } | null>;
   onCommand: (cb: (cmd: RendererCommand) => void) => () => void;
 }
 

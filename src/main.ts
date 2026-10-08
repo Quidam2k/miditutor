@@ -1,7 +1,10 @@
-import { app, BrowserWindow, ipcMain, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, OpenDialogOptions, session } from 'electron';
+import fs from 'node:fs/promises';
 import path from 'node:path';
+import JSZip from 'jszip';
 import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
+import { MUSICXML_EXTENSIONS, isScoreXml, titleFromPath } from './shared/pieceFiles';
 
 if (started) {
   app.quit();
@@ -46,7 +49,42 @@ const grantMidiPermissions = () => {
 let mainWindow: BrowserWindow | null = null;
 let tutorApi: TutorApi | null = null;
 
+// Score file -> MusicXML text. A compressed .mxl is a zip whose container.xml
+// names the score document inside.
+const readScoreFile = async (filePath: string): Promise<string> => {
+  const bytes = await fs.readFile(filePath);
+  let text: string;
+  if (filePath.toLowerCase().endsWith('.mxl')) {
+    const zip = await JSZip.loadAsync(bytes);
+    const container = zip.file('META-INF/container.xml');
+    const rootPath = container
+      ? /full-path="([^"]+)"/.exec(await container.async('string'))?.[1]
+      : undefined;
+    const entry = (rootPath ? zip.file(rootPath) : null) ??
+      zip.file(/\.xml$/i).find((f) => !f.name.startsWith('META-INF/'));
+    if (!entry) throw new Error('No score document inside this .mxl file');
+    text = await entry.async('string');
+  } else {
+    text = bytes.toString('utf8');
+  }
+  if (!isScoreXml(text)) throw new Error('This file is not a MusicXML score');
+  return text;
+};
+
 const startTutorApi = () => {
+  ipcMain.handle('piece:open', async () => {
+    const options: OpenDialogOptions = {
+      title: 'Open piece',
+      properties: ['openFile'],
+      filters: [{ name: 'MusicXML score', extensions: [...MUSICXML_EXTENSIONS] }],
+    };
+    const picked = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    const filePath = picked.filePaths[0];
+    if (picked.canceled || !filePath) return null;
+    return { title: titleFromPath(filePath), musicxml: await readScoreFile(filePath) };
+  });
   const send = (cmd: RendererCommand) => mainWindow?.webContents.send('tutor:command', cmd);
   tutorApi = new TutorApi({
     port: Number(process.env.MIDITUTOR_PORT ?? 47800),

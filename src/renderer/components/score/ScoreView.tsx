@@ -28,7 +28,10 @@ import {
 interface Piece {
   id: string;
   label: string;
+  /** MusicXML text; empty for a photo-only piece. */
   xml: string;
+  /** Data URL of the original photo, when the piece came from one. */
+  photo?: string;
   targetBpm?: number;
 }
 
@@ -140,7 +143,10 @@ export function ScoreView() {
   const [marks, setMarks] = useState<PlayedMark[]>([]);
 
   const [pieceId, setPieceId] = useState(PIECES[0].id);
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  // 'photo': a pushed piece with no readable score yet, only its photo to show.
+  const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'photo'>('loading');
+  const [view, setView] = useState<'score' | 'photo'>('score');
+  const [openError, setOpenError] = useState('');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [following, setFollowing] = useState(true);
   const [remaining, setRemaining] = useState<number[]>([]);
@@ -308,8 +314,17 @@ export function ScoreView() {
 
   // --- load + render the selected piece ---
   useEffect(() => {
+    // The photo view is the default when there is no score to show.
+    setView(piece.xml ? 'score' : 'photo');
+  }, [piece.id, piece.xml]);
+
+  useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    if (!piece.xml) {
+      setStatus('photo');
+      return;
+    }
     let disposed = false;
     setStatus('loading');
 
@@ -430,6 +445,17 @@ export function ScoreView() {
   const finished = feedback.kind === 'complete';
   const btn =
     'rounded-md px-3 py-1 text-sm font-medium disabled:opacity-40 bg-gray-800 text-gray-200 hover:bg-gray-700';
+  const showPhoto = view === 'photo' && !!piece.photo;
+
+  const openPiece = async () => {
+    setOpenError('');
+    try {
+      const opened = await window.tutorBridge?.openPiece();
+      if (opened) useTutorStore.getState().addPiece({ label: opened.title, xml: opened.musicxml });
+    } catch (err) {
+      setOpenError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   return (
     <div className="flex w-full flex-col gap-3">
@@ -446,6 +472,28 @@ export function ScoreView() {
             </option>
           ))}
         </select>
+        {window.tutorBridge && (
+          <button onClick={openPiece} className={btn}>
+            Open piece…
+          </button>
+        )}
+        {piece.photo && (
+          <div className="flex overflow-hidden rounded-md border border-gray-700 text-sm" role="group" aria-label="Photo or score">
+            {(['score', 'photo'] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                disabled={v === 'score' && !piece.xml}
+                aria-pressed={view === v}
+                className={`px-3 py-1 font-medium capitalize disabled:opacity-40 ${
+                  view === v ? 'bg-gray-700 text-white' : 'bg-gray-900 text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                {v === 'score' ? 'Score' : 'Photo'}
+              </button>
+            ))}
+          </div>
+        )}
         <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300">
           <input type="checkbox" checked={following} onChange={(e) => setFollowing(e.target.checked)} />
           Follow my playing
@@ -507,6 +555,17 @@ export function ScoreView() {
         </p>
       )}
       {status === 'loading' && <p className="text-sm text-gray-500">Loading score…</p>}
+      {openError && (
+        <p className="rounded-md border border-red-800/50 bg-red-900/20 p-3 text-sm text-red-300">
+          Could not open that file: {openError}
+        </p>
+      )}
+      {status === 'photo' && !piece.photo && (
+        <p className="text-sm text-gray-500">This piece has no score or photo.</p>
+      )}
+      {status === 'photo' && piece.photo && (
+        <p className="text-sm text-gray-400">Photo only: the notes could not be read from it.</p>
+      )}
 
       {/* OSMD draws black notation, so give it a light panel. Blue heads = what he played;
           red ring = wrong note; red accidental = wrong sharp/flat/natural. */}
@@ -515,7 +574,10 @@ export function ScoreView() {
           wrongFlash ? 'ring-red-500' : 'ring-transparent'
         }`}
       >
-        <div ref={layerRef} className="relative">
+        {showPhoto && piece.photo && (
+          <img src={piece.photo} alt={`Photo of ${piece.label}`} className="mx-auto max-h-[70vh] w-auto max-w-full" />
+        )}
+        <div ref={layerRef} className={showPhoto ? 'hidden' : 'relative'}>
           <div ref={containerRef} />
           <PlayedOverlay marks={marks} />
         </div>

@@ -1,14 +1,24 @@
 """Exercise the HTTP client against a small local app stub."""
+import base64
+import io
 import json
 import socket
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import mido
 import pytest
+from PIL import Image
 
-from miditutor_mcp import tutor_client
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+MINUET = ROOT / "src" / "renderer" / "assets" / "minuet-in-g.musicxml"
+
+from miditutor_mcp import server, tutor_client  # noqa: E402
 
 
 @pytest.fixture
@@ -91,11 +101,13 @@ def app(monkeypatch):
         def do_POST(self):
             if not self.authorized():
                 return
-            if urlsplit(self.path).path != "/task":
+            if urlsplit(self.path).path not in ("/task", "/piece"):
                 self.reply({"error": "not found"}, 404)
                 return
             length = int(self.headers.get("Content-Length", "0"))
-            self.reply(json.loads(self.rfile.read(length)))
+            body = json.loads(self.rfile.read(length))
+            seen[-1]["body"] = body
+            self.reply(body)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -176,3 +188,53 @@ def test_unavailable_without_token(app, monkeypatch, tmp_path):
         f" (no API token found at {token_path})"
     )
     assert app["seen"] == []
+
+
+def test_load_piece_midi_is_converted_by_the_importer(app, tmp_path):
+    midi_path = tmp_path / "tiny.mid"
+    midi = mido.MidiFile(ticks_per_beat=480)
+    track = mido.MidiTrack()
+    midi.tracks.append(track)
+    track.append(mido.Message("note_on", note=60, velocity=80, time=0))
+    track.append(mido.Message("note_off", note=60, velocity=0, time=480))
+    midi.save(midi_path)
+
+    result = server.tutor_load_piece(str(midi_path), title="Tiny")
+    assert result == {"ok": True, "title": "Tiny", "score": True, "photo": False}
+    body = app["seen"][-1]["body"]
+    assert body["title"] == "Tiny"
+    assert "<score-partwise" in body["musicxml"]
+    assert "photo" not in body
+
+
+def test_load_piece_musicxml_is_sent_as_is(app):
+    result = server.tutor_load_piece(str(MINUET))
+    assert result["ok"] and result["score"] and result["title"] == "minuet-in-g"
+    assert app["seen"][-1]["body"]["musicxml"] == MINUET.read_text(encoding="utf-8")
+
+
+def test_load_piece_photo_is_shown_even_when_omr_fails(app, tmp_path):
+    photo_path = tmp_path / "page.png"
+    Image.new("RGB", (3000, 2000), (200, 30, 30)).save(photo_path)
+
+    result = server.tutor_load_piece(str(photo_path))
+    assert result == {
+        "ok": True,
+        "title": "page",
+        "score": False,
+        "photo": True,
+        "omr_error": "OMR not wired yet (slice E)",
+    }
+    body = app["seen"][-1]["body"]
+    assert "musicxml" not in body
+    assert body["photo"].startswith("data:image/jpeg;base64,")
+    photo = Image.open(io.BytesIO(base64.b64decode(body["photo"].split(",", 1)[1])))
+    assert max(photo.size) == 2000
+
+
+def test_load_piece_reports_bad_input_without_pushing(app, tmp_path):
+    text = tmp_path / "notes.txt"
+    text.write_text("hello", encoding="utf-8")
+    assert "Unsupported file type" in server.tutor_load_piece(str(text))["error"]
+    assert "No file at" in server.tutor_load_piece(str(tmp_path / "missing.mxl"))["error"]
+    assert all(entry["path"] != "/piece" for entry in app["seen"])

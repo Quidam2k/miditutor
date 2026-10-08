@@ -133,4 +133,19 @@ describe('TutorApi', () => {
       musicxml: '<invalid />',
     })).status).toBe(400);
   });
+
+  it('accepts a photo-only piece', async () => {
+    const photo = 'data:image/jpeg;base64,/9j/4AAQ';
+    expect((await request('/piece', 'POST', { title: 'Photo only', photo })).status).toBe(200);
+    expect(commands).toContainEqual({ type: 'piece', title: 'Photo only', musicxml: '', photo });
+  });
+
+  it('rejects a piece with neither a score nor a photo, or a non-image photo', async () => {
+    expect((await request('/piece', 'POST', { title: 'Empty' })).status).toBe(400);
+    expect((await request('/piece', 'POST', {
+      title: 'Text as photo',
+      photo: 'data:text/html;base64,PGI+',
+    })).status).toBe(400);
+    expect(commands.filter((command) => command.type === 'piece')).toHaveLength(0);
+  });
 });
