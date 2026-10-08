@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import sampleXml from '../../assets/sample-score.musicxml?raw';
@@ -10,6 +10,14 @@ import { midiNumberToPitch, pitchToDisplayName } from '../../engine/MusicTheory'
 import { useTutorStore } from '../../store/useTutorStore';
 import { reportScreen } from '../tutor/useTutorBridge';
 import { TaskPanel } from '../tutor/TaskPanel';
+import { PlayedOverlay, PlayedMark } from './PlayedOverlay';
+import {
+  WrittenNote,
+  accidentalMark,
+  clefForMidi,
+  spellPlayed,
+  staffOffsetSteps,
+} from '../../../shared/notation';
 
 // Milestone 2: the score follows live MIDI. Each OSMD cursor position becomes a
 // ScoreStep (the notes that must be newly struck there); ScoreFollower decides
@@ -36,13 +44,31 @@ interface OsmdNote {
   isRest(): boolean;
   IsGraceNote?: boolean;
   NoteTie?: { StartNote?: unknown } | null;
+  Pitch?: { FundamentalNote: number; Octave: number; AccidentalHalfTones: number };
+  ParentStaff?: { idInMusicSheet: number };
+}
+interface OsmdMeasure {
+  InitiallyActiveClef?: { ClefType: number };
+  ParentStaffLine?: { PositionAndShape: { AbsolutePosition: { y: number } } };
 }
 interface OsmdGraphicalNote {
   getSVGGElement?: () => SVGGElement | undefined;
 }
 
-const GREEN = '#16a34a';
 const RED = '#dc2626';
+const LETTER_OF: Record<number, WrittenNote['letter']> = { 0: 'C', 2: 'D', 4: 'E', 5: 'F', 7: 'G', 9: 'A', 11: 'B' };
+
+// OSMD pitch -> MusicXML-style spelling (OSMD octave 1 = MusicXML octave 4).
+function writtenOf(n: OsmdNote): WrittenNote | null {
+  const p = n.Pitch;
+  const letter = p && LETTER_OF[p.FundamentalNote];
+  return letter ? { letter, alter: p.AccidentalHalfTones, octave: p.Octave + 3 } : null;
+}
+
+const staffOf = (n: OsmdNote) => n.ParentStaff?.idInMusicSheet ?? 0;
+
+// First key signature in the file. Mid-piece key changes are not tracked (v1).
+const fifthsOf = (xml: string) => Number(/<fifths>\s*(-?\d+)\s*<\/fifths>/.exec(xml)?.[1] ?? 0);
 
 const noteName = (midi: number) => pitchToDisplayName(midiNumberToPitch(midi));
 const namesOf = (midis: number[]) =>
@@ -109,6 +135,9 @@ export function ScoreView() {
   const cursorIndexRef = useRef(0);
   const paintedRef = useRef<Set<SVGGElement>>(new Set());
   const flashTimerRef = useRef<number | undefined>(undefined);
+  const layerRef = useRef<HTMLDivElement>(null);
+  const markIdRef = useRef(0);
+  const [marks, setMarks] = useState<PlayedMark[]>([]);
 
   const [pieceId, setPieceId] = useState(PIECES[0].id);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -129,6 +158,7 @@ export function ScoreView() {
     if (selectPieceId) setPieceId(selectPieceId);
   }, [selectPieceId]);
   const piece = pieces.find((p) => p.id === pieceId) ?? PIECES[0];
+  const fifths = useMemo(() => fifthsOf(piece.xml), [piece.xml]);
 
   // Tell the tutor API what is on screen, so personas can ask "where is he?".
   useEffect(() => {
@@ -143,8 +173,10 @@ export function ScoreView() {
           ? { kind: 'wrong', played: noteName(feedback.played), expected: feedback.expected.map(noteName) }
           : feedback,
       paceBpm: pace,
+      playedMarks: marks.length,
+      redAccidentals: marks.flatMap((m) => (m.accidental ? [m.accidental] : [])),
     });
-  }, [piece.label, status, measure, remaining, wrongCount, feedback, pace]);
+  }, [piece.label, status, measure, remaining, wrongCount, feedback, pace, marks]);
 
   // --- note colouring (direct SVG edits; cheaper than an OSMD re-render) ---
   const paint = useCallback((notes: OsmdNote[], color: string | null) => {
@@ -176,6 +208,65 @@ export function ScoreView() {
     paintedRef.current.clear();
   }, []);
 
+  // Where a played note goes: x from the written notehead(s) at that step, y
+  // from the staff's top line plus the diatonic offset of the played pitch,
+  // spelled against the key and what is written there.
+  const placePlayed = useCallback(
+    (stepIdx: number, midi: number): PlayedMark | null => {
+      const osmd = osmdRef.current;
+      const layer = layerRef.current;
+      const step = followerRef.current?.steps[stepIdx];
+      const stepNotes = stepNotesRef.current[stepIdx] ?? [];
+      const svg = containerRef.current?.querySelector('svg');
+      if (!osmd || !layer || !step || !svg || stepNotes.length === 0) return null;
+      try {
+        const staves = osmd.Sheet.Staves.length;
+        const clef = clefForMidi(midi, staves);
+        const staffIdx = staves > 1 && clef === 'bass' ? 1 : 0;
+        const gm = osmd.GraphicSheet.MeasureList[step.measure - 1]?.[staffIdx] as unknown as OsmdMeasure | undefined;
+        const topUnits = gm?.ParentStaffLine?.PositionAndShape.AbsolutePosition.y;
+        if (topUnits === undefined) return null;
+        const measureClef = gm?.InitiallyActiveClef?.ClefType === 1 ? 'bass' : 'treble';
+
+        const onStaff = stepNotes.filter((n) => staffOf(n) === staffIdx);
+        const headOf = (n: OsmdNote) => {
+          const g = osmd.EngravingRules.GNote(n as never) as unknown as OsmdGraphicalNote | undefined;
+          const el = g?.getSVGGElement?.();
+          return el?.querySelector('.vf-notehead') ?? el ?? null;
+        };
+        const head = headOf(onStaff[0] ?? stepNotes[0]);
+        if (!head) return null;
+
+        const layerRect = layer.getBoundingClientRect();
+        const svgRect = svg.getBoundingClientRect();
+        const headRect = head.getBoundingClientRect();
+        const space = 10 * osmd.Zoom; // OSMD: 1 unit = one staff space = 10px at zoom 1
+
+        const written = onStaff.map(writtenOf).filter((w): w is WrittenNote => w !== null);
+        const spelled = spellPlayed(midi, fifths, written);
+        const steps = staffOffsetSteps(spelled, measureClef);
+        const y = svgRect.top - layerRect.top + (topUnits + steps / 2) * space;
+        const ledgers: number[] = [];
+        for (let k = steps % 2 === 0 ? steps : steps - 1; k >= 10; k -= 2) ledgers.push(((k - steps) / 2) * space);
+        for (let k = steps % 2 === 0 ? steps : steps + 1; k <= -2; k += 2) ledgers.push(((k - steps) / 2) * space);
+
+        return {
+          id: ++markIdRef.current,
+          x: headRect.left + headRect.width / 2 - layerRect.left,
+          y,
+          space,
+          ledgers,
+          accidental: accidentalMark(spelled, fifths, written),
+        };
+      } catch (err) {
+        // The overlay is visual only; never break following over it, but say so.
+        console.warn('[overlay] could not place played note', midi, err);
+        return null;
+      }
+    },
+    [fifths],
+  );
+
   // Move the visible cursor to step index i (relative moves; OSMD has no seek).
   const moveCursorTo = useCallback((i: number) => {
     const osmd = osmdRef.current;
@@ -204,6 +295,7 @@ export function ScoreView() {
     const f = followerRef.current;
     if (!osmd || !f) return;
     clearPaint();
+    setMarks([]);
     osmd.cursor.reset();
     osmd.cursor.show();
     cursorIndexRef.current = 0;
@@ -263,7 +355,8 @@ export function ScoreView() {
       osmdRef.current = null;
       followerRef.current = null;
     };
-  }, [piece.xml, restart]);
+    // piece.id too: a re-pushed piece with identical XML must still start fresh.
+  }, [piece.id, piece.xml, restart]);
 
   // --- live MIDI → follower ---
   useEffect(() => {
@@ -273,23 +366,26 @@ export function ScoreView() {
       if (!ev || ev === prev.lastNoteOn) return;
       const f = followerRef.current;
       if (!f || status !== 'ready') return;
+      // Notes played for an unsolved chord task are not attempts at the piece.
+      const task = useTutorStore.getState().task;
+      if (task && task.result?.verdict !== 'correct') return;
 
       const idx = f.index;
       const result = f.noteOn(ev.note, ev.timestamp);
       const stepNotes = stepNotesRef.current[idx] ?? [];
-      const hit = stepNotes.filter((n) => toMidi(n) === ev.note);
+      if (result.kind !== 'ignored') {
+        const mark = placePlayed(idx, ev.note);
+        if (mark) setMarks((m) => [...m, mark]);
+      }
 
       switch (result.kind) {
         case 'partial':
-          paint(hit, GREEN);
           break;
         case 'advance':
-          paint(hit, GREEN);
           moveCursorTo(result.to);
           setFeedback({ kind: 'idle' });
           break;
         case 'complete':
-          paint(hit, GREEN);
           setFeedback({ kind: 'complete' });
           break;
         case 'wrong': {
@@ -311,7 +407,14 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, status, paint, moveCursorTo, syncUi]);
+  }, [following, status, paint, moveCursorTo, syncUi, placePlayed]);
+
+  // OSMD re-renders on resize, which moves every note; drop stale marks.
+  useEffect(() => {
+    const onResize = () => setMarks([]);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // --- manual cursor controls (re-sync the follower to wherever the cursor lands) ---
   const manualMove = (delta: number) => {
@@ -405,13 +508,17 @@ export function ScoreView() {
       )}
       {status === 'loading' && <p className="text-sm text-gray-500">Loading score…</p>}
 
-      {/* OSMD draws black notation, so give it a light panel. Red ring = wrong note. */}
+      {/* OSMD draws black notation, so give it a light panel. Blue heads = what he played;
+          red ring = wrong note; red accidental = wrong sharp/flat/natural. */}
       <div
         className={`overflow-x-auto rounded-lg bg-white p-4 ring-4 transition-shadow ${
           wrongFlash ? 'ring-red-500' : 'ring-transparent'
         }`}
       >
-        <div ref={containerRef} />
+        <div ref={layerRef} className="relative">
+          <div ref={containerRef} />
+          <PlayedOverlay marks={marks} />
+        </div>
       </div>
     </div>
   );

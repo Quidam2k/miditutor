@@ -47,12 +47,14 @@ export function useTutorBridge(onShowScore: () => void) {
     });
 
     const reportDevice = () => {
-      const { connected, activeDevice } = useMidiStore.getState();
-      bridge.device({ connected, name: activeDevice?.name ?? null });
+      const { connected, activeDevice, enabled, error } = useMidiStore.getState();
+      bridge.device({ connected, name: activeDevice?.name ?? null, midiEnabled: enabled, error });
     };
     reportDevice();
     const unsubDevice = useMidiStore.subscribe((s, p) => {
-      if (s.connected !== p.connected || s.activeDevice !== p.activeDevice) reportDevice();
+      if (s.connected !== p.connected || s.activeDevice !== p.activeDevice || s.enabled !== p.enabled || s.error !== p.error) {
+        reportDevice();
+      }
     });
 
     const unsubCmd = bridge.onCommand((cmd) => {

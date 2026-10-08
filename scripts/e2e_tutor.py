@@ -100,6 +100,11 @@ def main() -> int:
     time.sleep(0.5)
     scr = tc.state()["screen"]
     check(scr.get("remaining") == ["G4"], "follower advanced to G4", scr)
+    play([68])  # G#4 where G4 is written: wrong accidental
+    time.sleep(0.5)
+    scr = tc.state()["screen"]
+    check(scr.get("redAccidentals") == ["sharp"], "red sharp drawn for G#4 vs written G4", scr)
+    check(scr.get("playedMarks") == 3, "three blue played heads on screen", scr)
     play([61])  # wrong key
     time.sleep(0.5)
     scr = tc.state()["screen"]

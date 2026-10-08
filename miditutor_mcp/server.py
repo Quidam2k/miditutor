@@ -13,6 +13,7 @@ Run: python -m miditutor_mcp.server   (cwd = repo root, PYTHONPATH = repo root)
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
@@ -170,6 +171,17 @@ def tutor_check() -> dict:
     """The current chord task and how his attempts went (attempts list,
     latest verdict: correct / incomplete / wrong, missing and extra notes)."""
     return _tutor(tutor_client.get_task)
+
+
+@mcp.tool()
+def tutor_screenshot() -> dict:
+    """Snapshot of Todd's MidiTutor screen as a PNG file (returns its path;
+    open it with your image reader). Blue heads = what he played over the
+    black written notes; a red sharp/flat/natural = wrong accidental."""
+    import tempfile
+
+    dest = Path(tempfile.gettempdir()) / "miditutor-screen.png"  # overwritten each call
+    return _tutor(tutor_client.screenshot, dest)
 
 
 @mcp.tool()

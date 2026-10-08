@@ -81,7 +81,7 @@ export class TutorApi {
   private taskId = 0;
   private task: Task | null = null;
   private screen: Record<string, unknown> = {};
-  private device: { connected: boolean; name: string | null } = { connected: false, name: null };
+  private device: { connected: boolean; name: string | null; midiEnabled?: boolean; error?: string | null } = { connected: false, name: null };
   // The window reports its device on mount, so this flips once it can hear notes.
   private rendererConnected = false;
 
@@ -92,6 +92,8 @@ export class TutorApi {
     allowInject: boolean;
     sendToRenderer: (cmd: RendererCommand) => void;
     now?: () => number;
+    /** PNG of the window, for GET /screenshot. */
+    capture?: () => Promise<Buffer>;
   }) {
     this.now = opts.now ?? Date.now;
   }
@@ -159,7 +161,7 @@ export class TutorApi {
     this.screen = { ...this.screen, ...s };
   }
 
-  onDevice(d: { connected: boolean; name: string | null }): void {
+  onDevice(d: { connected: boolean; name: string | null; midiEnabled?: boolean; error?: string | null }): void {
     this.device = { ...d };
     this.rendererConnected = true;
   }
@@ -278,6 +280,13 @@ export class TutorApi {
           this.waiters.delete(waiter);
         }
       });
+    } else if (route === 'GET /screenshot') {
+      if (!this.opts.capture) throw new HttpError(404, 'Not found');
+      const png = await this.opts.capture();
+      if (!res.destroyed && !res.writableEnded) {
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        res.end(png);
+      }
     } else if (route === 'GET /task') {
       send({ task: this.task, lastGestureId: this.lastGestureId });
     } else if (route === 'DELETE /task') {

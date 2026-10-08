@@ -12,11 +12,13 @@ if (started) {
 // is denied and no keyboard input ever reaches the renderer.
 // Scoped to the app's own origin (dev = the Vite server, prod = file://) so we
 // never grant MIDI to arbitrary remote content the window might navigate to.
+// The request handler gets a full URL ("http://localhost:5173/"), the check
+// handler an origin; normalise both before comparing.
 const isOwnOrigin = (origin: string | undefined): boolean => {
   if (!origin) return false;
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     try {
-      if (origin === new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin) return true;
+      if (new URL(origin).origin === new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL).origin) return true;
     } catch {
       /* fall through to file:// check */
     }
@@ -51,6 +53,10 @@ const startTutorApi = () => {
     token: loadOrCreateToken(app.getPath('userData')),
     allowInject: !app.isPackaged || process.env.MIDITUTOR_ALLOW_INJECT === '1',
     sendToRenderer: send,
+    capture: async () => {
+      if (!mainWindow) throw new Error('no window');
+      return (await mainWindow.webContents.capturePage()).toPNG();
+    },
   });
   ipcMain.on('tutor:note', (_e, ev) => tutorApi?.onNote(ev));
   ipcMain.on('tutor:screen', (_e, st) => tutorApi?.onRendererState(st));

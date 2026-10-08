@@ -31,9 +31,10 @@ def _token_path() -> Path:
 
 
 def request(
-    method: str, path: str, body: dict | None = None, timeout: float = 10
-) -> dict:
-    """Call the local API; server errors come back as error/status dictionaries."""
+    method: str, path: str, body: dict | None = None, timeout: float = 10, raw: bool = False
+) -> dict | bytes:
+    """Call the local API; server errors come back as error/status dictionaries.
+    raw=True returns the response body as bytes (e.g. /screenshot)."""
     base_url = os.environ.get("MIDITUTOR_URL", "http://127.0.0.1:47800").rstrip("/")
     unavailable = (
         f"MidiTutor app isn't reachable at {base_url}. "
@@ -65,6 +66,8 @@ def request(
     try:
         with urlopen(req, timeout=timeout) as response:
             payload = response.read()
+            if raw:
+                return payload
             return json.loads(payload) if payload else {}
     except HTTPError as exc:
         with exc:
@@ -166,3 +169,11 @@ def inject(notes: list[int], kind: str = "chord", hold_ms: int = 300) -> dict:
     """Play MIDI notes through the app's development input."""
     return request("POST", "/inject", {"notes": notes, "kind": kind, "holdMs": hold_ms})
 
+
+def screenshot(dest: str | Path) -> dict:
+    """Save a PNG of the app window to dest."""
+    data = request("GET", "/screenshot", timeout=15, raw=True)
+    if isinstance(data, dict):
+        return data
+    Path(dest).write_bytes(data)
+    return {"path": str(dest), "bytes": len(data)}
