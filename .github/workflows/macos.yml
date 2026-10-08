@@ -14,7 +14,7 @@ permissions:
 jobs:
   macos:
     runs-on: macos-14
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -23,7 +23,9 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      # Step timeout (not just job timeout) so a hang still leaves a readable log.
+      - run: npm ci --foreground-scripts --loglevel=http
+        timeout-minutes: 15
 
       - run: npx tsc --noEmit
 
