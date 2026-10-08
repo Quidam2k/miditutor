@@ -17,7 +17,7 @@ Connect your keyboard to the Mac.
 Connect your mouse to the Mac.
 Say ready when that's done.
 
-The power button is at the back, not the front.
+The power button is not on the front. On the older, flatter Mac mini it's on the back. On the newer, smaller one it's underneath, near the back-left corner. Feel for it there.
 Press the power button once.
 The screen may stay dark for a moment.
 Then you should see an Apple logo.

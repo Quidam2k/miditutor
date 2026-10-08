@@ -10,7 +10,7 @@
 - [ ] Put Pinocchio on a flat surface with space around it for ventilation.
 - [ ] Connect the power cable to the Mac mini and a power outlet.
 - [ ] Connect a keyboard, mouse, and monitor. Use HDMI or a suitable USB-C display adapter, depending on the ports on your model.
-- [ ] Press the power button at the back; there is no front power button.
+- [ ] Press the power button. Older Mac minis (M1/M2) have it on the back; the newer small one (M4) has it underneath, at the back-left corner. There is no front power button.
 
 ## 2. Ports and USB hub
 
