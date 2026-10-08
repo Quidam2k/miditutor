@@ -96,3 +96,9 @@ data/
 __pycache__/
 .venv/
 screengrab/
+
+# Slice E OMR bench: per-engine venvs, generated test images, engine outputs, downloaded tools
+.venv-omr-*/
+bench/omr/images/
+bench/omr/out/
+bench/omr/tools/

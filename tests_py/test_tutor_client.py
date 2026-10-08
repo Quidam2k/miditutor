@@ -213,9 +213,11 @@ def test_load_piece_musicxml_is_sent_as_is(app):
     assert app["seen"][-1]["body"]["musicxml"] == MINUET.read_text(encoding="utf-8")
 
 
-def test_load_piece_photo_is_shown_even_when_omr_fails(app, tmp_path):
+def test_load_piece_photo_is_shown_even_when_omr_fails(app, tmp_path, monkeypatch):
     photo_path = tmp_path / "page.png"
     Image.new("RGB", (3000, 2000), (200, 30, 30)).save(photo_path)
+    # Point OMR at a missing engine so this test never runs a real recognizer.
+    monkeypatch.setenv("MIDITUTOR_OMR_HOMR", str(tmp_path / "no-such-homr.exe"))
 
     result = server.tutor_load_piece(str(photo_path))
     assert result == {
@@ -223,7 +225,7 @@ def test_load_piece_photo_is_shown_even_when_omr_fails(app, tmp_path):
         "title": "page",
         "score": False,
         "photo": True,
-        "omr_error": "OMR not wired yet (slice E)",
+        "omr_error": "OMR engine not installed (homr). Set MIDITUTOR_OMR_HOMR or see bench/omr/README.md",
     }
     body = app["seen"][-1]["body"]
     assert "musicxml" not in body

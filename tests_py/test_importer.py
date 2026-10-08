@@ -1,4 +1,4 @@
-"""The score importer: MIDI -> MusicXML grand staff, MusicXML pass-through, photo stub."""
+"""The score importer: MIDI -> MusicXML grand staff, MusicXML pass-through, photo (OMR via homr)."""
 import sys
 import zipfile
 from pathlib import Path
@@ -12,6 +12,7 @@ import pytest
 
 from importer.__main__ import main
 from importer.midi import midi_to_musicxml
+from importer.omr import OMRError, engine_path, photo_to_musicxml
 from importer.musicxml import MusicXMLError, read_musicxml
 
 MINUET = ROOT / "src" / "renderer" / "assets" / "minuet-in-g.musicxml"
@@ -112,8 +113,37 @@ def test_musicxml_rejects_non_scores(tmp_path):
         read_musicxml(bad)
 
 
-def test_photo_is_a_stub_until_slice_e(tmp_path, capsys):
+def test_photo_without_engine_is_an_error(tmp_path, capsys, monkeypatch):
     photo = tmp_path / "page.jpg"
     photo.write_bytes(b"not really a jpeg")
+    monkeypatch.setenv("MIDITUTOR_OMR_HOMR", str(tmp_path / "no-such-homr.exe"))
     assert main(["photo", str(photo)]) == 1
-    assert "OMR not wired yet (slice E)" in capsys.readouterr().err
+    assert "OMR engine not installed" in capsys.readouterr().err
+
+
+def test_photo_missing_file_is_omr_error(tmp_path):
+    with pytest.raises(OMRError, match="photo not found"):
+        photo_to_musicxml(tmp_path / "missing.jpg")
+
+
+needs_homr = pytest.mark.skipif(engine_path() is None, reason="homr not installed (bench/omr/README.md)")
+BENCH_PHOTO = ROOT / "bench" / "omr" / "images" / "clean_minuet.png"
+
+
+@needs_homr
+def test_homr_rejects_a_non_score_image(tmp_path):
+    from PIL import Image
+
+    blank = tmp_path / "blank.png"
+    Image.new("RGB", (600, 400), (255, 255, 255)).save(blank)
+    with pytest.raises(OMRError):
+        photo_to_musicxml(blank)
+
+
+@needs_homr
+@pytest.mark.skipif(not BENCH_PHOTO.exists(), reason="run bench/omr/make_testset.py first")
+def test_homr_end_to_end_on_synthetic_minuet():
+    xml = photo_to_musicxml(BENCH_PHOTO)
+    assert xml.lstrip().startswith(("<?xml", "<score-partwise"))
+    notes = list(music21.converter.parse(xml).recurse().notes)
+    assert len(notes) >= 70  # the Minuet has 80 notes; homr scores 100% pitch on this render
