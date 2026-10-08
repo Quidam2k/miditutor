@@ -1,0 +1,45 @@
+name: macOS
+
+# Run only manually or on version tags; branch pushes and pull requests consume paid private-repo minutes.
+# Unsigned, not notarized: the zip is a build artifact only. Gatekeeper needs a manual "Open Anyway" on the target Mac.
+# Not yet run on a real macOS runner (written on Windows); first run is the test.
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx tsc --noEmit
+
+      - run: npx vitest run
+
+      - run: npx electron-forge make --platform=darwin --arch=arm64
+
+      - name: Headless launch smoke
+        run: bash .github/scripts/macos-smoke.sh
+        env:
+          MIDITUTOR_HIDDEN: "1"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MidiTutor-macos-arm64
+          path: out/make/zip/darwin/arm64/*.zip
+          if-no-files-found: error
+          retention-days: 14
+

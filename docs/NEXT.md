@@ -107,3 +107,22 @@ input, pace ≈ 100 bpm and Restart, and all 12 checks passed.
 
 USB vs Bluetooth as the main input (step 10 above answers it). Which tower
 sits at the piano. AGPL batch tools (Audiveris) for M3 scanning.
+
+## Pinocchio (Mac mini, remote music box)
+
+Pinocchio is a Mac mini (Apple Silicon) in the music room, driven by Orolo
+over SSH from Solace. It is not on the network yet. Three docs, in order:
+
+- `docs/pinocchio-todd-steps.md`: Todd's one-time physical checklist (power,
+  hub, Wi-Fi, account, Remote Login, keep-awake, FP-30X).
+- `docs/pinocchio-walkthrough.md`: the same steps as a script Orolo reads aloud.
+- `docs/pinocchio-orolo-runbook.md`: Orolo's SSH steps (toolchain, build,
+  LaunchAgent, tunnel `ssh -L 47800:127.0.0.1:47800 pinocchio`, token, checks).
+
+Build workflow: `.github/workflows/macos.yml` runs on `workflow_dispatch` and
+`v*` tags only (no push trigger, to save private minutes). It runs tsc, vitest,
+`electron-forge make --platform=darwin --arch=arm64`, then a hidden launch smoke
+(`.github/scripts/macos-smoke.sh`: /state 200 with token, 401 without), and
+uploads the zip. Not yet run on a macOS runner.
+
+Status: nothing on Pinocchio has been verified. Mac steps are untested.
