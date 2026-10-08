@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useMidi } from './components/midi/useMidi';
 import { MidiStatus } from './components/midi/MidiStatus';
 import { MidiMonitor } from './components/midi/MidiMonitor';
 import { VirtualKeyboardDev } from './components/midi/VirtualKeyboardDev';
 import { ExerciseView } from './components/exercise/ExerciseView';
 import { ScoreView } from './components/score/ScoreView';
+import { useTutorBridge } from './components/tutor/useTutorBridge';
 
 type View = 'practice' | 'monitor' | 'score';
 
@@ -17,6 +18,8 @@ const TABS: { id: View; label: string }[] = [
 export function App() {
   useMidi();
   const [view, setView] = useState<View>('practice');
+  // A persona pushing a task or piece brings the Score tab forward.
+  useTutorBridge(useCallback(() => setView('score'), []));
 
   return (
     <div className="min-h-screen bg-gray-950 text-white flex flex-col">

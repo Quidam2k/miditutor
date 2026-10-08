@@ -1,6 +1,7 @@
-import { app, BrowserWindow, session } from 'electron';
+import { app, BrowserWindow, ipcMain, session } from 'electron';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
+import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
 
 if (started) {
   app.quit();
@@ -36,15 +37,44 @@ const grantMidiPermissions = () => {
   });
 };
 
+// Tutor API: lets the Pantheon personas see what is played and put tasks/pieces
+// on screen. Loopback only (reach it remotely through an SSH tunnel), bearer
+// token in userData/api-token. /inject is for tests and is off in packaged
+// builds unless MIDITUTOR_ALLOW_INJECT=1.
+let mainWindow: BrowserWindow | null = null;
+let tutorApi: TutorApi | null = null;
+
+const startTutorApi = () => {
+  const send = (cmd: RendererCommand) => mainWindow?.webContents.send('tutor:command', cmd);
+  tutorApi = new TutorApi({
+    port: Number(process.env.MIDITUTOR_PORT ?? 47800),
+    token: loadOrCreateToken(app.getPath('userData')),
+    allowInject: !app.isPackaged || process.env.MIDITUTOR_ALLOW_INJECT === '1',
+    sendToRenderer: send,
+  });
+  ipcMain.on('tutor:note', (_e, ev) => tutorApi?.onNote(ev));
+  ipcMain.on('tutor:screen', (_e, st) => tutorApi?.onRendererState(st));
+  ipcMain.on('tutor:device', (_e, d) => tutorApi?.onDevice(d));
+  tutorApi
+    .start()
+    .then((port) => console.log(`[tutor-api] listening on 127.0.0.1:${port}`))
+    .catch((err) => console.error('[tutor-api] failed to start:', err));
+};
+
+const hidden = process.env.MIDITUTOR_HIDDEN === '1';
+
 const createWindow = () => {
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 900,
     minHeight: 600,
     title: 'MidiTutor',
+    // MIDITUTOR_HIDDEN=1: run without showing a window (automated tests, CI smoke).
+    show: !hidden,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
+      backgroundThrottling: !hidden,
     },
   });
 
@@ -73,7 +103,12 @@ const createWindow = () => {
 
 app.on('ready', () => {
   grantMidiPermissions();
+  startTutorApi();
   createWindow();
+});
+
+app.on('will-quit', () => {
+  tutorApi?.stop();
 });
 
 app.on('window-all-closed', () => {

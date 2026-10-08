@@ -11,7 +11,9 @@ const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
   },
-  rebuildConfig: {},
+  // No native modules are needed at runtime. OSMD pulls in 'gl' (headless image
+  // export only), which fails to build for Electron, so skip rebuilding it.
+  rebuildConfig: { onlyModules: [] },
   makers: [
     new MakerSquirrel({}),
     new MakerZIP({}, ['darwin']),

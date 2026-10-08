@@ -103,7 +103,7 @@ export function MidiMonitor() {
                     <td className="py-0.5 pr-3 text-gray-400">{e.note}</td>
                     <td className="py-0.5 pr-3 text-gray-400">{e.velocity}</td>
                     <td className="py-0.5 pr-3 text-gray-400">{e.channel}</td>
-                    <td className="py-0.5 text-gray-500">{e.source === 'virtual' ? 'virt' : 'hw'}</td>
+                    <td className="py-0.5 text-gray-500">{e.source === 'hardware' ? 'hw' : e.source === 'virtual' ? 'virt' : 'inj'}</td>
                   </tr>
                 ))}
               </tbody>

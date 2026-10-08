@@ -19,6 +19,6 @@ export interface MidiLogEntry {
   noteName: string; // e.g. "C4", "F#3"
   velocity: number; // 0-127 (0 for note-off)
   channel: number; // 1-16
-  source: 'hardware' | 'virtual';
+  source: 'hardware' | 'virtual' | 'inject';
   timestamp: number;
 }

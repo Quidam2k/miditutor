@@ -7,6 +7,9 @@ import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep } from '../../engine/ScoreFollower';
 import { midiNumberToPitch, pitchToDisplayName } from '../../engine/MusicTheory';
+import { useTutorStore } from '../../store/useTutorStore';
+import { reportScreen } from '../tutor/useTutorBridge';
+import { TaskPanel } from '../tutor/TaskPanel';
 
 // Milestone 2: the score follows live MIDI. Each OSMD cursor position becomes a
 // ScoreStep (the notes that must be newly struck there); ScoreFollower decides
@@ -118,7 +121,30 @@ export function ScoreView() {
   const [pace, setPace] = useState<number | null>(null);
   const [wrongFlash, setWrongFlash] = useState(false);
 
-  const piece = PIECES.find((p) => p.id === pieceId) ?? PIECES[0];
+  // Built-in pieces plus anything a persona pushed through the tutor API.
+  const pushed = useTutorStore((s) => s.pieces);
+  const selectPieceId = useTutorStore((s) => s.selectPieceId);
+  const pieces: Piece[] = [...PIECES, ...pushed];
+  useEffect(() => {
+    if (selectPieceId) setPieceId(selectPieceId);
+  }, [selectPieceId]);
+  const piece = pieces.find((p) => p.id === pieceId) ?? PIECES[0];
+
+  // Tell the tutor API what is on screen, so personas can ask "where is he?".
+  useEffect(() => {
+    reportScreen({
+      piece: piece.label,
+      status,
+      measure,
+      remaining: remaining.map(noteName),
+      wrongCount,
+      feedback:
+        feedback.kind === 'wrong'
+          ? { kind: 'wrong', played: noteName(feedback.played), expected: feedback.expected.map(noteName) }
+          : feedback,
+      paceBpm: pace,
+    });
+  }, [piece.label, status, measure, remaining, wrongCount, feedback, pace]);
 
   // --- note colouring (direct SVG edits; cheaper than an OSMD re-render) ---
   const paint = useCallback((notes: OsmdNote[], color: string | null) => {
@@ -304,13 +330,14 @@ export function ScoreView() {
 
   return (
     <div className="flex w-full flex-col gap-3">
+      <TaskPanel />
       <div className="flex flex-wrap items-center gap-2">
         <select
           value={pieceId}
           onChange={(e) => setPieceId(e.target.value)}
           className="rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-sm text-gray-200"
         >
-          {PIECES.map((p) => (
+          {pieces.map((p) => (
             <option key={p.id} value={p.id}>
               {p.label}
             </option>

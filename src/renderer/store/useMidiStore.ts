@@ -10,7 +10,7 @@ interface IngestArgs {
   note: number;
   velocity: number;
   channel: number;
-  source: 'hardware' | 'virtual';
+  source: 'hardware' | 'virtual' | 'inject';
   timestamp?: number;
 }
 
