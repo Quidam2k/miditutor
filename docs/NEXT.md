@@ -126,3 +126,13 @@ Build workflow: `.github/workflows/macos.yml` runs on `workflow_dispatch` and
 uploads the zip. Not yet run on a macOS runner.
 
 Status: nothing on Pinocchio has been verified. Mac steps are untested.
+
+## Music-API handoff (2026-10-08, #7365/#7367)
+Shipped + pushed (master cd35233): tutor API + tutor_* MCP tools, blue/red play-along overlay, importer (MIDI/MusicXML/photo) + Open piece + Photo/Score toggle, OMR = homr 0.7.0 (.venv-omr-homr; bench/omr), macOS CI green (run 37842684233), Pinocchio docs.
+Verified only via /inject — NOT a real or loopback MIDI port.
+
+Next worker, once Todd has installed loopMIDI and sent photos:
+1. Create a loopMIDI port; run the app (hidden; see scripts/e2e_tutor.py header) and select that port as input.
+2. Write/run a mido script (.venv) that plays chords + Minuet bars into the port; verify with tutor_wait_for_play / tutor_check / piano_next_chord(show=True) and a /screenshot. Pass -> claim (1), close #3566/#3567.
+3. Run bench/omr on Todd's real photos (keep them OUT of git — repo is public); report pitch / pitch+duration % per engine. If homr fails, try Audiveris (needs Docker running or an approved msiexec extract).
+4. Still open: tutor_list_pieces (needs piece persistence), Open piece dialog click-test, tests_py/test_piano_drill.py breaks pytest collection, FP-30X + on-box Mac test (#4046 remainder), tempo overlay (#1181 remainder).
