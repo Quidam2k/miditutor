@@ -2,7 +2,7 @@ name: macOS
 
 # Run only manually or on version tags; branch pushes and pull requests consume paid private-repo minutes.
 # Unsigned, not notarized: the zip is a build artifact only. Gatekeeper needs a manual "Open Anyway" on the target Mac.
-# Not yet run on a real macOS runner (written on Windows); first run is the test.
+# Green on macos-14 (runs 37842684233, 40234143238); scripts/deploy_pinocchio.sh installs its artifact on Pinocchio.
 on:
   workflow_dispatch:
   push:

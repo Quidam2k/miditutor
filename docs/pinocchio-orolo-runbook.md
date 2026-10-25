@@ -1,156 +1,50 @@
 # Pinocchio SSH runbook for Orolo
 
-Orolo drives the Mac mini **Pinocchio** over SSH from the Windows box **Solace**. Todd has completed [the physical setup](pinocchio-todd-steps.md) and enabled Remote Login.
+Orolo drives the Mac mini **Pinocchio** over SSH from the Windows box **Solace**.
 
-All procedures below are [NOT VERIFIED] on the real machine. Use Git Bash on Solace for the Bash commands. Sections 2–10 run in the SSH Bash session on Pinocchio. Sections 11–12 run in separate Git Bash terminals on Solace.
+## Facts (verified 2026-10-25)
 
-The app window and MIDI require Todd's logged-in Aqua session. Keep Todd logged in throughout setup and verification.
+- `ssh toddwalker@todds-mac-mini` works from Solace by key (Tailscale, 100.106.20.55). No password.
+- Apple M2, 8 GB RAM, macOS **14.4 Sonoma**, arm64. Account short name `toddwalker`.
+- Auto-login is ON (Todd set it 2026-10-25). `sleep 0` is already set. Firewall off.
+- **No Xcode Command Line Tools, no Node, no Homebrew.** `/usr/bin/git`, `/usr/bin/python3`,
+  `cc`, `make` are CLT shims: running one pops an "install developer tools" dialog on the
+  TV. Never call them on Pinocchio. Use only sh/bash (3.2), ditto, xattr, codesign,
+  osascript, open, pgrep, pkill, curl, defaults, plutil.
+- `launchctl asuser` needs root and fails from Todd's SSH session
+  ("Could not switch to audit session"). Plain `open` and `osascript` from SSH reach his
+  logged-in desktop fine.
 
-## 1. Confirm SSH from Solace [NOT VERIFIED]
+## 1. Build and install (verified 2026-10-25)
 
-Add this suggested Host block to Solace's `~/.ssh/config`. Replace `TODD_SHORT_NAME` with the account short name Todd supplies. Use Pinocchio's IP address if `pinocchio.local` does not resolve. Uncomment `IdentityFile` if using that key.
-
-```bash
-mkdir -p ~/.ssh
-cat >> ~/.ssh/config <<'SSH_CONFIG'
-Host pinocchio
-    HostName pinocchio.local
-    User TODD_SHORT_NAME
-    # IdentityFile ~/.ssh/id_ed25519
-SSH_CONFIG
-```
-
-Test connectivity. If installing an existing public key, `ssh-copy-id` needs Todd's Mac password once.
+The app is built on GitHub Actions (`.github/workflows/macos.yml`, macos-14 arm64), not on
+the Mac. From the repo on Solace, in Git Bash:
 
 ```bash
-ssh pinocchio 'sw_vers -productVersion; uname -m'
-# Optional, when using this existing key:
-ssh-copy-id -i ~/.ssh/id_ed25519.pub pinocchio
+gh workflow run macos.yml --ref master      # ~3 min; skip if master hasn't changed
+bash scripts/deploy_pinocchio.sh            # latest green run -> scp -> ~/Applications -> hidden check
 ```
 
-Verify: SSH succeeds; macOS reports `15.x` and the architecture reports `arm64`.
+The deploy script quits a running MidiTutor, replaces `~/Applications/MidiTutor.app`
+(no sudo), then launches it hidden (`open -n -g -j --env MIDITUTOR_HIDDEN=1`), checks
+`/state` is 200 with the token (renderer connected, Web MIDI enabled) and 401 without,
+and quits it again. It never prints the token. `--no-verify` skips the check.
 
-## 2. Check Xcode Command Line Tools [NOT VERIFIED]
+The bundle is ad-hoc signed and copied by scp, so it has no quarantine flag and
+Gatekeeper does not prompt. If it ever does: Todd opens System Settings > Privacy &
+Security, scrolls down, clicks **Open Anyway** next to MidiTutor.
 
-```bash
-xcode-select -p
-git --version
-# Only if Command Line Tools are missing:
-xcode-select --install
-```
+## 2. Launch icon (done 2026-10-25)
 
-The installer opens a GUI dialog. **Todd must click through it on Pinocchio.** Wait for completion, then rerun the checks once; do not loop on the installer.
+MidiTutor is in Todd's Dock (`defaults write com.apple.dock persistent-apps -array-add ...`
+then `killall Dock`), plus a `~/Desktop/MidiTutor` symlink. Don't use Finder AppleScript
+for aliases: it pops an automation permission prompt on the TV.
 
-Verify: `xcode-select -p` returns a developer directory and `git --version` succeeds.
+To launch it for Todd from SSH: `open -a "$HOME/Applications/MidiTutor.app"` (shows the window on the TV).
 
-## 3. Install Homebrew [NOT VERIFIED]
+## 3. Launch at login (optional, not set up) [NOT VERIFIED]
 
-Check first. Install only if Homebrew is missing. Installation needs completed Command Line Tools and sudo access. Enter the password interactively; never put it in a file.
-
-```bash
-command -v brew
-# Only if Homebrew is missing:
-sudo -v
-NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-```
-
-Apple Silicon Homebrew lives under `/opt/homebrew`. Add its environment setup to `~/.zprofile` and apply it in this session.
-
-```bash
-touch "$HOME/.zprofile"
-grep -Fqx 'eval "$(/opt/homebrew/bin/brew shellenv)"' "$HOME/.zprofile" ||
-  printf '%s\n' 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
-eval "$(/opt/homebrew/bin/brew shellenv)"
-brew --prefix
-```
-
-`.zprofile` applies to login zsh sessions. Plain non-interactive SSH commands do not automatically read it; explicitly run `eval "$(/opt/homebrew/bin/brew shellenv)"` when those commands need Homebrew.
-
-Verify: `brew --prefix` prints `/opt/homebrew`.
-
-## 4. Install Node 22 [NOT VERIFIED]
-
-`node@22` is keg-only. Put its executable directory first on PATH, both persistently for login zsh and in the current Bash session.
-
-```bash
-eval "$(/opt/homebrew/bin/brew shellenv)"
-brew install node@22
-grep -Fqx 'export PATH="/opt/homebrew/opt/node@22/bin:$PATH"' "$HOME/.zprofile" ||
-  printf '%s\n' 'export PATH="/opt/homebrew/opt/node@22/bin:$PATH"' >> "$HOME/.zprofile"
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
-node -v
-npm -v
-command -v node
-```
-
-Verify: Node reports `v22.x.x`; its path is `/opt/homebrew/opt/node@22/bin/node`.
-
-## 5. Clone the repository [NOT VERIFIED]
-
-If `~/src/miditutor` already exists, inspect it before reusing it; skip the clone and preserve any local work.
-
-```bash
-mkdir -p ~/src
-git clone https://github.com/Quidam2k/miditutor ~/src/miditutor
-cd ~/src/miditutor
-git checkout master
-git remote -v
-git branch --show-current
-```
-
-Verify: The origin is `https://github.com/Quidam2k/miditutor` and the current branch is `master`.
-
-## 6. Install dependencies and build [NOT VERIFIED]
-
-The app uses Electron Forge, Vite, Electron 41, and Node 22. Stop and resolve a failure before continuing to the next command.
-
-```bash
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
-cd ~/src/miditutor
-npm ci &&
-  npx tsc --noEmit &&
-  npx vitest run &&
-  npx electron-forge make --platform=darwin --arch=arm64
-ls -ld out/MidiTutor-darwin-arm64/MidiTutor.app
-ls -l out/make/zip/darwin/arm64/
-```
-
-Verify: Installation, type checking, tests, and packaging succeed. The `.app` exists at `out/MidiTutor-darwin-arm64/MidiTutor.app`; MakerZIP produces a zip under `out/make/zip/darwin/arm64/`.
-
-## 7. Install the app [NOT VERIFIED]
-
-Quit any running MidiTutor instance before replacing it. Use `ditto` to preserve the app bundle.
-
-```bash
-cd ~/src/miditutor
-sudo ditto out/MidiTutor-darwin-arm64/MidiTutor.app /Applications/MidiTutor.app
-test -x /Applications/MidiTutor.app/Contents/MacOS/MidiTutor
-```
-
-If the bundle came from a downloaded zip, remove its quarantine attribute. This is unnecessary for a locally built app with no quarantine attribute.
-
-```bash
-sudo xattr -dr com.apple.quarantine /Applications/MidiTutor.app
-```
-
-The app is unsigned. Gatekeeper may still block first launch. **Todd must use System Settings → Privacy & Security → Open Anyway** if prompted.
-
-Verify: `/Applications/MidiTutor.app/Contents/MacOS/MidiTutor` exists and is executable; Todd resolves any Gatekeeper block.
-
-## 8. Launch into Todd's GUI session [NOT VERIFIED]
-
-Run this while SSH is logged in as Todd's Mac account.
-
-```bash
-launchctl asuser "$(id -u)" open -a /Applications/MidiTutor.app
-pgrep -fl MidiTutor
-```
-
-A plain SSH session cannot show windows. `launchctl asuser` targets the user's session; it does not create an Aqua session. Todd must already be logged into the Mac desktop for the window and MIDI to work.
-
-Verify: Todd sees the MidiTutor window, and `pgrep` shows the app running. A process alone does not prove the GUI is connected.
-
-## 9. Launch at login [NOT VERIFIED]
+Auto-login is now ON, so this would start MidiTutor at boot. Not installed: Todd launches it from the Dock. Ask before adding it.
 
 The heredoc expands `$HOME` into absolute paths: launchd does not expand `~` in plist values. Quit the manually launched app before bootstrapping this agent.
 
@@ -165,7 +59,7 @@ cat > "$HOME/Library/LaunchAgents/com.todd.miditutor.plist" <<PLIST
     <string>com.todd.miditutor</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Applications/MidiTutor.app/Contents/MacOS/MidiTutor</string>
+        <string>$HOME/Applications/MidiTutor.app/Contents/MacOS/MidiTutor</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -189,7 +83,7 @@ A LaunchAgent runs only while Todd is logged in. Automatic unattended startup af
 
 Verify: The plist passes validation, launchctl reports the agent, and MidiTutor opens in Todd's desktop session.
 
-## 10. Keep Pinocchio awake [NOT VERIFIED]
+## 4. Keep Pinocchio awake [NOT VERIFIED]
 
 Inspect settings first. Disable system sleep with `pmset`, or leave that setting to Todd's Energy configuration. Enable automatic restart after power loss. Keep the SSH session open while using the `caffeinate` guard.
 
@@ -205,23 +99,23 @@ caffeinate -dimsu
 
 Verify: `pmset` reports `sleep 0` and `autorestart 1`, and Pinocchio stays awake during use.
 
-## 11. Tunnel from Solace [NOT VERIFIED]
+## 5. Tunnel from Solace [NOT VERIFIED]
 
 Run in a separate Solace Git Bash terminal and keep it running. The explicit local address limits the forward to loopback. Never bind port 47800 on the LAN, and do not set `MIDITUTOR_PORT` on the Mac. If the dev MidiTutor app is running on Solace, it already holds local port 47800, so the forward fails with ExitOnForwardFailure; stop the dev app first or use another local port.
 
 ```bash
-ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:47800:127.0.0.1:47800 pinocchio
+ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:47800:127.0.0.1:47800 toddwalker@todds-mac-mini
 ```
 
-Verify: SSH remains running without forwarding errors; section 13 confirms the forwarded API responds.
+Verify: SSH remains running without forwarding errors; section 7 confirms the forwarded API responds.
 
-## 12. Fetch and store the token on Solace [NOT VERIFIED]
+## 6. Fetch and store the token on Solace [NOT VERIFIED]
 
 The first app launch creates `$HOME/Library/Application Support/MidiTutor/api-token` on Pinocchio. Capture it without printing it. Keep tracing disabled, never commit it, and never echo it into logs.
 
 ```bash
 set +x
-MIDITUTOR_TOKEN="$(ssh pinocchio 'cat "$HOME/Library/Application Support/MidiTutor/api-token"')"
+MIDITUTOR_TOKEN="$(ssh toddwalker@todds-mac-mini 'cat "$HOME/Library/Application Support/MidiTutor/api-token"')"
 test -n "$MIDITUTOR_TOKEN"
 export MIDITUTOR_TOKEN
 export MIDITUTOR_URL="http://127.0.0.1:47800"
@@ -242,14 +136,14 @@ unset MIDITUTOR_TOKEN
 To rotate, quit the app, delete its Mac token file, and relaunch. Run on Pinocchio, then fetch the new token and restart the MCP session:
 
 ```bash
-launchctl asuser "$(id -u)" /usr/bin/osascript -e 'tell application "MidiTutor" to quit' &&
+osascript -e 'tell application "MidiTutor" to quit' &&
   rm -f "$HOME/Library/Application Support/MidiTutor/api-token" &&
-  launchctl asuser "$(id -u)" open -a /Applications/MidiTutor.app
+  open -a "$HOME/Applications/MidiTutor.app"
 ```
 
-Verify: The selected token variable or file is populated without displaying its contents; authenticated requests succeed in section 13.
+Verify: The selected token variable or file is populated without displaying its contents; authenticated requests succeed in section 7.
 
-## 13. Verify end to end [NOT VERIFIED]
+## 7. Verify end to end [NOT VERIFIED]
 
 On Pinocchio:
 
@@ -259,7 +153,7 @@ curl -s -H "Authorization: Bearer $(cat "$HOME/Library/Application Support/MidiT
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:47800/state
 ```
 
-On Solace, with the tunnel running and section 12's environment available:
+On Solace, with the tunnel running and section 6's environment available:
 
 ```bash
 set +x
@@ -274,7 +168,7 @@ unset token
 
 Verify: Both authenticated responses contain `"ok": true`, `device`, and `"injectEnabled": false` for the packaged app. Expect `"rendererConnected": true` within about 30 seconds of the window appearing. Requests without the authorization header return `401`.
 
-## 14. Troubleshooting [NOT VERIFIED]
+## 8. Troubleshooting [NOT VERIFIED]
 
 - **MIDI device not seen:** Check the hub and FP-30X Computer port. Unplug and replug USB; keep Local Control **ON**.
 - **MIDI absent in the app:** Inspect `device` fields in `/state`; ensure the window is in Todd's GUI session.
@@ -283,7 +177,6 @@ Verify: Both authenticated responses contain `"ok": true`, `device`, and `"injec
 - **Connection refused on 47800:** Check that the tunnel is running and the app process exists.
 - **Gatekeeper blocks launch:** Todd uses **Open Anyway** in Privacy & Security.
 - **Mac sleeping:** Inspect `pmset`; restore the awake settings or run `caffeinate`.
-- **`npm ci` fails:** Confirm Command Line Tools and Node 22, then inspect the installation error.
 
 Run the relevant checks on Pinocchio:
 
@@ -293,11 +186,8 @@ curl -s -H "Authorization: Bearer $(cat "$HOME/Library/Application Support/MidiT
 osascript -e 'tell application "MidiTutor" to activate'
 pgrep -fl MidiTutor
 pmset -g | grep -E 'sleep|autorestart'
-xcode-select -p
-export PATH="/opt/homebrew/opt/node@22/bin:$PATH"
-node -v
 ```
 
-Verify: The relevant check identifies the fault; rerun section 13 after correcting it.
+Verify: The relevant check identifies the fault; rerun section 7 after correcting it.
 
-Verified on hardware: none yet. Everything marked NOT VERIFIED is untested.
+Verified on hardware 2026-10-25: sections 1-2 (build, install, hidden /state check, Dock icon). Everything marked NOT VERIFIED is untested. The FP-30X has not been plugged in yet.

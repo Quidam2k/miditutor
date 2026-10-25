@@ -111,7 +111,7 @@ sits at the piano. AGPL batch tools (Audiveris) for M3 scanning.
 ## Pinocchio (Mac mini, remote music box)
 
 Pinocchio is a Mac mini (Apple Silicon) in the music room, driven by Orolo
-over SSH from Solace. It is not on the network yet. Three docs, in order:
+over SSH from Solace (`ssh toddwalker@todds-mac-mini`). Three docs, in order:
 
 - `docs/pinocchio-todd-steps.md`: Todd's one-time physical checklist (power,
   hub, Wi-Fi, account, Remote Login, keep-awake, FP-30X).
@@ -125,7 +125,13 @@ Build workflow: `.github/workflows/macos.yml` runs on `workflow_dispatch` and
 (`.github/scripts/macos-smoke.sh`: /state 200 with token, 401 without), and
 uploads the zip. Not yet run on a macOS runner.
 
-Status: nothing on Pinocchio has been verified. Mac steps are untested.
+Status (2026-10-25, #9437): **installed and verified on Pinocchio.** Built on CI
+(run 40234143238), installed to `~/Applications/MidiTutor.app` by
+`scripts/deploy_pinocchio.sh`, hidden /state check passed (200 with token, 401
+without, renderer connected, Web MIDI enabled). MidiTutor icon is in the Dock and
+on the Desktop. The Mac has no Xcode tools, so never run git/python3 there (it
+pops an install dialog on the TV). Not yet verified: the FP-30X plugged into
+Pinocchio, the SSH tunnel + tutor_* MCP tools against Pinocchio, launch at login.
 
 ## Music-API handoff (2026-10-08, #7365/#7367)
 Shipped + pushed (master cd35233): tutor API + tutor_* MCP tools, blue/red play-along overlay, importer (MIDI/MusicXML/photo) + Open piece + Photo/Score toggle, OMR = homr 0.7.0 (.venv-omr-homr; bench/omr), macOS CI green (run 37842684233), Pinocchio docs.
