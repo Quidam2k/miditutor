@@ -188,7 +188,7 @@ jobs:
               continue
             fi
 
-            lipo -verify_arch arm64 "$file"
+            lipo "$file" -verify_arch arm64
             minos="$(otool -l "$file" | awk '$1 == "minos" {print $2; exit}')"
             if [[ -n "$minos" && "$(printf '%s\n14.4\n' "$minos" | sort -V | tail -1)" != 14.4 ]]; then
               echo "::error::$file needs macOS $minos; Pinocchio has 14.4"
