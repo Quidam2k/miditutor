@@ -68,14 +68,13 @@ jobs:
           brew_prefix="$(brew --prefix)"
           jpeg_prefix="$(brew --prefix jpeg-turbo)"
           export CPPFLAGS="-I$brew_prefix/include -I$jpeg_prefix/include"
-          # dll.c's --enable-preload table casts every entry to void *(*)(void); clang 15+ rejects that.
-          export CFLAGS="-O2 -Wno-error=incompatible-function-pointer-types"
           export LDFLAGS="-L$brew_prefix/lib -L$jpeg_prefix/lib -Wl,-headerpad_max_install_names"
           export PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:$jpeg_prefix/lib/pkgconfig:$brew_prefix/lib/pkgconfig:$brew_prefix/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
+          # No --enable-preload: on macOS it links sanei_usb into libsane twice (duplicate
+          # symbols). dll loads lib/sane/libsane-fujitsu from this same prefix on Pinocchio.
           ./configure \
             --prefix="$PREFIX" \
-            --enable-preload \
             --disable-locking \
             --disable-nls \
             --without-snmp \
