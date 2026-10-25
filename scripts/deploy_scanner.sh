@@ -23,7 +23,13 @@ RUN_ID=${RUN_ID:-$(gh run list --workflow scanner-macos.yml --status success -L 
 [[ -n "$RUN_ID" && "$RUN_ID" != null ]] || { echo "No successful run found." >&2; exit 1; }
 tmpdir=$(mktemp -d)
 trap 'rm -rf -- "$tmpdir"' EXIT
-gh run download "$RUN_ID" -n sane-fujitsu-macos-arm64 -D "$tmpdir"
+# curl via the API, not `gh run download`: gh's blob fetch kept dying with "unexpected EOF".
+repo=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+artifact_id=$(gh api "repos/$repo/actions/runs/$RUN_ID/artifacts" -q '.artifacts[] | select(.name == "sane-fujitsu-macos-arm64") | .id')
+[[ -n "$artifact_id" ]] || { echo "Run $RUN_ID has no sane-fujitsu-macos-arm64 artifact." >&2; exit 1; }
+curl -sSfL --retry 3 -H "Authorization: Bearer $(gh auth token)" \
+  -o "$tmpdir/artifact.zip" "https://api.github.com/repos/$repo/actions/artifacts/$artifact_id/zip"
+unzip -q "$tmpdir/artifact.zip" -d "$tmpdir"
 tarball="$tmpdir/sane-fujitsu-macos-arm64.tar.gz"
 test -s "$tarball"
 scp "$tarball" "${PINOCCHIO_HOST}:sane-deploy.tar.gz"
