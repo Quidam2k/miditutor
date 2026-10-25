@@ -1,0 +1,271 @@
+# Build scanimage with SANE's fujitsu backend for ScanSnap iX500 (USB 04c5:132b).
+# Keep it self-contained: the target Mac has no Homebrew, CLT, or sudo.
+# Its git/cc stubs open installation dialogs on the TV.
+# scripts/deploy_scanner.sh installs the artifact.
+name: Scanner macOS arm64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SANE_VERSION: "1.4.0"
+  # Same path as on Pinocchio, so the compiled-in config dir (etc/sane.d) resolves there.
+  PREFIX: /Users/toddwalker/Applications/sane
+  # Pinocchio runs macOS 14.4; anything built for a newer minos will not load there.
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        timeout-minutes: 2
+
+      - name: Install build dependencies
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          for formula in \
+            autoconf automake libtool autoconf-archive gettext pkg-config \
+            libusb libpng libtiff jpeg-turbo dylibbundler
+          do
+            if ! brew list --versions "$formula" >/dev/null 2>&1; then
+              brew install "$formula"
+            fi
+          done
+
+      - name: Get source
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$SANE_VERSION" \
+            https://gitlab.com/sane-project/backends.git sane-src
+          cd sane-src
+          export LIBTOOLIZE=glibtoolize
+          export PATH="$(brew --prefix gettext)/bin:$PATH"
+          ./autogen.sh
+
+      - name: Configure
+        timeout-minutes: 5
+        working-directory: sane-src
+        run: |
+          set -euo pipefail
+          sudo mkdir -p "$PREFIX" && sudo chown "$(id -u):$(id -g)" "$PREFIX"
+
+          brew_prefix="$(brew --prefix)"
+          jpeg_prefix="$(brew --prefix jpeg-turbo)"
+          export CPPFLAGS="-I$brew_prefix/include -I$jpeg_prefix/include"
+          export LDFLAGS="-L$brew_prefix/lib -L$jpeg_prefix/lib -Wl,-headerpad_max_install_names"
+          export PKG_CONFIG_PATH="$(brew --prefix libusb)/lib/pkgconfig:$jpeg_prefix/lib/pkgconfig:$brew_prefix/lib/pkgconfig:$brew_prefix/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+
+          ./configure \
+            --prefix="$PREFIX" \
+            --enable-preload \
+            --disable-locking \
+            --disable-nls \
+            --without-snmp \
+            --without-avahi \
+            --without-gphoto2 \
+            --without-v4l \
+            --without-usb-record-replay \
+            BACKENDS="fujitsu" 2>&1 | tee configure.log
+
+      - name: Verify USB support
+        timeout-minutes: 1
+        working-directory: sane-src
+        run: |
+          set -euo pipefail
+          if ! grep -Eq '^#define HAVE_LIBUSB 1[[:space:]]*$' include/sane/config.h; then
+            echo "::error::SANE did not detect libusb-1.0."
+            exit 1
+          fi
+          echo "USB support = yes (libusb-1.0)"
+
+      - name: Build and install
+        timeout-minutes: 25
+        working-directory: sane-src
+        run: |
+          set -euo pipefail
+          make -j"$(sysctl -n hw.ncpu)"
+          make install
+
+      - name: Trim bundle
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          printf 'fujitsu\n' > "$PREFIX/etc/sane.d/dll.conf"
+          test -s "$PREFIX/etc/sane.d/fujitsu.conf"
+          grep -q '^usb 0x04c5 0x132b' "$PREFIX/etc/sane.d/fujitsu.conf"
+
+          rm -rf "$PREFIX/share/man" "$PREFIX/share/doc" "$PREFIX/include"
+
+          # Keep scanimage and runtime libraries.
+          find "$PREFIX/bin" -type f ! -name scanimage -delete
+          rm -rf "$PREFIX/sbin"
+          find "$PREFIX/lib" -type f \
+            \( -name '*.la' -o -name '*.a' \) -delete
+
+      - name: Bundle dylibs
+        timeout-minutes: 5
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          targets=(-x "$PREFIX/bin/scanimage")
+          # Real files only: a symlink would get its target rewritten twice.
+          for library in "$PREFIX"/lib/*.dylib; do
+            [[ -L "$library" ]] || targets+=(-x "$library")
+          done
+          if [[ -d "$PREFIX/lib/sane" ]]; then
+            while IFS= read -r -d '' library; do
+              targets+=(-x "$library")
+            done < <(find "$PREFIX/lib/sane" -type f -print0)
+          fi
+
+          dylibbundler -od -b "${targets[@]}" \
+            -d "$PREFIX/lib/bundled/" \
+            -p '@executable_path/../lib/bundled/'
+
+          # Give every dylib a relative install ID.
+          while IFS= read -r -d '' library; do
+            relative="${library#"$PREFIX"/}"
+            install_name_tool -id "@executable_path/../$relative" "$library"
+          done < <(find "$PREFIX/lib" -type f -name '*.dylib' -print0)
+
+          install_name_tool \
+            -id '@executable_path/../lib/libsane.1.dylib' \
+            "$PREFIX/lib/libsane.1.dylib"
+
+          # Use the installed libsane rather than its bundled copy.
+          links="$(otool -L "$PREFIX/bin/scanimage")"
+          found=0
+          while IFS= read -r dependency; do
+            case "${dependency##*/}" in
+              libsane.dylib|libsane.[0-9]*.dylib)
+                install_name_tool -change "$dependency" \
+                  '@executable_path/../lib/libsane.1.dylib' \
+                  "$PREFIX/bin/scanimage"
+                found=1
+                ;;
+            esac
+          done < <(printf '%s\n' "$links" | awk 'NR > 1 {print $1}')
+          test "$found" -eq 1
+
+          otool -L "$PREFIX/bin/scanimage"
+          otool -L "$PREFIX/bin/scanimage" \
+            | grep -F '@executable_path/../lib/libsane.1.dylib ('
+
+      - name: Sign Mach-O files
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            if /usr/bin/file -b "$file" | grep -q 'Mach-O'; then
+              codesign --force --sign - "$file"
+            fi
+          done < <(find "$PREFIX" -type f -print0)
+
+      - name: Verify bundle
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            if ! /usr/bin/file -b "$file" | grep -q 'Mach-O'; then
+              continue
+            fi
+
+            lipo -verify_arch arm64 "$file"
+            minos="$(otool -l "$file" | awk '$1 == "minos" {print $2; exit}')"
+            if [[ -n "$minos" && "$(printf '%s\n14.4\n' "$minos" | sort -V | tail -1)" != 14.4 ]]; then
+              echo "::error::$file needs macOS $minos; Pinocchio has 14.4"
+              exit 1
+            fi
+            codesign --verify --strict "$file"
+            links="$(otool -L "$file")"
+            printf '%s\n' "$links"
+
+            while IFS= read -r dependency; do
+              case "$dependency" in
+                *"/opt/homebrew"*|*"/usr/local"*)
+                  echo "::error::Homebrew dependency in $file: $dependency"
+                  exit 1
+                  ;;
+              esac
+              case "$dependency" in
+                /usr/lib/*|/System/*|@executable_path/*|@rpath/*|@loader_path/*)
+                  ;;
+                *)
+                  echo "::error::Nonportable dependency in $file: $dependency"
+                  exit 1
+                  ;;
+              esac
+            done < <(printf '%s\n' "$links" | awk 'NR > 1 {print $1}')
+          done < <(find "$PREFIX" -type f -print0)
+
+          /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            "$PREFIX/bin/scanimage" --version
+          /usr/bin/env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+            "$PREFIX/bin/scanimage" -L
+
+      - name: Verify with Homebrew hidden
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+          test -d /opt/homebrew
+          test ! -e /opt/homebrew.hidden
+
+          restore_homebrew() {
+            if [[ -d /opt/homebrew.hidden ]]; then
+              /usr/bin/sudo /bin/mv /opt/homebrew.hidden /opt/homebrew
+            fi
+          }
+          trap restore_homebrew EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          /usr/bin/sudo /bin/mv /opt/homebrew /opt/homebrew.hidden
+          /usr/bin/env -i HOME="$HOME" PATH="$PATH" \
+            "$PREFIX/bin/scanimage" --version
+          /usr/bin/env -i HOME="$HOME" PATH="$PATH" \
+            "$PREFIX/bin/scanimage" -L
+
+      - name: Restore Homebrew
+        if: always()
+        timeout-minutes: 1
+        run: |
+          set -euo pipefail
+          if [[ -d /opt/homebrew.hidden ]]; then
+            test ! -e /opt/homebrew
+            /usr/bin/sudo /bin/mv /opt/homebrew.hidden /opt/homebrew
+          fi
+
+      - name: Package
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          tar -C /Users/toddwalker/Applications \
+            -czf sane-fujitsu-macos-arm64.tar.gz sane
+          shasum -a 256 sane-fujitsu-macos-arm64.tar.gz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 5
+        with:
+          name: sane-fujitsu-macos-arm64
+          path: sane-fujitsu-macos-arm64.tar.gz
+          if-no-files-found: error
+          retention-days: 30
