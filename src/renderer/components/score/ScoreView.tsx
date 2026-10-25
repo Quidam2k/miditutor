@@ -6,7 +6,6 @@ import sampleXml from '../../assets/sample-score.musicxml?raw';
 import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep } from '../../engine/ScoreFollower';
-import { midiNumberToPitch, pitchToDisplayName } from '../../engine/MusicTheory';
 import { useTutorStore } from '../../store/useTutorStore';
 import { reportScreen } from '../tutor/useTutorBridge';
 import { TaskPanel } from '../tutor/TaskPanel';
@@ -17,6 +16,7 @@ import {
   clefForMidi,
   spellPlayed,
   staffOffsetSteps,
+  writtenName,
 } from '../../../shared/notation';
 
 // Milestone 2: the score follows live MIDI. Each OSMD cursor position becomes a
@@ -72,10 +72,6 @@ const staffOf = (n: OsmdNote) => n.ParentStaff?.idInMusicSheet ?? 0;
 
 // First key signature in the file. Mid-piece key changes are not tracked (v1).
 const fifthsOf = (xml: string) => Number(/<fifths>\s*(-?\d+)\s*<\/fifths>/.exec(xml)?.[1] ?? 0);
-
-const noteName = (midi: number) => pitchToDisplayName(midiNumberToPitch(midi));
-const namesOf = (midis: number[]) =>
-  [...midis].sort((a, b) => b - a).map(noteName).join(' + ');
 
 // OSMD's halfTone is 0 at C0 in its own octave scheme; MIDI = halfTone + 12 (C4 = 60).
 const toMidi = (n: OsmdNote) => n.halfTone + 12;
@@ -166,6 +162,19 @@ export function ScoreView() {
   const piece = pieces.find((p) => p.id === pieceId) ?? PIECES[0];
   const fifths = useMemo(() => fifthsOf(piece.xml), [piece.xml]);
 
+  // Name notes as the page spells them: the written notes at the cursor first, then
+  // the key signature, so a 4-flat piece says "Db5", never "C#5".
+  const noteName = useCallback(
+    (midi: number) => {
+      const f = followerRef.current;
+      const stepNotes = f ? (stepNotesRef.current[Math.min(f.index, f.steps.length - 1)] ?? []) : [];
+      const written = stepNotes.map(writtenOf).filter((w): w is WrittenNote => w !== null);
+      return writtenName(spellPlayed(midi, fifths, written));
+    },
+    [fifths],
+  );
+  const namesOf = (midis: number[]) => [...midis].sort((a, b) => b - a).map(noteName).join(' + ');
+
   // Tell the tutor API what is on screen, so personas can ask "where is he?".
   useEffect(() => {
     reportScreen({
@@ -182,7 +191,7 @@ export function ScoreView() {
       playedMarks: marks.length,
       redAccidentals: marks.flatMap((m) => (m.accidental ? [m.accidental] : [])),
     });
-  }, [piece.label, status, measure, remaining, wrongCount, feedback, pace, marks]);
+  }, [piece.label, status, measure, remaining, wrongCount, feedback, pace, marks, noteName]);
 
   // --- note colouring (direct SVG edits; cheaper than an OSMD re-render) ---
   const paint = useCallback((notes: OsmdNote[], color: string | null) => {
@@ -307,6 +316,8 @@ export function ScoreView() {
     cursorIndexRef.current = 0;
     f.reset();
     moveCursorTo(f.index);
+    // The step walk at load leaves the view scrolled to the end; bring bar 1 back.
+    osmd.cursor.cursorElement?.scrollIntoView?.({ block: 'center' });
     setFeedback({ kind: 'idle' });
     setWrongCount(0);
     syncUi();

@@ -7,6 +7,7 @@ import {
   spellPlayed,
   staffOffsetSteps,
   writtenMidi,
+  writtenName,
   type WrittenNote,
 } from '../src/shared/notation';
 
@@ -233,5 +234,33 @@ describe('key-altered letter played natural', () => {
   });
   it('spells Bb in D major... B natural in F major as B natural', () => {
     expect(spellPlayed(71, -1, [])).toEqual({ letter: 'B', alter: 0, octave: 4 });
+  });
+});
+
+// #9449: feedback names follow the page, not a fixed sharp spelling.
+describe('writtenName(spellPlayed(...)) for feedback text', () => {
+  const name = (midi: number, fifths: number, written: WrittenNote[] = []) =>
+    writtenName(spellPlayed(midi, fifths, written));
+  const db5: WrittenNote = { letter: 'D', alter: -1, octave: 5 };
+
+  it('names an expected D-flat in a 4-flat piece as Db5, not C#5', () => {
+    expect(name(73, -4, [db5])).toBe('Db5');
+  });
+  it('keeps a written C-sharp as C#5 even in a flat key', () => {
+    expect(name(73, -4, [{ letter: 'C', alter: 1, octave: 5 }])).toBe('C#5');
+  });
+  it('puts Cb4 and B#3 in their written octaves', () => {
+    expect(name(59, -7, [{ letter: 'C', alter: -1, octave: 4 }])).toBe('Cb4');
+    expect(name(60, 7, [{ letter: 'B', alter: 1, octave: 3 }])).toBe('B#3');
+  });
+  it('names an 8va (sounding) note by the key when it is not in the written list', () => {
+    expect(name(92, -4)).toBe('Ab6');
+  });
+  it('spells a wrong note outside the score by the key', () => {
+    expect(name(61, -4, [{ letter: 'A', alter: -1, octave: 5 }])).toBe('Db4');
+    expect(name(61, 2)).toBe('C#4');
+  });
+  it('calls a D natural played for a written D-flat "D5"', () => {
+    expect(name(74, -4, [db5])).toBe('D5');
   });
 });

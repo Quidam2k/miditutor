@@ -167,3 +167,10 @@ export function accidentalMark(
 export function clefForMidi(midi: number, staves: number): 'treble' | 'bass' {
   return staves === 1 || midi >= 60 ? 'treble' : 'bass';
 }
+
+const ALTER_SIGN: Record<number, string> = { [-2]: 'bb', [-1]: 'b', 0: '', 1: '#', 2: '##' };
+
+/** "Db5", "C#4", "B3": the name a reader sees on the page. */
+export function writtenName(n: WrittenNote): string {
+  return `${n.letter}${ALTER_SIGN[n.alter] ?? ''}${n.octave}`;
+}
