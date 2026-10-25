@@ -99,7 +99,7 @@ caffeinate -dimsu
 
 Verify: `pmset` reports `sleep 0` and `autorestart 1`, and Pinocchio stays awake during use.
 
-## 5. Tunnel from Solace [NOT VERIFIED]
+## 5. Tunnel from Solace [VERIFIED 2026-10-25, #9443]
 
 Run in a separate Solace Git Bash terminal and keep it running. The explicit local address limits the forward to loopback. Never bind port 47800 on the LAN, and do not set `MIDITUTOR_PORT` on the Mac. If the dev MidiTutor app is running on Solace, it already holds local port 47800, so the forward fails with ExitOnForwardFailure; stop the dev app first or use another local port.
 
@@ -109,7 +109,7 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:47800:127.0.0.1:47800 toddwalker
 
 Verify: SSH remains running without forwarding errors; section 7 confirms the forwarded API responds.
 
-## 6. Fetch and store the token on Solace [NOT VERIFIED]
+## 6. Fetch and store the token on Solace [VERIFIED 2026-10-25, #9443: MIDITUTOR_TOKEN_FILE route]
 
 The first app launch creates `$HOME/Library/Application Support/MidiTutor/api-token` on Pinocchio. Capture it without printing it. Keep tracing disabled, never commit it, and never echo it into logs.
 
@@ -143,7 +143,7 @@ osascript -e 'tell application "MidiTutor" to quit' &&
 
 Verify: The selected token variable or file is populated without displaying its contents; authenticated requests succeed in section 7.
 
-## 7. Verify end to end [NOT VERIFIED]
+## 7. Verify end to end [VERIFIED 2026-10-25, #9443: 200 with token, 401 without, POST /piece + /screenshot]
 
 On Pinocchio:
 

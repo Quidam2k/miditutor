@@ -131,7 +131,18 @@ Status (2026-10-25, #9437): **installed and verified on Pinocchio.** Built on CI
 without, renderer connected, Web MIDI enabled). MidiTutor icon is in the Dock and
 on the Desktop. The Mac has no Xcode tools, so never run git/python3 there (it
 pops an install dialog on the TV). Not yet verified: the FP-30X plugged into
-Pinocchio, the SSH tunnel + tutor_* MCP tools against Pinocchio, launch at login.
+Pinocchio, launch at login.
+
+2026-10-25 (#9443): tunnel + token (runbook 5-7) verified from Solace; POST /piece
+loaded The Sorcerer's Apprentice (69 bars, homr on Todd's photos + hand fixes; kept
+OUT of this public repo at `Q:/Personal/piano/sorcerers-apprentice/`, with its
+`build.py`). Also never use `osascript ... System Events` over SSH: it hangs on an
+Automation permission prompt on the TV. Open app bugs found:
+- The view opens scrolled to the END: `extractSteps` walks the cursor with
+  `followCursor: true` and `cursor.reset()` does not scroll back. Fix: scroll the
+  container to top after the walk.
+- Note names are always sharps (`expected C#5` for D-flat in a 4-flat piece);
+  name by the score's key/spelling instead.
 
 ## Music-API handoff (2026-10-08, #7365/#7367)
 Shipped + pushed (master cd35233): tutor API + tutor_* MCP tools, blue/red play-along overlay, importer (MIDI/MusicXML/photo) + Open piece + Photo/Score toggle, OMR = homr 0.7.0 (.venv-omr-homr; bench/omr), macOS CI green (run 37842684233), Pinocchio docs.
