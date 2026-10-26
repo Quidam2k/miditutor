@@ -14,6 +14,7 @@ import {
   scoreTitle,
   titleFromPath,
 } from './shared/pieceFiles';
+import { TrustMap, parseTrust, trustFor } from './shared/trust';
 
 if (started) {
   app.quit();
@@ -88,6 +89,17 @@ const readScoreFile = async (filePath: string): Promise<string> => {
 const piecesDir = () =>
   process.env.MIDITUTOR_PIECES_DIR || path.join(app.getPath('home'), 'MidiTutor Pieces');
 
+// trust.json (written by scripts/omr_audit.py trust, copied by sync_pieces.sh) says
+// what is known about each score. Missing or unreadable means no badge, not an error.
+const readTrust = async (dir: string): Promise<TrustMap> => {
+  try {
+    return parseTrust(JSON.parse(await fs.readFile(path.join(dir, 'trust.json'), 'utf8')));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn('[pieces] trust.json unreadable:', (err as Error).message);
+    return {};
+  }
+};
+
 const listPieces = async () => {
   const dir = piecesDir();
   const pieces = [];
@@ -95,10 +107,17 @@ const listPieces = async () => {
   try {
     await fs.mkdir(dir, { recursive: true });
     const names = (await fs.readdir(dir)).filter(isPieceFileName).sort();
+    const trust = await readTrust(dir);
     for (const name of names) {
       try {
         const musicxml = await readScoreFile(path.join(dir, name));
-        pieces.push({ file: name, title: scoreTitle(musicxml) ?? titleFromPath(name), musicxml });
+        const entry = trustFor(trust, name);
+        pieces.push({
+          file: name,
+          title: scoreTitle(musicxml) ?? titleFromPath(name),
+          musicxml,
+          ...(entry ? { trust: entry } : {}),
+        });
       } catch (err) {
         skipped.push(`${name}: ${(err as Error).message}`);
       }

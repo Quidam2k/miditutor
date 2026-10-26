@@ -13,6 +13,7 @@ import { ScoreFollower, ScoreStep } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
+import { PieceTrust, trustBadge, trustMark } from '../../../shared/trust';
 import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
 import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
@@ -40,6 +41,8 @@ interface Piece {
   /** Data URL of the original photo, when the piece came from one. */
   photo?: string;
   targetBpm?: number;
+  /** What trust.json says about this score (OMR audit); absent for built-in and pushed pieces. */
+  trust?: PieceTrust;
 }
 
 // One order for the piece list (#9611): alphabetical by the shown title, ignoring
@@ -300,10 +303,10 @@ export function ScoreView() {
     const refresh = () =>
       list()
         .then((files) => {
-          const key = files.map((f) => `${f.file}:${f.musicxml.length}`).join('|');
+          const key = files.map((f) => `${f.file}:${f.musicxml.length}:${f.trust?.status}:${f.trust?.note}`).join('|');
           if (key === lastKey) return;
           lastKey = key;
-          setFolder(files.map((f) => ({ id: `file:${f.file}`, label: f.title, xml: f.musicxml })));
+          setFolder(files.map((f) => ({ id: `file:${f.file}`, label: f.title, xml: f.musicxml, trust: f.trust })));
         })
         .catch((err) => console.warn('[pieces] list failed:', err));
     refresh();
@@ -870,7 +873,7 @@ export function ScoreView() {
             <optgroup label="★ Favorites">
               {favoritePieces.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.label}
+                  {`${trustMark(p.trust)} ${p.label}`}
                 </option>
               ))}
             </optgroup>
@@ -878,7 +881,7 @@ export function ScoreView() {
           <optgroup label="All pieces">
             {otherPieces.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.label}
+                {`${trustMark(p.trust)} ${p.label}`}
               </option>
             ))}
           </optgroup>
@@ -893,6 +896,18 @@ export function ScoreView() {
         >
           {favorites.includes(piece.label) ? '★' : '☆'}
         </button>
+        {/* Visible, not hover-only: what the OMR audit knows about this score (#9644). */}
+        <span
+          className={`text-xs ${
+            piece.trust?.status === 'issues'
+              ? 'text-amber-400'
+              : piece.trust?.status === 'checked'
+                ? 'text-emerald-400'
+                : 'text-gray-400'
+          }`}
+        >
+          {trustBadge(piece.trust)}
+        </span>
         {window.tutorBridge && (
           <button onClick={openPiece} className={btn}>
             Open piece…

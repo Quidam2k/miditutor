@@ -3,6 +3,7 @@ import { useMidiStore } from '../../store/useMidiStore';
 import { useTutorStore } from '../../store/useTutorStore';
 import type { RendererCommand } from '../../../main/tutorApi';
 import type { RecordingStatus } from '../../../main/recorder';
+import type { PieceTrust } from '../../../shared/trust';
 
 // Wires the renderer to the tutor API in the main process: every note that
 // goes through the store's single ingest path is reported up, and commands
@@ -14,7 +15,7 @@ interface TutorBridge {
   screen: (state: unknown) => void;
   device: (d: unknown) => void;
   openPiece: () => Promise<{ title: string; musicxml: string } | null>;
-  listPieces?: () => Promise<{ file: string; title: string; musicxml: string }[]>;
+  listPieces?: () => Promise<{ file: string; title: string; musicxml: string; trust?: PieceTrust }[]>;
   onCommand: (cb: (cmd: RendererCommand) => void) => () => void;
   toggleRecording?: () => Promise<RecordingStatus>;
   recordingStatus?: () => Promise<RecordingStatus>;

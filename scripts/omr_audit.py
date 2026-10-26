@@ -3,6 +3,7 @@
 Usage: omr_audit.py lint LIBRARY_DIR --out OUT.json [--annotate DIR] [--only slug,slug]
        omr_audit.py compare LIBRARY_DIR HOMR_DIR OEMER_DIR --out OUT.json [--only slug,slug]
        omr_audit.py report LINT.json [COMPARE.json] --out REPORT.md
+       omr_audit.py trust LIBRARY_DIR [--annotate DIR] [--report MD] [--out trust.json]
 
 Library content stays under Q:/Personal, never the repo.
 """
@@ -11,6 +12,7 @@ from collections import Counter, defaultdict
 from difflib import SequenceMatcher
 from fractions import Fraction
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -435,6 +437,228 @@ def render_report(lint, cmp=None):
     return "\n".join(lines + details) + "\n"
 
 
+TRUST_SOURCE = "omr_audit"
+TRUST_FILE = "trust.json"
+
+
+def bar_ranges(bars, limit=6) -> str:
+    """Format consecutive bars as compact ranges."""
+    values = sorted(set(bars))
+    if not values:
+        return ""
+
+    runs = []
+    start = end = values[0]
+    for bar in values[1:]:
+        if bar == end + 1:
+            end = bar
+        else:
+            runs.append(str(start) if start == end else f"{start}-{end}")
+            start = end = bar
+    runs.append(str(start) if start == end else f"{start}-{end}")
+
+    shown = runs[:max(0, limit)]
+    result = ", ".join(shown)
+    remaining = len(runs) - len(shown)
+    if remaining:
+        result += f" (+{remaining} more)"
+    return result
+
+
+def confirmed_bars(report_text: str) -> dict:
+    """Collect bars tagged as confirmed misreads."""
+    result = {}
+    in_section = False
+    slug = None
+
+    for line in report_text.splitlines():
+        if not in_section:
+            if line == "## Confirmed errors, piece by piece":
+                in_section = True
+            continue
+
+        if line.startswith("## "):
+            break
+        if line.startswith("### "):
+            slug = line[4:].strip()
+            continue
+        if slug is None or not line.startswith("- m"):
+            continue
+        if "[real_misread]" not in line:
+            continue
+
+        match = re.match(r"^- m(\d+)(?:-m?(\d+))?\b", line)
+        if match is None:
+            continue
+        start = int(match.group(1))
+        end = int(match.group(2)) if match.group(2) is not None else start
+        end = max(start, end)
+        result.setdefault(slug, set()).update(range(start, end + 1))
+
+    return result
+
+
+def rhythm_bars(lint_piece) -> tuple:
+    """Collect time-signature findings and rhythm bars."""
+    has_time_signature = False
+    bars = set()
+    if lint_piece is None:
+        return has_time_signature, bars
+
+    for flag in lint_piece.get("flags", []):
+        if flag.get("raw_only"):
+            continue
+        if flag.get("check") == "time_signature":
+            has_time_signature = True
+        elif flag_reason(flag) in VERDICT_RULE["rhythm_checks"]:
+            measure = flag.get("measure")
+            if type(measure) is int:
+                bars.add(measure)
+
+    return has_time_signature, bars
+
+
+def issue_note(lint_piece, pitch_bars) -> str | None:
+    """Describe open issues in plain language."""
+    has_time_signature, bars = rhythm_bars(lint_piece)
+    parts = []
+    if has_time_signature:
+        parts.append("wrong time signature")
+    if bars:
+        parts.append("timing off in bars " + bar_ranges(bars))
+    pitch_ranges = bar_ranges(pitch_bars)
+    if pitch_ranges:
+        parts.append("notes misread in bars " + pitch_ranges)
+    return "; ".join(parts) if parts else None
+
+
+def piece_trust(lint_piece, pitch_bars, repair, compare_piece) -> dict:
+    """Determine trust with open issues taking priority."""
+    note = issue_note(lint_piece, pitch_bars)
+    if note is not None:
+        return {"status": "issues", "note": note, "source": TRUST_SOURCE}
+
+    if (
+        isinstance(repair, dict)
+        and repair.get("fully_checked") is True
+        and not str(repair.get("remaining_note") or "").strip()
+    ):
+        return {
+            "status": "checked",
+            "note": "checked against the page",
+            "source": TRUST_SOURCE,
+        }
+
+    if (
+        isinstance(compare_piece, dict)
+        and compare_piece.get("piece_agreement", 0)
+        >= VERDICT_RULE["minimum_agreement"]
+        and "bar_count_mismatch" not in compare_piece
+    ):
+        return {
+            "status": "checked",
+            "note": "checked against the page",
+            "source": TRUST_SOURCE,
+        }
+
+    return {
+        "status": "unverified",
+        "note": "not yet checked against the page",
+        "source": TRUST_SOURCE,
+    }
+
+
+def load_trust(path) -> dict:
+    """Load trust entries without hiding corrupt data."""
+    path = Path(path)
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return {}
+    data = json.loads(text)
+    if not isinstance(data, dict):
+        raise ValueError("trust.json must hold a JSON object")
+    return data
+
+
+def merge_trust(existing, computed) -> dict:
+    """Merge entries while preserving other writers."""
+    merged = dict(existing)
+    for key, value in computed.items():
+        if key in existing:
+            previous = existing[key]
+            if (
+                isinstance(previous, dict)
+                and "source" in previous
+                and previous["source"] != TRUST_SOURCE
+            ):
+                continue
+        merged[key] = value
+
+    for key, value in existing.items():
+        if (
+            key not in computed
+            and isinstance(value, dict)
+            and value.get("source") == TRUST_SOURCE
+        ):
+            del merged[key]
+
+    return dict(sorted(merged.items()))
+
+
+def write_trust(path, data) -> None:
+    """Replace the trust file atomically."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    text = json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True) + "\n"
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(text)
+    os.replace(temporary, path)
+
+
+def trust_entries(library, annotate, report=None) -> dict:
+    """Compute trust entries for library scores."""
+    library = Path(library)
+    annotate = Path(annotate)
+    lint_path = annotate / "lint.json"
+    if not lint_path.exists():
+        raise FileNotFoundError(f"Required lint.json is missing: {lint_path}")
+    lint = read_json(lint_path)["pieces"]
+
+    pitch = {}
+    if report is not None:
+        report_path = Path(report)
+        if report_path.exists():
+            pitch = confirmed_bars(report_path.read_text(encoding="utf-8"))
+
+    repairs_path = annotate / "repairs.json"
+    repairs = read_json(repairs_path) if repairs_path.exists() else {}
+    compare_path = annotate / "compare.json"
+    compare = read_json(compare_path)["pieces"] if compare_path.exists() else {}
+
+    entries = {}
+    for path in sorted(library.glob("*.musicxml")):
+        if path.name.endswith((".pre-annotate.musicxml", ".omr-raw.musicxml")):
+            continue
+        slug = path.stem
+        entries[path.name] = piece_trust(
+            lint.get(slug),
+            pitch.get(slug, set()),
+            repairs.get(path.name),
+            compare.get(slug),
+        )
+    return entries
+
+
+def trust_command(library, annotate, report, out) -> dict:
+    """Compute, merge, and write library trust entries."""
+    entries = trust_entries(library, annotate, report)
+    merged = merge_trust(load_trust(out), entries)
+    write_trust(out, merged)
+    return entries
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -448,12 +672,26 @@ def main(argv=None):
             sub.add_argument("--annotate", type=Path)
         sub.add_argument("--only")
         sub.add_argument("--out", required=True, type=Path)
+    sub = commands.add_parser("trust")
+    sub.add_argument("library", type=Path)
+    sub.add_argument("--annotate", type=Path)
+    sub.add_argument("--report", type=Path)
+    sub.add_argument("--out", type=Path)
     sub = commands.add_parser("report")
     sub.add_argument("lint", type=Path)
     sub.add_argument("compare", nargs="?", type=Path)
     sub.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "trust":
+            library = args.library
+            reports = sorted(library.glob("omr_audit_*.md"))
+            entries = trust_command(library, args.annotate or library.parent / "annotate" / "omr_audit",
+                                    args.report or (reports[-1] if reports else None),
+                                    args.out or library / TRUST_FILE)
+            counts = Counter(entry["status"] for entry in entries.values())
+            print(f"trust: checked {counts['checked']} / issues {counts['issues']} / unverified {counts['unverified']}")
+            return
         if args.command == "report":
             protected = [args.lint] + ([args.compare] if args.compare else [])
             output = render_report(read_json(args.lint), read_json(args.compare) if args.compare else None)

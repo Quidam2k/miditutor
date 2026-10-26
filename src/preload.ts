@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   device: (d: unknown) => ipcRenderer.send('tutor:device', d),
   // Native file picker for a MusicXML score; resolves null when cancelled.
   openPiece: () => ipcRenderer.invoke('piece:open'),
-  // Every score in ~/MidiTutor Pieces: [{ file, title, musicxml }].
+  // Every score in ~/MidiTutor Pieces: [{ file, title, musicxml, trust? }] (trust from trust.json).
   listPieces: () => ipcRenderer.invoke('pieces:list'),
   // Take recorder (#9574): toggle, current status, and the piano audio rendered after Stop.
   toggleRecording: () => ipcRenderer.invoke('recorder:toggle'),
