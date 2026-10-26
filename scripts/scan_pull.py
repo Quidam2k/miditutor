@@ -16,16 +16,19 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageStat
 
 SCANNER = "~/Applications/sane/bin/scanimage"
 SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 # Show-through from the back of the sheet scans as light gray staves that homr reads
 # as extra bars (a one-page song came back with 40 bars instead of 8, #9499).
 BLEED_CUTOFF = 140
+POLL_S = 2
+SETTLE_S = 5
 
 
 def progress(message: str) -> None:
@@ -62,6 +65,19 @@ def without_bleed(png: Path) -> Path:
     return clean
 
 
+def paper_bottom(img: Image.Image) -> int:
+    """Height of the sheet in a long-page scan, which pads to --page-height with
+    the scanner's flat gray background (mean ~221, little noise)."""
+    with img.convert("L") as gray, gray.resize((max(1, gray.width // 10), gray.height)) as small:
+        y = small.height
+        while y > 1:
+            stat = ImageStat.Stat(small.crop((0, y - 1, small.width, y)))
+            if not (205 < stat.mean[0] < 234 and stat.stddev[0] < 12):
+                break
+            y -= 1
+    return min(img.height, y + 30)
+
+
 def ink_fraction(img: Image.Image) -> float:
     with img.convert("L") as gray:
         width, height = gray.size
@@ -88,6 +104,30 @@ def last_error(result: subprocess.CompletedProcess[str]) -> str:
     return lines[-1] if lines else f"Command exited with code {result.returncode}"
 
 
+def sensors(host: str) -> dict[str, str]:
+    """The iX500's hardware yes/no sensors (page-loaded, scan button, cover-open...)."""
+    result = ssh(host, f"{SCANNER} -d fujitsu -A")
+    return dict(re.findall(r"--([a-z0-9-]+)\[=\(yes\|no\)\] \[(yes|no)\] \[hardware\]",
+                           result.stdout))
+
+
+def wait_for_paper(host: str) -> None:
+    """Return once paper has sat in the feeder for SETTLE_S (so a stack being loaded
+    isn't fed half-placed), or at once when the Scan button is pressed (#9507)."""
+    loaded_since = None
+    while True:
+        state = sensors(host)
+        if state.get("scan") == "yes":
+            return
+        if state.get("page-loaded") == "yes":
+            loaded_since = loaded_since or time.monotonic()
+            if time.monotonic() - loaded_since >= SETTLE_S:
+                return
+        else:
+            loaded_since = None
+        time.sleep(POLL_S)
+
+
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=os.environ.get(
@@ -104,6 +144,8 @@ def arguments() -> argparse.Namespace:
     # SANE defaults to letter height (279 mm); a taller sheet stops the feeder as a
     # jam. The iX500 takes up to 876 mm (#9498). Width is capped at 216 mm by the guides.
     parser.add_argument("--page-height", type=float, default=None, metavar="MM")
+    parser.add_argument("--watch", action="store_true",
+                        help="wait for paper in the feeder (or the Scan button), scan one batch, exit")
     args = parser.parse_args()
     if not args.host or args.host.startswith("-"):
         parser.error("--host must be a nonempty SSH destination")
@@ -208,6 +250,8 @@ def execute(args: argparse.Namespace) -> int:
         tiff = raw / name
         png = local / (Path(name).stem + ".png")
         with Image.open(tiff) as img:
+            if args.page_height:
+                img = img.crop((0, 0, img.width, paper_bottom(img)))
             dimensions = img.size
             img.save(png, format="PNG")
         with Image.open(png) as verified:
@@ -254,6 +298,9 @@ def execute(args: argparse.Namespace) -> int:
 def main() -> int:
     args = arguments()
     try:
+        if args.watch:
+            progress("Waiting for paper in the feeder or the Scan button")
+            wait_for_paper(args.host)
         return execute(args)
     except (OSError, ValueError, RuntimeError) as exc:
         progress(f"Scan failed: {exc}")
