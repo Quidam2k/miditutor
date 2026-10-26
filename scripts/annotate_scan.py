@@ -413,6 +413,11 @@ def _make_harmony(symbol, context):
     )
     # "7b9" = a dominant seventh plus an altered tone, written as <degree>.
     base, alterations = suffix, []
+    if base.startswith("(") and base.endswith(")"):
+        base = base[1:-1]  # "Eb(sus2)"
+    if base in ("7sus", "7sus4"):
+        # A sus4 with an added seventh; OSMD shows it as "7sus4".
+        base, alterations = "sus4", [("", "7")]
     while base not in CHORD_KINDS:
         tail = ALTERED_RE.search(base)
         if tail is None or tail.start() == 0:
@@ -551,14 +556,18 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
                         if beat_type is None:
                             continue
                         target = (beat - 1) * 4 / beat_type
-                        note = next(
-                            (
-                                record["head"]
-                                for record in measure["notes"]
-                                if record["staff"] == 1
-                                and record["onset"] == target
-                            ),
-                            None,
+                        # Over a held treble note the symbol lines up with the
+                        # left hand, so fall back to the lowest staff with an onset.
+                        onsets = [
+                            record
+                            for record in measure["notes"]
+                            if record["staff"] is not None
+                            and record["onset"] == target
+                        ]
+                        note = (
+                            min(onsets, key=lambda r: r["staff"])["head"]
+                            if onsets
+                            else None
                         )
                         if note is not None:
                             matches.append((measure["element"], note))

@@ -459,3 +459,42 @@ def test_altered_dominant_writes_degree(tmp_path):
     assert [(d.findtext("degree-value"), d.findtext("degree-type"))
             for d in c.findall("degree")] == [("5", "alter"), ("9", "add")]
     assert [child.tag for child in d7b9][-2:] == ["degree", "staff"]
+
+
+def test_chord_over_held_treble_note_anchors_to_left_hand_onset(tmp_path):
+    xml = SCORE.replace(
+        "<duration>4</duration><voice>2</voice><type>half</type>",
+        "<duration>3</duration><voice>2</voice><type>quarter</type><dot/>",
+        1,
+    )
+    score, reads, out = write_inputs(
+        tmp_path, {"page": "p.png", "chords": [chord("A/C#", beat=2.5)]}, xml
+    )
+    report = annotate(score, [reads], out)
+    measure = ET.parse(out).find("./part/measure")
+    children = list(measure)
+    harmony = measure.find("harmony")
+
+    assert report["placed"]["chords"] == 1
+    assert harmony.findtext("staff") == "1"
+    left_hand_e3 = measure.findall("note")[-1]
+    assert children.index(harmony) == children.index(left_hand_e3) - 1
+
+
+def test_seventh_sus_and_parenthesized_sus2(tmp_path):
+    score, reads, out = write_inputs(
+        tmp_path,
+        {"page": "p.png", "chords": [chord("E7sus", beat=1), chord("Eb(sus2)")]},
+    )
+    report = annotate(score, [reads], out)
+    e7sus, eb = ET.parse(out).iter("harmony")
+
+    assert report["placed"]["chords"] == 2
+    assert e7sus.findtext("kind") == "suspended-fourth"
+    assert [(d.findtext("degree-value"), d.findtext("degree-alter"),
+             d.findtext("degree-type")) for d in e7sus.findall("degree")] == [
+        ("7", "0", "add")
+    ]
+    assert eb.findtext("kind") == "suspended-second"
+    assert eb.findtext("root/root-alter") == "-1"
+    assert eb.find("degree") is None
