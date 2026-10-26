@@ -12,6 +12,7 @@ import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { useTutorStore } from '../../store/useTutorStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
 import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
 import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
@@ -40,6 +41,12 @@ interface Piece {
   photo?: string;
   targetBpm?: number;
 }
+
+// One order for the piece list (#9611): alphabetical by the shown title, ignoring
+// case and leading punctuation ('O Sole Mio files under O); "The" is not stripped.
+const sortKey = (label: string) => label.replace(/^[^\p{L}\p{N}]+/u, '');
+const byTitle = (a: Piece, b: Piece) =>
+  sortKey(a.label).localeCompare(sortKey(b.label), undefined, { sensitivity: 'base', numeric: true });
 
 const PIECES: Piece[] = [
   { id: 'minuet', label: 'Minuet in G (simplified) — Petzold', xml: minuetXml, targetBpm: 100 },
@@ -307,7 +314,14 @@ export function ScoreView() {
   const selectPieceId = useTutorStore((s) => s.selectPieceId);
   // A pushed score is also saved to the folder; list it once.
   const pushedLabels = new Set(pushed.map((p) => p.label));
-  const pieces: Piece[] = [...PIECES, ...folder.filter((p) => !pushedLabels.has(p.label)), ...pushed];
+  const favorites = useSettingsStore((s) => s.favoritePieces);
+  const toggleFavorite = useSettingsStore((s) => s.toggleFavoritePiece);
+  // Favorites first (#9610), then everything else; both halves in title order.
+  const pieces: Piece[] = [...PIECES, ...folder.filter((p) => !pushedLabels.has(p.label)), ...pushed].sort(
+    (a, b) => Number(favorites.includes(b.label)) - Number(favorites.includes(a.label)) || byTitle(a, b),
+  );
+  const favoritePieces = pieces.filter((p) => favorites.includes(p.label));
+  const otherPieces = pieces.filter((p) => !favorites.includes(p.label));
   useEffect(() => {
     if (selectPieceId) setPieceId(selectPieceId);
   }, [selectPieceId]);
@@ -410,6 +424,7 @@ export function ScoreView() {
           // A correct note never gets a red accidental, only a wrong one.
           accidental: wrong ? accidentalMark(spelled, fifths, written) : null,
           wrong,
+          midi,
         };
       } catch (err) {
         // The overlay is visual only; never break following over it, but say so.
@@ -620,6 +635,9 @@ export function ScoreView() {
       backend: 'svg',
       drawTitle: true,
       followCursor: true,
+      // Break lines where the printed page does (#5056), so the bar number at the start
+      // of each line matches the boxed number on his page.
+      newSystemFromXML: true,
     });
     osmdRef.current = osmd;
     const cursorObs = keepCursorHeight(container);
@@ -775,12 +793,14 @@ export function ScoreView() {
     });
   }, [following, status, moveCursorTo, syncUi, placePlayed, noteName, trackChord, reportExpression]);
 
-  // Key releases, for the length of a fermata on the last note.
+  // Key releases, for the length of a fermata on the last note. A wrong note shows
+  // only while its key is down (#9630), so the score doesn't fill up with red.
   useEffect(() => {
     if (!following) return;
     return useMidiStore.subscribe((state, prev) => {
       const latest = state.noteLog[0];
       if (!latest || latest === prev.noteLog[0] || latest.kind !== 'noteoff') return;
+      setMarks((m) => (m.some((k) => k.wrong && k.midi === latest.note) ? m.filter((k) => !(k.wrong && k.midi === latest.note)) : m));
       const expr = exprRef.current;
       if (expr && status === 'ready') reportExpression(expr.noteOff(latest.note, latest.timestamp));
     });
@@ -846,12 +866,33 @@ export function ScoreView() {
           onChange={(e) => setPieceId(e.target.value)}
           className="rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-sm text-gray-200"
         >
-          {pieces.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
+          {favoritePieces.length > 0 && (
+            <optgroup label="★ Favorites">
+              {favoritePieces.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          <optgroup label="All pieces">
+            {otherPieces.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </optgroup>
         </select>
+        <button
+          onClick={() => toggleFavorite(piece.label)}
+          aria-pressed={favorites.includes(piece.label)}
+          title={favorites.includes(piece.label) ? 'Remove from favorites' : 'Add to favorites (keeps it at the top)'}
+          className={`rounded-md bg-gray-800 px-2 py-1 text-sm hover:bg-gray-700 ${
+            favorites.includes(piece.label) ? 'text-yellow-400' : 'text-gray-400'
+          }`}
+        >
+          {favorites.includes(piece.label) ? '★' : '☆'}
+        </button>
         {window.tutorBridge && (
           <button onClick={openPiece} className={btn}>
             Open piece…

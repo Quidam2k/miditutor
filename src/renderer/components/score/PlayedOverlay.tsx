@@ -15,6 +15,8 @@ export interface PlayedMark {
   accidental: 'sharp' | 'flat' | 'natural' | null;
   /** Not a note the score asked for here: drawn red instead of blue. */
   wrong?: boolean;
+  /** The key he struck; a wrong mark goes away when it is released (#9630). */
+  midi?: number;
 }
 
 /** A shaded rectangle (px, relative to the overlay layer). */

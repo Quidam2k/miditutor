@@ -1,1 +1,8 @@
 @import "tailwindcss";
+
+/* #5056: bar numbers in their own colour so they don't read as fingering (black). */
+.measure-number,
+.measure-number * {
+  fill: #7c3aed;
+  font-weight: bold;
+}

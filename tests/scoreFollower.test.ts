@@ -416,12 +416,21 @@ describe('ScoreFollower carry-over and ringing notes (#9480, #9481)', () => {
   });
 
   it('does not call a late re-strike of a carried note wrong', () => {
-    const follower = new ScoreFollower(makeSteps([[60], [60], [62]]));
-    follower.noteOn(60, 0, new Set([60]));
-    // Step 1 was covered by the ringing C4, so the cursor is at step 2.
+    const follower = new ScoreFollower(makeSteps([[53, 60], [53], [62]]));
+    follower.noteOn(53, 0);
+    follower.noteOn(60, 10, new Set([53]));
+    // Step 1 was covered by the ringing F3, so the cursor is at step 2.
     expect(follower.index).toBe(2);
-    expect(follower.noteOn(60, 300)).toEqual({ kind: 'ignored' });
+    expect(follower.noteOn(53, 300)).toEqual({ kind: 'ignored' });
     expect(follower.noteOn(62, 600)).toEqual({ kind: 'complete', from: 2 });
+  });
+
+  // #9630: Auld Lang Syne bar 2, F4 then F4+C4; he played only C4 and the cursor moved on.
+  it('asks for a repeated note again even though the key that finished the step is down', () => {
+    const follower = new ScoreFollower(makeSteps([[65], [65, 60], [69]]));
+    expect(follower.noteOn(65, 0)).toEqual({ kind: 'advance', from: 0, to: 1 });
+    expect(follower.satisfied.has(65)).toBe(false);
+    expect(follower.noteOn(60, 400, new Set([65]))).toEqual({ kind: 'partial', index: 1, remaining: [65] });
   });
 
   it('ignores a re-strike of a written note that is still ringing (tie)', () => {

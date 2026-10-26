@@ -127,8 +127,10 @@ export class ScoreFollower {
       return { kind: 'partial', index: this.currentIndex, remaining };
     }
 
+    // The key that just finished this step is not carried: a repeated written note
+    // (Auld Lang Syne's F4 F4) must be struck again (#9630).
     const ringing = new Set(sounding);
-    ringing.add(midi);
+    ringing.delete(midi);
     const from = this.currentIndex;
     let lapped = false;
     this.prevCarried.clear();
