@@ -90,9 +90,14 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--library", type=Path, default=Path("Q:/Personal/piano/library"))
     parser.add_argument("--blank-threshold", type=float, default=0.003)
     parser.add_argument("--list-only", action="store_true")
+    # SANE defaults to letter height (279 mm); a taller sheet stops the feeder as a
+    # jam. The iX500 takes up to 876 mm (#9498). Width is capped at 216 mm by the guides.
+    parser.add_argument("--page-height", type=float, default=None, metavar="MM")
     args = parser.parse_args()
     if not args.host or args.host.startswith("-"):
         parser.error("--host must be a nonempty SSH destination")
+    if args.page_height is not None and not 0 < args.page_height <= 876:
+        parser.error("--page-height must be between 0 and 876 mm")
     if args.resolution <= 0:
         parser.error("--resolution must be positive")
     if not math.isfinite(args.blank_threshold) or not 0 <= args.blank_threshold <= 1:
@@ -117,6 +122,9 @@ def execute(args: argparse.Namespace) -> int:
         f"--resolution {shlex.quote(str(args.resolution))} "
         f"--mode {shlex.quote(args.mode)} --format=tiff --batch=page%03d.tiff"
     )
+    if args.page_height:
+        height = shlex.quote(f"{args.page_height:g}")
+        command += f" --page-height {height} -y {height}"
     progress(f"Scanning on {args.host}")
     scanned = ssh(args.host, command)
     output = scanned.stdout + "\n" + scanned.stderr
