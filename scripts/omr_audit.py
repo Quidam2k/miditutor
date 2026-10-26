@@ -137,7 +137,7 @@ def bar_quarters(measure):
 
 
 def lint_score(score):
-    flags, durations, fills = [], _durations(score, include_rests=True), voice_fills(score)
+    flags, fills = [], voice_fills(score)
 
     def flag(index, staff, check, detail):
         flags.append(dict(measure=index, number=score.measures[index - 1]["number"],
@@ -174,23 +174,16 @@ def lint_score(score):
                 expected = int(measure["beats"]) * 4 / measure["beat_type"]
             except (TypeError, ValueError, ZeroDivisionError):
                 continue
-            timed = durations[index - 1][staff]
             if expected <= 0 or not records:
                 continue
-            known = [(o, d) for o, d, _, _ in timed if o is not None and d is not None]
-            end = max((o + d for o, d in known), default=None)
-            if (any(o is not None and o >= expected for o, _, _, _ in timed)
-                    or end is not None and end > expected + Fraction(1, 64)):
-                voices = [v for (st, _), v in fills[index - 1].items() if st == str(staff)]
-                if voices and all(v == expected for v in voices):
-                    # Each voice adds up; homr just left out the <backup> between voices. #9625
-                    flag(index, staff, "voice_timing", f"end {end}, each voice fills {expected}")
-                else:
-                    flag(index, staff, "bar_length", f"overfull: end {end}, expected {expected}")
-            elif (len(known) == len(timed) and end is not None
-                  and end < expected - Fraction(1, 64)
+            # OSMD times each voice on its own, so homr's missing <backup> between voices
+            # is harmless; a bar is wrong only when a voice itself over- or under-fills it. #9644
+            voices = [v for (st, _), v in fills[index - 1].items() if st == str(staff)]
+            if any(v > expected + Fraction(1, 64) for v in voices):
+                flag(index, staff, "bar_length", f"overfull: voices hold {sorted(set(voices))}, expected {expected}")
+            elif (voices and all(v < expected - Fraction(1, 64) for v in voices)
                   and index not in (1, len(score.measures))):
-                flag(index, staff, "bar_length", f"underfull: end {end}, expected {expected}")
+                flag(index, staff, "bar_length", f"underfull: voices hold {sorted(set(voices))}, expected {expected}")
         for before, current, after in zip(melody, melody[1:], melody[2:]):
             a, b, c = before[1], current[1], after[1]
             # An exact octave from a neighbour is an ordinary octave figure, not a spike.
@@ -395,8 +388,7 @@ def verdict(lint, cmp=None):
             failed = True
     pitch = ("failed" if failed else "suspect"
              if reasons.keys() & VERDICT_RULE["pitch_checks"] else "verified")
-    rhythm = ("misread" if reasons.keys() & VERDICT_RULE["rhythm_checks"]
-              else "voice timing" if reasons["voice_timing"] else "ok")
+    rhythm = "misread" if reasons.keys() & VERDICT_RULE["rhythm_checks"] else "ok"
     return pitch, rhythm, dict(sorted(reasons.items()))
 
 
@@ -406,8 +398,7 @@ def render_report(lint, cmp=None):
     lp, cp = lint.get("pieces", {}), (cmp or {}).get("pieces", {})
     judged = VERDICT_RULE["pitch_checks"] | VERDICT_RULE["rhythm_checks"]
     lines = ["# OMR audit", "",
-             "Pitch: verified (no pitch flag) / suspect / failed. Rhythm: ok / voice timing "
-             "(missing <backup>, mechanically fixable) / misread.", "",
+             "Pitch: verified (no pitch flag) / suspect / failed. Rhythm: ok / misread.", "",
              "| slug | bars | pitch | rhythm | pitch-flagged bars | reasons |",
              "| --- | ---: | --- | --- | --- | --- |"]
     pitch_counts, rhythm_counts, details = Counter(), Counter(), []
@@ -440,7 +431,7 @@ def render_report(lint, cmp=None):
     total = sum(pitch_counts.values())
     lines.extend(["", f"Pitch: verified {pitch_counts['verified']} / suspect {pitch_counts['suspect']} / "
                   f"failed {pitch_counts['failed']} of {total}. Rhythm: ok {rhythm_counts['ok']} / "
-                  f"voice timing {rhythm_counts['voice timing']} / misread {rhythm_counts['misread']}."])
+                  f"misread {rhythm_counts['misread']}."])
     return "\n".join(lines + details) + "\n"
 
 
