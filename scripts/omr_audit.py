@@ -20,13 +20,14 @@ from annotate_scan import (
     Score, _children, _child, _text, _name, _note_pitch, _duration, _fraction,
 )
 
+# Pitch and rhythm are judged apart: a wrong note teaches him wrong; a timing fault misplaces right notes. #9625
 VERDICT_RULE = {
     "minimum_agreement": 0.70,
-    "suspect_checks": frozenset({
-        "octave_repeat", "leap", "range", "bar_length overfull",
-        "tie_unclosed", "tie_orphan", "numeric_words", "homr_unstable",
-        "engine_octave", "engine_low", "bar_number_drift", "time_signature",
+    "pitch_checks": frozenset({
+        "octave_repeat", "leap", "range", "tie_unclosed", "tie_orphan", "numeric_words",
+        "homr_unstable", "engine_octave", "engine_low", "bar_number_drift",
     }),
+    "rhythm_checks": frozenset({"time_signature", "bar_length overfull"}),
 }
 SEMITONES = dict(zip("CDEFGAB", (0, 2, 4, 5, 7, 9, 11)))
 
@@ -381,58 +382,65 @@ def flag_reason(flag):
 
 
 def verdict(lint, cmp=None):
+    """(pitch verdict, rhythm verdict, reason counts) for one piece."""
     flags = lint.get("flags", []) + (cmp or {}).get("flags", [])
-    reasons = Counter(flag_reason(f) for f in flags)
+    reasons = Counter(flag_reason(f) for f in flags if not f.get("raw_only"))
     failed = False
-    if cmp is not None:
+    if cmp:
         if cmp.get("bar_count_mismatch") is not None:
             reasons["bar_count_mismatch"] += 1
             failed = True
         if cmp.get("piece_agreement", 1.0) < VERDICT_RULE["minimum_agreement"]:
             reasons["piece_agreement"] += 1
             failed = True
-    suspect = any(reason in VERDICT_RULE["suspect_checks"] for reason in reasons)
-    return ("failed" if failed else "suspect" if suspect else "verified"), dict(sorted(reasons.items()))
+    pitch = ("failed" if failed else "suspect"
+             if reasons.keys() & VERDICT_RULE["pitch_checks"] else "verified")
+    rhythm = ("misread" if reasons.keys() & VERDICT_RULE["rhythm_checks"]
+              else "voice timing" if reasons["voice_timing"] else "ok")
+    return pitch, rhythm, dict(sorted(reasons.items()))
 
 
 def render_report(lint, cmp=None):
     def cell(value):
         return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
     lp, cp = lint.get("pieces", {}), (cmp or {}).get("pieces", {})
-    lines = ["# OMR audit", "", "| slug | bars | verdict | flagged bars | reasons |",
-             "| --- | ---: | --- | --- | --- |"]
-    counts, details = Counter(), []
+    judged = VERDICT_RULE["pitch_checks"] | VERDICT_RULE["rhythm_checks"]
+    lines = ["# OMR audit", "",
+             "Pitch: verified (no pitch flag) / suspect / failed. Rhythm: ok / voice timing "
+             "(missing <backup>, mechanically fixable) / misread.", "",
+             "| slug | bars | pitch | rhythm | pitch-flagged bars | reasons |",
+             "| --- | ---: | --- | --- | --- | --- |"]
+    pitch_counts, rhythm_counts, details = Counter(), Counter(), []
     for slug in sorted(lp.keys() | cp.keys()):
         piece, comparison = lp.get(slug, {}), cp.get(slug)
-        state, reasons = verdict(piece, comparison)
-        counts[state] += 1
-        flags = piece.get("flags", []) + (comparison or {}).get("flags", [])
-        bars = sorted({f["measure"] for f in flags if type(f.get("measure")) is int})
-        listing = ", ".join(map(str, bars[:20]))
-        if len(bars) > 20:
-            listing += f" +{len(bars) - 20} more"
-        primary, notes = [], []
-        for reason, count in reasons.items():
-            target = primary if reason in VERDICT_RULE["suspect_checks"] or reason in {
-                "bar_count_mismatch", "piece_agreement"} else notes
-            target.append(f"{reason}:{count}")
+        pitch, rhythm, reasons = verdict(piece, comparison)
+        pitch_counts[pitch] += 1
+        rhythm_counts[rhythm] += 1
+        flags = [f for f in piece.get("flags", []) + (comparison or {}).get("flags", [])
+                 if not f.get("raw_only")]
+        pitch_flags = [f for f in flags if f["check"] in VERDICT_RULE["pitch_checks"]]
+        bars = sorted({f["measure"] for f in pitch_flags if type(f.get("measure")) is int})
+        listing = ", ".join(map(str, bars[:20])) + (f" +{len(bars) - 20} more" if len(bars) > 20 else "")
+        primary = [f"{r}:{n}" for r, n in reasons.items()
+                   if r in judged or r in ("bar_count_mismatch", "piece_agreement")]
+        notes = [f"{r}:{n}" for r, n in reasons.items() if f"{r}:{n}" not in primary]
         reason_text = "; ".join(primary + (["notes: " + ", ".join(notes)] if notes else []))
         lines.append("| " + " | ".join(cell(v) for v in (
-            slug, piece.get("measures", "-"), state, listing or "-", reason_text or "-")) + " |")
-        if state != "verified":
+            slug, piece.get("measures", "-"), pitch, rhythm, listing or "-", reason_text or "-")) + " |")
+        if pitch != "verified":
             details.extend(["", f"## {cell(slug)}", ""])
             if comparison and comparison.get("bar_count_mismatch") is not None:
                 details.append(f"Bar count mismatch: {comparison['bar_count_mismatch']}.")
             if comparison and comparison.get("piece_agreement", 1) < VERDICT_RULE["minimum_agreement"]:
                 details.append(f"Piece agreement: {comparison['piece_agreement']:.3f}.")
-            for flag in flags:
+            for flag in pitch_flags:
                 location = f"m{flag.get('measure') or '?'} s{flag.get('staff') or '?'}"
-                suffix = " (raw only)" if flag.get("raw_only") else ""
-                if "page" in flag:
-                    suffix += f" (page {flag['page']} m{flag['page_measure']})"
+                suffix = f" (page {flag['page']} m{flag['page_measure']})" if "page" in flag else ""
                 details.append(f"- {location} {flag['check']}: {cell(flag['detail'])}{suffix}")
-    lines.extend(["", f"verified {counts['verified']} / suspect {counts['suspect']} / "
-                  f"failed {counts['failed']} of {sum(counts.values())}"])
+    total = sum(pitch_counts.values())
+    lines.extend(["", f"Pitch: verified {pitch_counts['verified']} / suspect {pitch_counts['suspect']} / "
+                  f"failed {pitch_counts['failed']} of {total}. Rhythm: ok {rhythm_counts['ok']} / "
+                  f"voice timing {rhythm_counts['voice timing']} / misread {rhythm_counts['misread']}."])
     return "\n".join(lines + details) + "\n"
 
 
