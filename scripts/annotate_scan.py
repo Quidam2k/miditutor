@@ -46,6 +46,7 @@ CHORD_KINDS = {
 
 PITCH_RE = re.compile(r"([A-G])(##|bb|#|b)?(-?\d+)")
 CHORD_RE = re.compile(r"([A-G])([#b]?)([^/]*)(?:/([A-G])([#b]?))?")
+ALTERED_RE = re.compile(r"([b#])(5|9|11|13)$")
 ALTERS = {"": 0, "#": 1, "##": 2, "b": -1, "bb": -2}
 DOCTYPE_RE = re.compile(
     r"""<!DOCTYPE\b(?:[^\[>"']|"[^"]*"|'[^']*'|\[[\s\S]*?\])*>"""
@@ -410,9 +411,15 @@ def _make_harmony(symbol, context):
     root_step, root_accidental, suffix, bass_step, bass_accidental = (
         match.groups()
     )
-    kind = CHORD_KINDS.get(suffix)
-    if kind is None:
-        return None
+    # "7b9" = a dominant seventh plus an altered tone, written as <degree>.
+    base, alterations = suffix, []
+    while base not in CHORD_KINDS:
+        tail = ALTERED_RE.search(base)
+        if tail is None or tail.start() == 0:
+            return None
+        alterations.insert(0, tail.groups())
+        base = base[:tail.start()]
+    kind = CHORD_KINDS[base]
 
     harmony = ET.Element(_tag(context, "harmony"), {"print-frame": "no"})
     root = _subelement(harmony, "root")
@@ -426,6 +433,12 @@ def _make_harmony(symbol, context):
         _subelement(bass, "bass-step", bass_step)
         if bass_accidental:
             _subelement(bass, "bass-alter", ALTERS[bass_accidental])
+    for accidental, value in alterations:
+        degree = _subelement(harmony, "degree")
+        _subelement(degree, "degree-value", value)
+        _subelement(degree, "degree-alter", ALTERS[accidental])
+        # A raised or lowered fifth replaces the fifth; the others are added.
+        _subelement(degree, "degree-type", "alter" if value == "5" else "add")
     _subelement(harmony, "staff", "1")
     return harmony
 

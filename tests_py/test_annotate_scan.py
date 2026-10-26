@@ -439,3 +439,23 @@ def test_decimal_beat_snaps_to_its_triplet_fraction_only_when_close(tmp_path):
     report = annotate(score, [reads], out)
     assert report["placed"]["chords"] == 2
     assert [u["item"]["symbol"] for u in report["unmatched"]] == ["A"]
+
+
+def test_altered_dominant_writes_degree(tmp_path):
+    score, reads, out = write_inputs(
+        tmp_path, {"chords": [chord("D7b9"), chord("C7#5b9", beat=1)]}
+    )
+    report = annotate(score, [reads], out)
+    assert report["placed"]["chords"] == 2
+    d7b9 = [h for h in ET.parse(out).iter("harmony")
+            if h.findtext("root/root-step") == "D"][0]
+    assert d7b9.findtext("kind") == "dominant"
+    assert d7b9.find("kind").get("text") == "7b9"
+    assert d7b9.findtext("degree/degree-value") == "9"
+    assert d7b9.findtext("degree/degree-alter") == "-1"
+    assert d7b9.findtext("degree/degree-type") == "add"
+    c = [h for h in ET.parse(out).iter("harmony")
+         if h.findtext("root/root-step") == "C"][0]
+    assert [(d.findtext("degree-value"), d.findtext("degree-type"))
+            for d in c.findall("degree")] == [("5", "alter"), ("9", "add")]
+    assert [child.tag for child in d7b9][-2:] == ["degree", "staff"]
