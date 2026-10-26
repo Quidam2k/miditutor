@@ -534,9 +534,18 @@ def issue_note(lint_piece, pitch_bars) -> str | None:
 
 def piece_trust(lint_piece, pitch_bars, repair, compare_piece) -> dict:
     """Determine trust with open issues taking priority."""
-    note = issue_note(lint_piece, pitch_bars)
+    repaired = isinstance(repair, dict)
+    # The report's pitch bars predate the repairs; a repaired piece's open
+    # issues come from its re-lint and its remaining_note instead.
+    note = issue_note(lint_piece, type(pitch_bars)() if repaired else pitch_bars)
     if note is not None:
         return {"status": "issues", "note": note, "source": TRUST_SOURCE}
+    if repaired and str(repair.get("remaining_note") or "").strip():
+        return {
+            "status": "issues",
+            "note": "a few bars still differ from the page",
+            "source": TRUST_SOURCE,
+        }
 
     if (
         isinstance(repair, dict)

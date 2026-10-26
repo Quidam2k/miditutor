@@ -133,9 +133,15 @@ def test_piece_trust_issues_beat_fully_checked_repair_and_comparison():
     repair = {"fully_checked": True, "remaining_note": ""}
     comparison = {"piece_agreement": 1.0}
 
-    assert oa.piece_trust({"flags": []}, {27}, repair, comparison) == {
+    assert oa.piece_trust({"flags": []}, {27}, None, comparison) == {
         "status": "issues",
         "note": "notes misread in bars 27",
+        "source": "omr_audit",
+    }
+    # The report's pitch bars predate a repair, so they no longer count.
+    assert oa.piece_trust({"flags": []}, {27}, repair, comparison) == {
+        "status": "checked",
+        "note": "checked against the page",
         "source": "omr_audit",
     }
     assert oa.piece_trust(
@@ -162,8 +168,18 @@ def test_piece_trust_repair_requires_fully_checked_and_no_remaining_note():
         "source": "omr_audit",
     }
 
-    for repair in (
+    assert oa.piece_trust(
+        {"flags": []},
+        set(),
         {"fully_checked": True, "remaining_note": "Check the final page"},
+        None,
+    ) == {
+        "status": "issues",
+        "note": "a few bars still differ from the page",
+        "source": "omr_audit",
+    }
+
+    for repair in (
         {"fully_checked": False, "remaining_note": ""},
         {"remaining_note": ""},
     ):
