@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   device: (d: unknown) => ipcRenderer.send('tutor:device', d),
   // Native file picker for a MusicXML score; resolves null when cancelled.
   openPiece: () => ipcRenderer.invoke('piece:open'),
-  // Every score in ~/Documents/MidiTutor Pieces: [{ file, title, musicxml }].
+  // Every score in ~/MidiTutor Pieces: [{ file, title, musicxml }].
   listPieces: () => ipcRenderer.invoke('pieces:list'),
   onCommand: (cb: Listener) => {
     const handler = (_e: IpcRendererEvent, cmd: unknown) => cb(cmd);

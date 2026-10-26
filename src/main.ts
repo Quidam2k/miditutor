@@ -78,25 +78,34 @@ const readScoreFile = async (filePath: string): Promise<string> => {
   return text;
 };
 
-// His pieces live as files in ~/Documents/MidiTutor Pieces (#9477): the Score tab
-// lists every score there, Open starts there, and a pushed piece is saved there
-// so it survives a restart. MIDITUTOR_PIECES_DIR points tests at a scratch folder.
+// His pieces live as files in ~/MidiTutor Pieces (#9477): the Score tab lists
+// every score there, Open starts there, and a pushed piece is saved there so it
+// survives a restart. Not ~/Documents: macOS privacy-gates that folder for an
+// unsigned app, and the listing came back empty on Pinocchio.
+// MIDITUTOR_PIECES_DIR points tests at a scratch folder.
 const piecesDir = () =>
-  process.env.MIDITUTOR_PIECES_DIR || path.join(app.getPath('documents'), 'MidiTutor Pieces');
+  process.env.MIDITUTOR_PIECES_DIR || path.join(app.getPath('home'), 'MidiTutor Pieces');
 
 const listPieces = async () => {
   const dir = piecesDir();
-  await fs.mkdir(dir, { recursive: true });
-  const names = (await fs.readdir(dir)).filter(isPieceFileName).sort();
   const pieces = [];
-  for (const name of names) {
-    try {
-      const musicxml = await readScoreFile(path.join(dir, name));
-      pieces.push({ file: name, title: scoreTitle(musicxml) ?? titleFromPath(name), musicxml });
-    } catch (err) {
-      console.warn(`[pieces] skipped ${name}:`, (err as Error).message);
+  const skipped: string[] = [];
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const names = (await fs.readdir(dir)).filter(isPieceFileName).sort();
+    for (const name of names) {
+      try {
+        const musicxml = await readScoreFile(path.join(dir, name));
+        pieces.push({ file: name, title: scoreTitle(musicxml) ?? titleFromPath(name), musicxml });
+      } catch (err) {
+        skipped.push(`${name}: ${(err as Error).message}`);
+      }
     }
+  } catch (err) {
+    tutorApi?.onEvent({ kind: 'pieces', timestamp: Date.now(), dir, error: (err as Error).message });
+    throw err;
   }
+  tutorApi?.onEvent({ kind: 'pieces', timestamp: Date.now(), dir, count: pieces.length, skipped });
   return pieces;
 };
 
