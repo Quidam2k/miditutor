@@ -122,6 +122,9 @@ def recent(seconds: float | None = None, limit: int = 50) -> dict:
     feed_kinds = {"pedal", "follow", "loop", "lap", "piece", "screenshot"}
     notes = [e for e in events if "note" in e and e.get("kind") not in feed_kinds]
     feed = [{k: v for k, v in e.items() if k != "seq"} for e in events if e.get("kind") in feed_kinds]
+    # Expression telemetry (#9569): one hedged line per marked passage he finished,
+    # e.g. "bars 5-8: marked f; played about mp (...)". Never a wrong-note verdict.
+    expression = [e["text"] for e in events if e.get("kind") == "expression" and e.get("text")]
     return {
         "notes": [
             {
@@ -132,6 +135,7 @@ def recent(seconds: float | None = None, limit: int = 50) -> dict:
             for event in notes
         ],
         "feed": feed,
+        "expression": expression,
         "gestures": compact_gestures,
     }
 

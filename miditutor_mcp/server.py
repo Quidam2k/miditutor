@@ -139,15 +139,20 @@ def piano_drill_status() -> dict:
 def tutor_status() -> dict:
     """Is the MidiTutor app up, is the keyboard connected, and what is on his
     screen right now (piece, bar, what he must play next, wrong-note count,
-    current chord task)."""
+    current chord task). screen.expressionMarks lists the dynamics/tempo marks
+    the piece carries; screen.expression is this pass's expression telemetry."""
     return _tutor(tutor_client.state)
 
 
 @mcp.tool()
 def tutor_recent(seconds: float = 30, limit: int = 50) -> dict:
     """What Todd played in the last `seconds`: raw notes (note-on/off with
-    names like F#4) and gestures (notes struck together, with the chord name
-    when they form one, e.g. "E minor"). source 'inject' = a test, not him."""
+    names like F#4), gestures (notes struck together, with the chord name
+    when they form one, e.g. "E minor"), and `expression`: how he played the
+    marked dynamics / cresc. / rit. / fermatas, one line per passage (telemetry
+    for coaching, never a wrong note). A line from a page read or a scan says so
+    with its confidence: treat it as "the page seems to say", not a fact.
+    source 'inject' = a test, not him."""
     return _tutor(tutor_client.recent, seconds=seconds, limit=limit)
 
 

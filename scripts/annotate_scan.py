@@ -1,4 +1,4 @@
-"""Add fingering and chord symbols, read from page images, to an OMR MusicXML score (#9506).
+"""Add fingering, chord symbols and expression marks, read from page images, to an OMR MusicXML score (#9506).
 
 Usage: annotate_scan.py SCORE READS.json [...] --out OUT [--report R.json]
        annotate_scan.py --listing SCORE [--first M] [--last N]
@@ -448,12 +448,18 @@ def _make_harmony(symbol, context):
     return harmony
 
 
-def _signature(element):
+def _signature(element, ignore_id=False):
     return (
         element.tag,
-        tuple(sorted(element.attrib.items())),
+        tuple(
+            sorted(
+                (key, value)
+                for key, value in element.attrib.items()
+                if not (ignore_id and key == "id")
+            )
+        ),
         (element.text or "").strip(),
-        tuple(_signature(child) for child in element),
+        tuple(_signature(child, ignore_id) for child in element),
     )
 
 
@@ -462,11 +468,91 @@ def _add_harmony(measure, note, harmony):
     index = children.index(note)
     signature = _signature(harmony)
     previous = index - 1
-    while previous >= 0 and _name(children[previous]) == "harmony":
+    while previous >= 0 and _name(children[previous]) in ("harmony", "direction"):
         if _signature(children[previous]) == signature:
             return False
         previous -= 1
     measure.insert(index, copy.deepcopy(harmony))
+    return True
+
+
+def _onset_note(measure, beat, staff=None):
+    if beat is None:
+        target = Fraction(0)
+    else:
+        try:
+            beat = _beat(beat)
+            if beat < 1 or measure["beat_type"] is None:
+                return None
+            target = (beat - 1) * 4 / measure["beat_type"]
+        except (ValueError, TypeError, ZeroDivisionError):
+            return None
+    onsets = [
+        record
+        for record in measure["notes"]
+        if record["staff"] is not None and record["onset"] == target
+    ]
+    return (
+        min(onsets, key=lambda r: (r["staff"] != staff, r["staff"]))["head"]
+        if onsets
+        else None
+    )
+
+
+def _expression_end(score, item, staff):
+    number = item.get("end_measure")
+    if type(number) is not int:
+        return None
+    measures = score.by_number.get(str(number), [])
+    if len(measures) != 1:
+        return None
+    measure = measures[0]
+    if "end_beat" in item:
+        if item["end_beat"] is None:
+            return None
+        note = _onset_note(measure, item["end_beat"], staff)
+    else:
+        index = score.measures.index(measure) + 1
+        if index == len(score.measures):
+            return measure["element"], None
+        measure = score.measures[index]
+        note = _onset_note(measure, None)
+    return (measure["element"], note) if note is not None else None
+
+
+def _make_direction(context, staff, kind, value, dashes=False):
+    placement = "above" if kind in ("words", "dashes") else "below"
+    direction = ET.Element(_tag(context, "direction"), {"placement": placement})
+    direction_type = _subelement(direction, "direction-type")
+    if kind == "dynamic":
+        dynamics = _subelement(direction_type, "dynamics")
+        _subelement(dynamics, value)
+    elif kind == "words":
+        _subelement(direction_type, "words", value)
+    else:
+        _subelement(direction_type, kind, type=value, number="1")
+    if dashes:
+        direction_type = _subelement(direction, "direction-type")
+        _subelement(direction_type, "dashes", type="start", number="1")
+    _subelement(direction, "staff", staff)
+    return direction
+
+
+def _add_direction(measure, note, direction):
+    children = list(measure)
+    if note is None:
+        index = len(children)
+        while index > 0 and _name(children[index - 1]) == "barline":
+            index -= 1
+    else:
+        index = children.index(note)
+    signature = _signature(direction, ignore_id=True)
+    previous = index - 1
+    while previous >= 0 and _name(children[previous]) in ("harmony", "direction"):
+        if _signature(children[previous], ignore_id=True) == signature:
+            return False
+        previous -= 1
+    measure.insert(index, copy.deepcopy(direction))
     return True
 
 
@@ -476,10 +562,11 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
     score = Score(score_path)
     report = {
         "score": str(score_path),
-        "placed": {"fingerings": 0, "chords": 0},
+        "placed": {"fingerings": 0, "chords": 0, "expressions": 0},
         "unmatched": [],
     }
-    totals = {"fingerings": 0, "chords": 0}
+    totals = {"fingerings": 0, "chords": 0, "expressions": 0}
+    direction_number = 1
 
     def reject(page, item, kind, reason):
         report["unmatched"].append(
@@ -492,10 +579,22 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
             }
         )
 
+    def place_direction(measure, note, direction, item):
+        nonlocal direction_number
+        confidence = round(_fraction(item["confidence"]) * 100)
+        direction.set("id", "pageread-{}-{}".format(confidence, direction_number))
+        if not _add_direction(measure, note, direction):
+            return False
+        direction_number += 1
+        return True
+
     for reads_path in reads_paths:
         reads = json.loads(Path(reads_path).read_text(encoding="utf-8-sig"))
         page = reads.get("page")
-        for plural, kind in (("fingerings", "fingering"), ("chords", "chord")):
+        for plural, kind in (
+            ("fingerings", "fingering"), ("chords", "chord"),
+            ("expressions", "expression"),
+        ):
             for item in reads.get(plural, []):
                 totals[plural] += 1
                 if not _confident(item, minimum):
@@ -535,6 +634,72 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
                         reject(page, item, kind, "no-note")
                     elif _add_fingering(matches[0], digit):
                         report["placed"][plural] += 1
+                elif kind == "expression":
+                    expression_kind = item.get("kind")
+                    value = item.get("value")
+                    if expression_kind == "dynamic":
+                        if value not in (
+                            "ppp", "pp", "p", "mp", "mf", "f", "ff", "fff",
+                            "sf", "sfz", "sffz", "fz", "rfz", "fp", "sfp",
+                        ):
+                            reject(page, item, kind, "unknown-dynamic")
+                            continue
+                    elif expression_kind == "wedge":
+                        wedges = {
+                            "cresc": "crescendo", "crescendo": "crescendo",
+                            "dim": "diminuendo", "diminuendo": "diminuendo",
+                            "decresc": "diminuendo",
+                        }
+                        value = (
+                            wedges.get(value) if isinstance(value, str) else None
+                        )
+                        if value is None:
+                            reject(page, item, kind, "unknown-wedge")
+                            continue
+                    elif expression_kind == "words":
+                        if (
+                            not isinstance(value, str)
+                            or not value.strip()
+                            or len(value) > 40
+                        ):
+                            reject(page, item, kind, "unknown-words")
+                            continue
+                    else:
+                        reject(page, item, kind, "unknown-kind")
+                        continue
+
+                    staff = item.get("staff", 1)
+                    note = (
+                        _onset_note(measures[0], item.get("beat"), staff)
+                        if len(measures) == 1 and type(staff) is int and staff >= 1
+                        and item.get("beat") is not None
+                        else None
+                    )
+                    if note is None:
+                        reject(page, item, kind, "no-onset")
+                        continue
+                    spanning = expression_kind == "wedge" or (
+                        expression_kind == "words" and "end_measure" in item
+                    )
+                    direction = _make_direction(
+                        measures[0]["element"], staff, expression_kind, value,
+                        dashes=spanning and expression_kind == "words",
+                    )
+                    if place_direction(
+                        measures[0]["element"], note, direction, item
+                    ):
+                        report["placed"][plural] += 1
+                    if spanning:
+                        end = _expression_end(score, item, staff)
+                        if end is None:
+                            reject(page, item, kind, "no-end")
+                            continue
+                        stop = _make_direction(
+                            end[0], staff,
+                            "wedge" if expression_kind == "wedge" else "dashes",
+                            "stop",
+                        )
+                        place_direction(*end, stop, item)
                 else:
                     harmony = _make_harmony(
                         item.get("symbol"), measures[0]["element"]
@@ -584,12 +749,15 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
             encoding="utf-8",
         )
     print(
-        "{}: fingerings placed {}/{}, chords placed {}/{}, unmatched {}".format(
+        ("{}: fingerings placed {}/{}, chords placed {}/{}, "
+         "expressions placed {}/{}, unmatched {}").format(
             output_path,
             report["placed"]["fingerings"],
             totals["fingerings"],
             report["placed"]["chords"],
             totals["chords"],
+            report["placed"]["expressions"],
+            totals["expressions"],
             len(report["unmatched"]),
         )
     )

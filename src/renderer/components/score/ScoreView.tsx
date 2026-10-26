@@ -6,8 +6,11 @@ import sampleXml from '../../assets/sample-score.musicxml?raw';
 import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
+// eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
+import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep } from '../../engine/ScoreFollower';
+import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { useTutorStore } from '../../store/useTutorStore';
 import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
 import { TaskPanel } from '../tutor/TaskPanel';
@@ -42,6 +45,7 @@ const PIECES: Piece[] = [
   { id: 'minuet', label: 'Minuet in G (simplified) — Petzold', xml: minuetXml, targetBpm: 100 },
   { id: 'a-minor', label: 'A minor scale (natural, hands together)', xml: aMinorXml },
   { id: 'sample', label: 'Sample: C scale + Ode to Joy', xml: sampleXml },
+  { id: 'expression', label: 'Expression test (p, f, cresc., rit.)', xml: expressionXml },
 ];
 
 // Minimal structural view of the OSMD internals we touch; OSMD's own types are
@@ -242,6 +246,14 @@ export function ScoreView() {
   // whether they now cover it (then the symbol is green).
   const chordLitRef = useRef(noChord());
   const lapStartRef = useRef<number | null>(null);
+  // Expression telemetry (#9569): how he plays the marked dynamics and tempo
+  // changes. Report-only: it never gates the follower or turns anything red.
+  const exprRef = useRef<ExpressionTracker | null>(null);
+  // Set at a loop wrap: the next lap starts a fresh pass on its first note, so a
+  // fermata on the lap's last note can still be timed by its release.
+  const exprNewPassRef = useRef(false);
+  const [exprMarks, setExprMarks] = useState<string[]>([]);
+  const [exprFindings, setExprFindings] = useState<string[]>([]);
   const cursorIndexRef = useRef(0);
   const flashTimerRef = useRef<number | undefined>(undefined);
   const layerRef = useRef<HTMLDivElement>(null);
@@ -335,8 +347,10 @@ export function ScoreView() {
       playedMarks: marks.length,
       wrongMarks: marks.filter((m) => m.wrong).length,
       redAccidentals: marks.flatMap((m) => (m.accidental ? [m.accidental] : [])),
+      expressionMarks: exprMarks.slice(0, 40),
+      expression: exprFindings,
     });
-  }, [piece.label, pieceLabels, status, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking]);
+  }, [piece.label, pieceLabels, status, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -439,6 +453,18 @@ export function ScoreView() {
     }
   }, []);
 
+  const reportExpression = useCallback((found: ExpressionFinding[]) => {
+    if (!found.length) return;
+    for (const x of found) {
+      reportEvent('expression', {
+        type: x.kind, expected: x.expected, played: x.played, ok: x.ok, text: x.text,
+        bar: x.mark.bar, endBar: x.mark.endBar, source: x.mark.source, confidence: x.mark.confidence,
+        detail: x.detail,
+      });
+    }
+    setExprFindings((prev) => [...prev, ...found.map((x) => x.text)].slice(-30));
+  }, []);
+
   const syncUi = useCallback(() => {
     const f = followerRef.current;
     if (!f) return;
@@ -465,6 +491,9 @@ export function ScoreView() {
     setWrongCount(0);
     setLap(f.lap);
     lapStartRef.current = null;
+    exprRef.current?.reset();
+    exprNewPassRef.current = false;
+    setExprFindings([]);
     syncUi();
   }, [moveCursorTo, syncUi, trackChord]);
 
@@ -607,12 +636,18 @@ export function ScoreView() {
         stepChordsRef.current = chords;
         chordLitRef.current = noChord();
         followerRef.current = new ScoreFollower(steps);
+        const exprMarksParsed = parseExpression(piece.xml);
+        exprRef.current = new ExpressionTracker(exprMarksParsed, steps);
+        setExprMarks(exprMarksParsed.map(describeMark));
         setLoopBars(null);
         setPicking('off');
         setPickStart(null);
         restart();
         setStatus('ready');
-        reportEvent('piece', { piece: piece.label, steps: steps.length, bars: steps[steps.length - 1]?.measure ?? 0 });
+        reportEvent('piece', {
+          piece: piece.label, steps: steps.length, bars: steps[steps.length - 1]?.measure ?? 0,
+          expressionMarks: exprMarksParsed.length,
+        });
       })
       .catch((err: unknown) => {
         if (disposed) return;
@@ -632,6 +667,7 @@ export function ScoreView() {
       container.innerHTML = '';
       osmdRef.current = null;
       followerRef.current = null;
+      exprRef.current = null;
     };
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
   }, [piece.id, piece.xml, restart]);
@@ -675,11 +711,23 @@ export function ScoreView() {
             : undefined,
         step: idx,
         bar: step?.measure,
+        velocity: ev.velocity,
         expected: expectedNames,
         pedal,
         sounding: [...sounding],
         lap: f.lap,
       });
+
+      const expr = exprRef.current;
+      if (expr && result.kind !== 'wrong' && result.kind !== 'ignored') {
+        if (exprNewPassRef.current) {
+          expr.reset();
+          exprNewPassRef.current = false;
+        }
+        reportExpression(expr.hit({ step: idx, note: ev.note, velocity: ev.velocity, timeMs: ev.timestamp }));
+        if (result.kind === 'complete' || result.kind === 'loop') reportExpression(expr.finish());
+        if (result.kind === 'loop') exprNewPassRef.current = true;
+      }
 
       if (lapStartRef.current === null && result.kind !== 'wrong' && result.kind !== 'ignored') {
         lapStartRef.current = ev.timestamp;
@@ -725,7 +773,18 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, status, moveCursorTo, syncUi, placePlayed, noteName, trackChord]);
+  }, [following, status, moveCursorTo, syncUi, placePlayed, noteName, trackChord, reportExpression]);
+
+  // Key releases, for the length of a fermata on the last note.
+  useEffect(() => {
+    if (!following) return;
+    return useMidiStore.subscribe((state, prev) => {
+      const latest = state.noteLog[0];
+      if (!latest || latest === prev.noteLog[0] || latest.kind !== 'noteoff') return;
+      const expr = exprRef.current;
+      if (expr && status === 'ready') reportExpression(expr.noteOff(latest.note, latest.timestamp));
+    });
+  }, [following, status, reportExpression]);
 
   // OSMD re-renders on resize, which moves every note; drop stale marks.
   useEffect(() => {
@@ -751,6 +810,8 @@ export function ScoreView() {
     if (!f) return;
     const target = Math.max(0, Math.min(f.steps.length - 1, cursorIndexRef.current + delta));
     f.seek(target);
+    // A jump starts a new pass: spans he skipped must not be judged.
+    exprRef.current?.reset();
     moveCursorTo(Math.min(f.index, f.steps.length - 1));
     setFeedback({ kind: 'idle' });
     syncUi();

@@ -131,12 +131,30 @@ def test_recent_filters_old_notes_and_gestures(app):
     assert tutor_client.recent(seconds=5) == {
         "notes": [{"name": "D#4", "kind": "on", "t": app["now_ms"]}],
         "feed": [],
+        "expression": [],
         "gestures": [{"id": 2, "names": ["F4", "A4", "C5"], "chord": "F major"}],
     }
     assert [entry["path"] for entry in app["seen"]] == [
         "/events?since=0&limit=2000",
         "/gestures?since=0&limit=500",
     ]
+
+
+def test_recent_lists_expression_lines(monkeypatch):
+    now_ms = int(time.time() * 1000)
+    line = "bars 5-8: marked f; played about mp (velocity 58 vs his usual 66) - softer than asked"
+    events = [
+        {"seq": 1, "kind": "noteon", "note": 72, "velocity": 58, "source": "midi", "timestamp": now_ms},
+        {"seq": 2, "kind": "expression", "text": line, "ok": False, "source": "score", "timestamp": now_ms},
+        {"seq": 3, "kind": "expression", "text": "", "timestamp": now_ms},
+    ]
+    replies = {"/events": {"events": events}, "/gestures": {"gestures": []}}
+    monkeypatch.setattr(tutor_client, "request", lambda method, path, *a, **k: replies[path.split("?")[0]])
+    result = tutor_client.recent(seconds=5)
+    assert result["expression"] == [line]
+    # Telemetry only: it is not a note and not in the follower feed.
+    assert [n["name"] for n in result["notes"]] == ["C5"]
+    assert result["feed"] == []
 
 
 def test_wait_for_play_timeout(app):

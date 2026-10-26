@@ -102,6 +102,18 @@ def chord(symbol="G/B", **changes):
     return item
 
 
+def expression(kind="dynamic", value="p", **changes):
+    item = {
+        "measure": 12,
+        "beat": 1,
+        "kind": kind,
+        "value": value,
+        "confidence": 0.9,
+    }
+    item.update(changes)
+    return item
+
+
 def finger_text(note):
     return note.findtext("notations/technical/fingering")
 
@@ -121,7 +133,7 @@ def test_fingerings_select_staff_chord_nth_and_skip_ties_and_grace(tmp_path):
     report = annotate(score, [reads], out)
     notes = ET.parse(out).findall("./part/measure/note")
 
-    assert report["placed"] == {"fingerings": 3, "chords": 0}
+    assert report["placed"] == {"fingerings": 3, "chords": 0, "expressions": 0}
     assert report["unmatched"] == []
     assert finger_text(notes[0]) is None
     assert finger_text(notes[1]) == "5"
@@ -153,7 +165,7 @@ def test_low_confidence_reports_and_preserves_score_tree(tmp_path, capsys):
     )
     assert report == {
         "score": str(score),
-        "placed": {"fingerings": 0, "chords": 0},
+        "placed": {"fingerings": 0, "chords": 0, "expressions": 0},
         "unmatched": [{
             "page": "page012.png",
             "measure": 12,
@@ -163,7 +175,8 @@ def test_low_confidence_reports_and_preserves_score_tree(tmp_path, capsys):
         }],
     }
     assert capsys.readouterr().out == (
-        f"{out}: fingerings placed 0/1, chords placed 0/0, unmatched 1\n"
+        f"{out}: fingerings placed 0/1, chords placed 0/0, "
+        "expressions placed 0/0, unmatched 1\n"
     )
 
 
@@ -278,8 +291,8 @@ def test_idempotent_and_multiple_reads_files(tmp_path):
     second_out = tmp_path / "second.musicxml"
     second = annotate(out, [reads, extra], second_out)
 
-    assert first["placed"] == {"fingerings": 2, "chords": 3}
-    assert second["placed"] == {"fingerings": 0, "chords": 0}
+    assert first["placed"] == {"fingerings": 2, "chords": 3, "expressions": 0}
+    assert second["placed"] == {"fingerings": 0, "chords": 0, "expressions": 0}
     assert second["unmatched"] == []
     assert second_out.read_bytes() == out.read_bytes()
     root = ET.parse(second_out).getroot()
@@ -344,7 +357,7 @@ def test_inherited_meter_divisions_forward_and_fractional_beat(tmp_path):
     notes = measure.findall("note")
     harmonies = measure.findall("harmony")
 
-    assert report["placed"] == {"fingerings": 2, "chords": 2}
+    assert report["placed"] == {"fingerings": 2, "chords": 2, "expressions": 0}
     assert report["unmatched"][0]["reason"] == "no-onset"
     assert children[children.index(notes[1]) - 1] is harmonies[0]
     assert children[children.index(notes[2]) - 1] is harmonies[1]
@@ -366,7 +379,10 @@ def test_namespace_and_only_first_part_are_annotated(tmp_path):
     </score-partwise>"""
     score, reads, out = write_inputs(
         tmp_path,
-        {"fingerings": [fingering()], "chords": [chord(beat=1)]},
+        {
+            "fingerings": [fingering()], "chords": [chord(beat=1)],
+            "expressions": [expression()],
+        },
         xml,
     )
     annotate(score, [reads], out)
@@ -377,6 +393,9 @@ def test_namespace_and_only_first_part_are_annotated(tmp_path):
     assert len(parts[0].findall(".//m:harmony", ns)) == 1
     assert parts[1].findall(".//m:fingering", ns) == []
     assert parts[1].findall(".//m:harmony", ns) == []
+    assert len(parts[0].findall(".//m:direction", ns)) == 1
+    assert parts[0].find(".//m:dynamics/m:p", ns) is not None
+    assert parts[1].findall(".//m:direction", ns) == []
 
 
 @pytest.mark.parametrize("value", [-0.1, 1.1, None, "NaN"])
@@ -411,12 +430,18 @@ def test_harmony_goes_before_chord_head_not_between_chord_mates(tmp_path):
         <duration>4</duration><voice>1</voice><staff>1</staff></note>
     </measure></part></score-partwise>"""
     score, reads, out = write_inputs(
-        tmp_path, {"chords": [chord("C", measure=3, beat=1)]}, xml
+        tmp_path, {
+            "chords": [chord("C", measure=3, beat=1)],
+            "expressions": [expression(measure=3, staff=1)],
+        }, xml
     )
     report = annotate(score, [reads], out)
     children = list(ET.parse(out).find("./part/measure"))
     assert report["placed"]["chords"] == 1
-    assert [child.tag for child in children[1:]] == ["harmony", "note", "note"]
+    assert report["placed"]["expressions"] == 1
+    assert [child.tag for child in children[1:]] == [
+        "harmony", "direction", "note", "note",
+    ]
 
 
 def test_decimal_beat_snaps_to_its_triplet_fraction_only_when_close(tmp_path):
@@ -433,12 +458,16 @@ def test_decimal_beat_snaps_to_its_triplet_fraction_only_when_close(tmp_path):
         tmp_path,
         {"chords": [chord("F", measure=2, beat=2.66667),
                     chord("G", measure=2, beat="8/3"),
-                    chord("A", measure=2, beat=2.67)]},
+                    chord("A", measure=2, beat=2.67)],
+         "expressions": [expression(measure=2, beat=2.66667),
+                         expression(measure=2, beat=2.67)]},
         xml,
     )
     report = annotate(score, [reads], out)
     assert report["placed"]["chords"] == 2
-    assert [u["item"]["symbol"] for u in report["unmatched"]] == ["A"]
+    assert report["placed"]["expressions"] == 1
+    assert [u["item"].get("symbol") for u in report["unmatched"]] == ["A", None]
+    assert [u["reason"] for u in report["unmatched"]] == ["no-onset"] * 2
 
 
 def test_altered_dominant_writes_degree(tmp_path):
@@ -498,3 +527,233 @@ def test_seventh_sus_and_parenthesized_sus2(tmp_path):
     assert eb.findtext("kind") == "suspended-second"
     assert eb.findtext("root/root-alter") == "-1"
     assert eb.find("degree") is None
+
+
+EXPRESSION_SCORE = SCORE.replace(
+    "  </part>",
+    """    <measure number="15">
+      <note><rest/><duration>4</duration><voice>2</voice><staff>2</staff></note>
+      <note><rest/><duration>4</duration><voice>2</voice><staff>2</staff></note>
+      <backup><duration>8</duration></backup>
+      <note><rest/><duration>4</duration><voice>1</voice><staff>1</staff></note>
+      <note><rest/><duration>4</duration><voice>1</voice><staff>1</staff></note>
+    </measure>
+    <measure number="7">
+      <note><rest/><duration>8</duration><staff>1</staff></note>
+      <barline location="right"><bar-style>light-heavy</bar-style></barline>
+    </measure>
+  </part>""",
+)
+
+
+@pytest.mark.parametrize("staff, note_index", [(None, 0), (1, 0), (2, 6), (3, 0)])
+def test_dynamic_id_staff_and_exact_anchor(tmp_path, capsys, staff, note_index):
+    item = expression(printed_bar=10)
+    if staff is not None:
+        item["staff"] = staff
+    score, reads, out = write_inputs(
+        tmp_path, {"expressions": [item]}, EXPRESSION_SCORE
+    )
+    report = annotate(score, [reads], out)
+    measure = ET.parse(out).find("./part/measure")
+    direction = measure.find("direction")
+    children = list(measure)
+
+    assert report["placed"]["expressions"] == 1
+    assert report["unmatched"] == []
+    assert direction.attrib == {"placement": "below", "id": "pageread-90-1"}
+    assert direction.find("direction-type/dynamics/p") is not None
+    assert direction.findtext("staff") == str(staff or 1)
+    assert [child.tag for child in direction] == ["direction-type", "staff"]
+    assert children[children.index(measure.findall("note")[note_index]) - 1] is direction
+    assert capsys.readouterr().out == (
+        f"{out}: fingerings placed 0/0, chords placed 0/0, "
+        "expressions placed 1/1, unmatched 0\n"
+    )
+
+
+@pytest.mark.parametrize("changes, reason", [
+    ({"confidence": 0.79}, "low-confidence"),
+    ({"value": "ffff"}, "unknown-dynamic"),
+    ({"kind": "wedge", "value": "grow"}, "unknown-wedge"),
+    ({"kind": "words", "value": ""}, "unknown-words"),
+    ({"kind": "words", "value": " "}, "unknown-words"),
+    ({"kind": "words", "value": "r" * 41}, "unknown-words"),
+    ({"kind": "words", "value": 3}, "unknown-words"),
+    ({"kind": "other"}, "unknown-kind"),
+    ({"measure": 99}, "no-measure"),
+    ({"beat": 1.5}, "no-onset"),
+    ({"beat": None}, "no-onset"),
+    ({"staff": 0}, "no-onset"),
+    ({"staff": True}, "no-onset"),
+    ({"staff": "1"}, "no-onset"),
+])
+def test_invalid_expressions_are_reported(tmp_path, changes, reason):
+    item = expression(**changes)
+    score, reads, out = write_inputs(
+        tmp_path, {"page": "p.png", "expressions": [item]}
+    )
+    report = annotate(score, [reads], out)
+
+    assert report["placed"]["expressions"] == 0
+    assert report["unmatched"] == [{
+        "page": "p.png",
+        "measure": item["measure"],
+        "kind": "expression",
+        "item": item,
+        "reason": reason,
+    }]
+    assert ET.parse(out).findall(".//direction") == []
+
+
+@pytest.mark.parametrize("value, wedge_type", [
+    ("cresc", "crescendo"), ("crescendo", "crescendo"),
+    ("dim", "diminuendo"), ("diminuendo", "diminuendo"),
+    ("decresc", "diminuendo"),
+])
+def test_wedge_end_beat_uses_requested_staff(tmp_path, value, wedge_type):
+    score, reads, out = write_inputs(
+        tmp_path,
+        {"expressions": [
+            expression("wedge", value, staff=2, end_measure=15, end_beat=3),
+        ]},
+        EXPRESSION_SCORE,
+    )
+    report = annotate(score, [reads], out)
+    measures = ET.parse(out).findall("./part/measure")
+    start = measures[0].find("direction")
+    stop = measures[1].find("direction")
+
+    assert report["placed"]["expressions"] == 1
+    assert report["unmatched"] == []
+    assert start.find("direction-type/wedge").attrib == {
+        "type": wedge_type, "number": "1",
+    }
+    assert stop.find("direction-type/wedge").attrib == {
+        "type": "stop", "number": "1",
+    }
+    assert start.attrib == {"placement": "below", "id": "pageread-90-1"}
+    assert stop.attrib == {"placement": "below", "id": "pageread-90-2"}
+    for measure, direction, index in (
+        (measures[0], start, 6), (measures[1], stop, 1),
+    ):
+        children = list(measure)
+        assert children[children.index(measure.findall("note")[index]) - 1] is direction
+        assert direction.findtext("staff") == "2"
+
+
+def test_wedge_without_end_beat_stops_in_next_document_measure(tmp_path):
+    score, reads, out = write_inputs(
+        tmp_path,
+        {"expressions": [
+            expression("wedge", "cresc", staff=2, end_measure=12),
+        ]},
+        EXPRESSION_SCORE,
+    )
+    report = annotate(score, [reads], out)
+    measures = ET.parse(out).findall("./part/measure")
+    stop = measures[1].find("direction")
+    children = list(measures[1])
+
+    assert report["placed"]["expressions"] == 1
+    assert report["unmatched"] == []
+    assert measures[1].get("number") == "15"
+    assert stop.find("direction-type/wedge").get("type") == "stop"
+    assert stop.findtext("staff") == "2"
+    assert children[children.index(measures[1].findall("note")[2]) - 1] is stop
+
+
+def test_words_with_dashes_and_expression_rerun(tmp_path):
+    score, reads, out = write_inputs(
+        tmp_path,
+        {
+            "chords": [chord(beat=1)],
+            "expressions": [
+                expression(),
+                expression("words", "rit.", end_measure=15),
+                expression("wedge", "dim", end_measure=15, end_beat=3),
+            ],
+        },
+        EXPRESSION_SCORE,
+    )
+    first = annotate(score, [reads], out)
+    second_out = tmp_path / "second.musicxml"
+    second = annotate(out, [reads], second_out)
+    measures = ET.parse(second_out).findall("./part/measure")
+    directions = measures[0].findall("direction")
+    words = directions[1]
+    stop = measures[2].find("direction")
+
+    assert first["placed"] == {"fingerings": 0, "chords": 1, "expressions": 3}
+    assert second["placed"] == {"fingerings": 0, "chords": 0, "expressions": 0}
+    assert first["unmatched"] == second["unmatched"] == []
+    assert second_out.read_bytes() == out.read_bytes()
+    assert [child.tag for child in list(measures[0])[1:6]] == [
+        "harmony", "direction", "direction", "direction", "note",
+    ]
+    assert words.attrib == {"placement": "above", "id": "pageread-90-2"}
+    assert words.findtext("direction-type/words") == "rit."
+    assert [child.tag for child in words] == [
+        "direction-type", "direction-type", "staff",
+    ]
+    assert words.findall("direction-type")[1].find("dashes").attrib == {
+        "type": "start", "number": "1",
+    }
+    assert stop.attrib == {"placement": "above", "id": "pageread-90-3"}
+    assert stop.find("direction-type/dashes").attrib == {
+        "type": "stop", "number": "1",
+    }
+    children = list(measures[2])
+    assert children[children.index(measures[2].find("note")) - 1] is stop
+    assert len(ET.parse(second_out).findall(".//direction")) == 5
+
+
+@pytest.mark.parametrize("kind, value", [("wedge", "cresc"), ("words", "rit.")])
+def test_span_at_score_end_precedes_trailing_barline(tmp_path, kind, value):
+    score, reads, out = write_inputs(
+        tmp_path,
+        {"expressions": [expression(kind, value, end_measure=7)]},
+        EXPRESSION_SCORE,
+    )
+    first = annotate(score, [reads], out)
+    second_out = tmp_path / "second.musicxml"
+    second = annotate(out, [reads], second_out)
+    measure = ET.parse(out).findall("./part/measure")[-1]
+
+    assert first["placed"]["expressions"] == 1
+    assert second["placed"]["expressions"] == 0
+    assert first["unmatched"] == second["unmatched"] == []
+    assert [child.tag for child in list(measure)[-2:]] == ["direction", "barline"]
+    stop_kind = "wedge" if kind == "wedge" else "dashes"
+    assert measure.find("direction/direction-type/" + stop_kind).get("type") == "stop"
+    assert second_out.read_bytes() == out.read_bytes()
+
+
+@pytest.mark.parametrize("changes", [
+    {}, {"end_measure": 99}, {"end_measure": "15"}, {"end_measure": True},
+    {"end_measure": 15, "end_beat": 2}, {"end_measure": 15, "end_beat": None},
+])
+def test_missing_wedge_end_keeps_start_and_reports(tmp_path, changes):
+    item = expression("wedge", "cresc", **changes)
+    score, reads, out = write_inputs(
+        tmp_path, {"expressions": [item]}, EXPRESSION_SCORE
+    )
+    report = annotate(score, [reads], out)
+    directions = ET.parse(out).findall(".//direction")
+
+    assert report["placed"]["expressions"] == 1
+    assert len(directions) == 1
+    assert directions[0].find("direction-type/wedge").get("type") == "crescendo"
+    assert report["unmatched"][0]["kind"] == "expression"
+    assert report["unmatched"][0]["reason"] == "no-end"
+
+
+def test_duplicate_measure_number_rejects_expression(tmp_path):
+    xml = EXPRESSION_SCORE.replace('number="15"', 'number="12"')
+    score, reads, out = write_inputs(
+        tmp_path, {"expressions": [expression()]}, xml
+    )
+    report = annotate(score, [reads], out)
+
+    assert report["placed"]["expressions"] == 0
+    assert report["unmatched"][0]["reason"] == "no-onset"
