@@ -13,6 +13,7 @@ interface TutorBridge {
   screen: (state: unknown) => void;
   device: (d: unknown) => void;
   openPiece: () => Promise<{ title: string; musicxml: string } | null>;
+  listPieces?: () => Promise<{ file: string; title: string; musicxml: string }[]>;
   onCommand: (cb: (cmd: RendererCommand) => void) => () => void;
 }
 

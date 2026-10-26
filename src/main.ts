@@ -4,7 +4,14 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
-import { MUSICXML_EXTENSIONS, isScoreXml, titleFromPath } from './shared/pieceFiles';
+import {
+  MUSICXML_EXTENSIONS,
+  isPieceFileName,
+  isScoreXml,
+  pieceFileName,
+  scoreTitle,
+  titleFromPath,
+} from './shared/pieceFiles';
 
 if (started) {
   app.quit();
@@ -71,10 +78,40 @@ const readScoreFile = async (filePath: string): Promise<string> => {
   return text;
 };
 
+// His pieces live as files in ~/Documents/MidiTutor Pieces (#9477): the Score tab
+// lists every score there, Open starts there, and a pushed piece is saved there
+// so it survives a restart. MIDITUTOR_PIECES_DIR points tests at a scratch folder.
+const piecesDir = () =>
+  process.env.MIDITUTOR_PIECES_DIR || path.join(app.getPath('documents'), 'MidiTutor Pieces');
+
+const listPieces = async () => {
+  const dir = piecesDir();
+  await fs.mkdir(dir, { recursive: true });
+  const names = (await fs.readdir(dir)).filter(isPieceFileName).sort();
+  const pieces = [];
+  for (const name of names) {
+    try {
+      const musicxml = await readScoreFile(path.join(dir, name));
+      pieces.push({ file: name, title: scoreTitle(musicxml) ?? titleFromPath(name), musicxml });
+    } catch (err) {
+      console.warn(`[pieces] skipped ${name}:`, (err as Error).message);
+    }
+  }
+  return pieces;
+};
+
+const savePiece = async (title: string, musicxml: string) => {
+  await fs.mkdir(piecesDir(), { recursive: true });
+  await fs.writeFile(path.join(piecesDir(), pieceFileName(title)), musicxml, 'utf8');
+};
+
 const startTutorApi = () => {
+  ipcMain.handle('pieces:list', listPieces);
   ipcMain.handle('piece:open', async () => {
+    await fs.mkdir(piecesDir(), { recursive: true }).catch(() => undefined);
     const options: OpenDialogOptions = {
       title: 'Open piece',
+      defaultPath: piecesDir(),
       properties: ['openFile'],
       filters: [{ name: 'MusicXML score', extensions: [...MUSICXML_EXTENSIONS] }],
     };
@@ -92,6 +129,8 @@ const startTutorApi = () => {
     logDir: path.join(app.getPath('userData'), 'logs'),
     allowInject: !app.isPackaged || process.env.MIDITUTOR_ALLOW_INJECT === '1',
     sendToRenderer: send,
+    savePiece: (title, musicxml) =>
+      savePiece(title, musicxml).catch((err) => console.warn('[pieces] save failed:', (err as Error).message)),
     capture: async () => {
       if (!mainWindow) throw new Error('no window');
       return (await mainWindow.webContents.capturePage()).toPNG();

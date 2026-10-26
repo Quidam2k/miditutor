@@ -295,10 +295,41 @@ function accidentalName(alter: number): string {
   }
 }
 
+const WRONG_COLOR = '#DC2626';
+
+// The played keys that are not in the chord, as one red whole-note chord spelled with sharps.
+function extraMeasureXml(chord: string[], played: number[]): string {
+  const inChord = new Set(chord.map((n) => pitchClass(parseSpelled(n))));
+  const extra = played.filter((midi) => !inChord.has(mod12(midi)));
+  if (!extra.length) return '';
+  const notes = [...new Set(extra)].sort((a, b) => a - b).map((midi, index) => {
+    const name = SHARP_NAMES[mod12(midi)]!;
+    const alterXml = name.length > 1 ? '\n          <alter>1</alter>' : '';
+    const accidentalXml = name.length > 1 ? '\n        <accidental>sharp</accidental>' : '';
+    return `      <note color="${WRONG_COLOR}">${index === 0 ? '' : '\n        <chord/>'}
+        <pitch>
+          <step>${name[0]}</step>${alterXml}
+          <octave>${Math.floor(midi / 12) - 1}</octave>
+        </pitch>
+        <duration>4</duration>
+        <type>whole</type>${accidentalXml}
+        <notehead color="${WRONG_COLOR}">normal</notehead>
+      </note>`;
+  }).join('\n');
+  return `
+    <measure number="2">
+${notes}
+    </measure>`;
+}
+
 export function chordToMusicXml(
   title: string,
   notes: string[],
-  opts?: { octave?: number },
+  opts?: {
+    octave?: number;
+    /** Keys he played (MIDI); those not in the chord are drawn red in a second bar beside it. */
+    played?: number[];
+  },
 ): string {
   let previousPitch = 0;
 
@@ -359,7 +390,7 @@ export function chordToMusicXml(
         </clef>
       </attributes>
 ${noteXml}
-    </measure>
+    </measure>${extraMeasureXml(notes, opts?.played ?? [])}
   </part>
 </score-partwise>`;
 }

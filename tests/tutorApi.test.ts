@@ -134,6 +134,18 @@ describe('TutorApi', () => {
     })).status).toBe(400);
   });
 
+  it('saves a pushed score to the Pieces folder, but not a photo-only piece', async () => {
+    const saved: [string, string][] = [];
+    await api.stop();
+    api = new TutorApi({ port: 0, token: 't', allowInject: true, sendToRenderer: () => undefined,
+      savePiece: (title, musicxml) => { saved.push([title, musicxml]); } });
+    base = `http://127.0.0.1:${await api.start()}`;
+    const musicxml = '<score-partwise version="3.1"></score-partwise>';
+    expect((await request('/piece', 'POST', { title: 'Stormy Sea', musicxml })).status).toBe(200);
+    expect((await request('/piece', 'POST', { title: 'Photo', photo: 'data:image/png;base64,iVBO' })).status).toBe(200);
+    expect(saved).toEqual([['Stormy Sea', musicxml]]);
+  });
+
   it('accepts a photo-only piece', async () => {
     const photo = 'data:image/jpeg;base64,/9j/4AAQ';
     expect((await request('/piece', 'POST', { title: 'Photo only', photo })).status).toBe(200);

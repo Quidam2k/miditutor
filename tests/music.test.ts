@@ -242,6 +242,17 @@ describe('chordToMusicXml', () => {
     expect(xml).toContain('<step>B</step>\n          <alter>1</alter>\n          <octave>3</octave>');
   });
 
+  it('draws the extra keys he played red in a second bar', () => {
+    const xml = chordToMusicXml('C major', ['C', 'E', 'G'], { played: [60, 66, 64, 62, 67, 66] });
+
+    expect(xml).toContain('<measure number="2">');
+    expect(xml.match(/<notehead color="#DC2626">normal<\/notehead>/g)).toHaveLength(2);
+    expect(xml).toContain('<step>D</step>\n          <octave>4</octave>');
+    expect(xml).toContain('<step>F</step>\n          <alter>1</alter>\n          <octave>4</octave>');
+    expect(chordToMusicXml('C major', ['C', 'E', 'G'])).not.toContain('<measure number="2">');
+    expect(chordToMusicXml('C major', ['C', 'E', 'G'], { played: [48, 64, 79] })).not.toContain('<measure number="2">');
+  });
+
   it('escapes titles and writes double accidentals', () => {
     const xml = chordToMusicXml('A & <B> "C" \'D\'', ['C##', 'Ebb']);
 

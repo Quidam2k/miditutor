@@ -5,20 +5,22 @@ import { chordToMusicXml } from '../../../shared/music';
 
 // A persona's "play this chord" task. Only the chord NAME is shown while he
 // works it out (Todd's rule: the answer is never given away up front). Once he
-// has played, the verdict appears and the written chord is revealed.
+// has played, the verdict appears and the written chord is revealed, with any
+// keys he played that are not in it drawn red beside it (#4045).
 
 export function TaskPanel() {
   const task = useTutorStore((s) => s.task);
   const notationRef = useRef<HTMLDivElement>(null);
   const result = task?.result ?? null;
   const reveal = result !== null;
+  const extraKey = result?.played.join(',') ?? '';
 
   useEffect(() => {
     const el = notationRef.current;
     if (!el || !task || !reveal) return;
     const osmd = new OpenSheetMusicDisplay(el, { backend: 'svg', drawTitle: false, autoResize: false });
     osmd
-      .load(chordToMusicXml(task.label, task.notes))
+      .load(chordToMusicXml(task.label, task.notes, { played: result?.played ?? [] }))
       .then(() => osmd.render())
       .catch(() => {
         /* the verdict text still stands without notation */
@@ -26,7 +28,7 @@ export function TaskPanel() {
     return () => {
       el.innerHTML = '';
     };
-  }, [task?.id, task?.label, task?.notes, reveal]);
+  }, [task?.id, task?.label, task?.notes, reveal, extraKey]);
 
   if (!task) return null;
 
@@ -56,7 +58,7 @@ export function TaskPanel() {
           )}
         </div>
       )}
-      {reveal && <div ref={notationRef} className="max-w-xs rounded bg-white p-2" />}
+      {reveal && <div ref={notationRef} className="max-w-md rounded bg-white p-2" />}
     </div>
   );
 }

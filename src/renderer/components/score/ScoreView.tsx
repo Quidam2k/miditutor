@@ -4,6 +4,8 @@ import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
 import sampleXml from '../../assets/sample-score.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
+// eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
+import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep } from '../../engine/ScoreFollower';
 import { useTutorStore } from '../../store/useTutorStore';
@@ -37,6 +39,7 @@ interface Piece {
 
 const PIECES: Piece[] = [
   { id: 'minuet', label: 'Minuet in G (simplified) — Petzold', xml: minuetXml, targetBpm: 100 },
+  { id: 'a-minor', label: 'A minor scale (natural, hands together)', xml: aMinorXml },
   { id: 'sample', label: 'Sample: C scale + Ode to Joy', xml: sampleXml },
 ];
 
@@ -206,10 +209,31 @@ export function ScoreView() {
   const [layoutTick, setLayoutTick] = useState(0);
   const loopRequest = useTutorStore((s) => s.loopRequest);
 
-  // Built-in pieces plus anything a persona pushed through the tutor API.
+  // Built-in pieces, his Pieces folder on disk, then anything pushed this session.
+  // The folder is re-read when the window regains focus, so a synced file shows up.
+  const [folder, setFolder] = useState<Piece[]>([]);
+  useEffect(() => {
+    const list = window.tutorBridge?.listPieces;
+    if (!list) return;
+    let lastKey = '';
+    const refresh = () =>
+      list()
+        .then((files) => {
+          const key = files.map((f) => `${f.file}:${f.musicxml.length}`).join('|');
+          if (key === lastKey) return;
+          lastKey = key;
+          setFolder(files.map((f) => ({ id: `file:${f.file}`, label: f.title, xml: f.musicxml })));
+        })
+        .catch((err) => console.warn('[pieces] list failed:', err));
+    refresh();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, []);
   const pushed = useTutorStore((s) => s.pieces);
   const selectPieceId = useTutorStore((s) => s.selectPieceId);
-  const pieces: Piece[] = [...PIECES, ...pushed];
+  // A pushed score is also saved to the folder; list it once.
+  const pushedLabels = new Set(pushed.map((p) => p.label));
+  const pieces: Piece[] = [...PIECES, ...folder.filter((p) => !pushedLabels.has(p.label)), ...pushed];
   useEffect(() => {
     if (selectPieceId) setPieceId(selectPieceId);
   }, [selectPieceId]);
@@ -230,9 +254,11 @@ export function ScoreView() {
   const namesOf = (midis: number[]) => [...midis].sort((a, b) => b - a).map(noteName).join(' + ');
 
   // Tell the tutor API what is on screen, so personas can ask "where is he?".
+  const pieceLabels = pieces.map((p) => p.label).join('\n');
   useEffect(() => {
     reportScreen({
       piece: piece.label,
+      pieces: pieceLabels.split('\n'),
       status,
       measure,
       remaining: remaining.map(noteName),
@@ -248,7 +274,7 @@ export function ScoreView() {
       wrongMarks: marks.filter((m) => m.wrong).length,
       redAccidentals: marks.flatMap((m) => (m.accidental ? [m.accidental] : [])),
     });
-  }, [piece.label, status, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking]);
+  }, [piece.label, pieceLabels, status, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,

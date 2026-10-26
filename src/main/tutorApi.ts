@@ -104,6 +104,8 @@ export class TutorApi {
     now?: () => number;
     /** PNG of the window, for GET /screenshot. */
     capture?: () => Promise<Buffer>;
+    /** Keep a pushed score as a file in the Pieces folder, so it survives a restart. */
+    savePiece?: (title: string, musicxml: string) => void;
     /** Append-only on-box log folder: one JSONL file a day, plus wrong-burst screenshots. */
     logDir?: string;
   }) {
@@ -401,6 +403,7 @@ export class TutorApi {
       this.opts.sendToRenderer({ type: 'piece', title,
         musicxml: typeof musicxml === 'string' ? musicxml : '',
         ...(hasPhoto ? { photo } : {}) });
+      if (hasScore) this.opts.savePiece?.(title, musicxml);
       send({ ok: true });
     } else if (route === 'POST /inject') {
       if (!this.opts.allowInject) throw new HttpError(404, 'Not found');
