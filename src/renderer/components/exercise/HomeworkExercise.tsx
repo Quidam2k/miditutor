@@ -96,23 +96,31 @@ function ItemDrill({ item, onBack }: { item: HomeworkItem; onBack: () => void })
 /** Scale or arpeggio: one octave up and down from any octave, right hand then left hand. */
 function SequenceDrill({ item }: { item: HomeworkItem }) {
   const choices = item.kind === 'scale' ? scaleChoices(item) : [];
-  const [type, setType] = useState<ScaleType | null>(choices.length === 1 ? choices[0] : null);
+  // Several types: start on harmonic, the one JP paired with natural for A minor (Jarvis, #9661).
+  const [type, setType] = useState<ScaleType>(choices.includes('harmonic') ? 'harmonic' : choices[0] ?? 'major');
   if (item.kind === 'arpeggio') return <SequenceRun item={item} offsets={arpeggioOffsets(item.quality ?? 'major')} title={item.label} />;
-  if (type) {
-    const title = type === 'major' ? item.label : `${item.label} (${type})`;
-    return <SequenceRun key={type} item={item} offsets={scaleOffsets(type)} title={title} />;
-  }
+  const title = type === 'major' ? item.label : `${item.label} (${type})`;
   return (
-    <div className="flex flex-col items-center gap-3">
-      <h2 className="text-2xl font-bold text-white">{item.label}</h2>
-      <p className="text-gray-300">JP's note doesn't say which minor scale. Pick one:</p>
-      <div className="flex gap-2">
-        {choices.map((c) => (
-          <button key={c} onClick={() => setType(c)} className="px-4 py-2 rounded-md bg-indigo-600 hover:bg-indigo-500 text-white capitalize">
-            {c}
-          </button>
-        ))}
-      </div>
+    <div className="flex flex-col items-center gap-4 w-full">
+      {choices.length > 1 && (
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-gray-300">
+            {item.types?.length ? 'Scale type:' : "JP's note doesn't say which minor. Scale type:"}
+          </span>
+          {choices.map((c) => (
+            <button
+              key={c}
+              onClick={() => setType(c)}
+              className={`px-3 py-1 rounded-md text-sm font-medium capitalize ${
+                c === type ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+              }`}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      )}
+      <SequenceRun key={type} item={item} offsets={scaleOffsets(type)} title={title} />
     </div>
   );
 }
