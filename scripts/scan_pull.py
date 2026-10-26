@@ -137,6 +137,8 @@ def execute(args: argparse.Namespace) -> int:
         return 4
     if scanned.returncode:
         progress(f"Scanner stopped after {count} pages: {last_error(scanned)}")
+        for line in scanned.stderr.splitlines()[-5:]:
+            progress(f"  scanimage: {line}")
 
     listing = ssh(args.host, f'cd {quoted_dir} && stat -f "%z %N" page*.tiff')
     if listing.returncode:
@@ -216,6 +218,8 @@ def execute(args: argparse.Namespace) -> int:
     log = dict(stamp=stamp, host=args.host, source=args.source,
                resolution=args.resolution, mode=args.mode,
                scanimage_stdout_tail="\n".join(scanned.stdout.splitlines()[-10:]),
+               # Why a batch stopped early (jam, double-feed) is only on stderr (#9493).
+               scanimage_stderr_tail="\n".join(scanned.stderr.splitlines()[-10:]),
                pages=pages)
     (local / "scan_log.json").write_text(json.dumps(log, indent=2), encoding="utf-8")
     print(json.dumps(dict(ok=True, stamp=stamp, dir=str(local), pages=len(pages),
