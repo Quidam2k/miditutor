@@ -109,6 +109,14 @@ ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:47800:127.0.0.1:47800 toddwalker
 
 Verify: SSH remains running without forwarding errors; section 7 confirms the forwarded API responds.
 
+**LAN fallback (2026-10-25, #9478):** after a Pinocchio reboot, Tailscale TCP can stay dead (100.106.20.55:22 refused). Use the LAN address instead. The user is `toddwalker`, not `todd`:
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes -L 127.0.0.1:47800:127.0.0.1:47800 toddwalker@192.168.50.27
+```
+
+Only one tunnel can hold local port 47800. If another session already has it, leave that tunnel alone and forward a different local port (e.g. `-L 127.0.0.1:47801:127.0.0.1:47800`), then point your client at 47801.
+
 ## 6. Fetch and store the token on Solace [VERIFIED 2026-10-25, #9443: MIDITUTOR_TOKEN_FILE route]
 
 The first app launch creates `$HOME/Library/Application Support/MidiTutor/api-token` on Pinocchio. Capture it without printing it. Keep tracing disabled, never commit it, and never echo it into logs.
