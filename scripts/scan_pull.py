@@ -29,6 +29,7 @@ SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 BLEED_CUTOFF = 140
 POLL_S = 2
 SETTLE_S = 5
+OFF_POLL_S = 15
 
 
 def progress(message: str) -> None:
@@ -117,6 +118,10 @@ def wait_for_paper(host: str) -> None:
     loaded_since = None
     while True:
         state = sensors(host)
+        if not state:  # scanner off (lid closed) or Pinocchio unreachable
+            loaded_since = None
+            time.sleep(OFF_POLL_S)
+            continue
         if state.get("scan") == "yes":
             return
         if state.get("page-loaded") == "yes":
@@ -146,6 +151,8 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--page-height", type=float, default=None, metavar="MM")
     parser.add_argument("--watch", action="store_true",
                         help="wait for paper in the feeder (or the Scan button), scan one batch, exit")
+    parser.add_argument("--forever", action="store_true",
+                        help="--watch in a loop, for the Solace service (#9511)")
     args = parser.parse_args()
     if not args.host or args.host.startswith("-"):
         parser.error("--host must be a nonempty SSH destination")
@@ -295,8 +302,28 @@ def execute(args: argparse.Namespace) -> int:
     return 0
 
 
+def wait_for_empty_feeder(host: str) -> None:
+    """After a batch, re-arm only once the feeder is empty, so paper left behind
+    by a jam isn't scanned again and again."""
+    while (state := sensors(host)).get("page-loaded") != "no":
+        time.sleep(POLL_S if state else OFF_POLL_S)
+
+
+def forever(args: argparse.Namespace) -> int:
+    while True:
+        try:
+            progress(f"{datetime.now():%H:%M:%S} waiting for paper or the Scan button")
+            wait_for_paper(args.host)
+            progress(f"{datetime.now():%H:%M:%S} batch finished, code {execute(args)}")
+        except (OSError, ValueError, RuntimeError) as exc:
+            progress(f"{datetime.now():%H:%M:%S} batch failed: {exc}")
+        wait_for_empty_feeder(args.host)
+
+
 def main() -> int:
     args = arguments()
+    if args.forever:
+        return forever(args)
     try:
         if args.watch:
             progress("Waiting for paper in the feeder or the Scan button")
