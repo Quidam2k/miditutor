@@ -45,27 +45,6 @@ export function playChord(midiNumbers: number[], duration = '4n'): void {
   synth.triggerAttackRelease(notes, duration);
 }
 
-/**
- * Play a short success sound
- */
-export function playCorrectSound(): void {
-  if (!synth || !initialized) return;
-  const now = Tone.now();
-  synth.triggerAttackRelease('C5', '16n', now);
-  synth.triggerAttackRelease('E5', '16n', now + 0.08);
-  synth.triggerAttackRelease('G5', '16n', now + 0.16);
-}
-
-/**
- * Play a short error sound
- */
-export function playWrongSound(): void {
-  if (!synth || !initialized) return;
-  const now = Tone.now();
-  synth.triggerAttackRelease('E3', '16n', now);
-  synth.triggerAttackRelease('Eb3', '16n', now + 0.1);
-}
-
 export function isInitialized(): boolean {
   return initialized;
 }

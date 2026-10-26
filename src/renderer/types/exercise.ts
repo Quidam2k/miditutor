@@ -10,6 +10,8 @@ export interface Exercise {
   prompt: Pitch[];
   expectedMidiNumbers: number[];
   clef: Clef;
+  /** Interval drill: the interval asked for, e.g. "Major 3rd". */
+  intervalName?: string;
 }
 
 export interface ExerciseResult {

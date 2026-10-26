@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useMidi } from './components/midi/useMidi';
 import { MidiStatus } from './components/midi/MidiStatus';
 import { MidiMonitor } from './components/midi/MidiMonitor';
@@ -19,20 +19,40 @@ const TABS: { id: View; label: string }[] = [
 export function App() {
   useMidi();
   const [view, setView] = useState<View>('practice');
+  // Bumped on every click of Practice (or the title) so it always lands on the drill's start screen.
+  const [practiceVisit, setPracticeVisit] = useState(0);
+  const mainRef = useRef<HTMLElement>(null);
   // A persona pushing a task or piece brings the Score tab forward.
   useTutorBridge(useCallback(() => setView('score'), []));
 
+  // Every tab click does something visible: switch, back to the top, and Practice restarts (#5058).
+  const go = (next: View) => {
+    if (next === 'practice') setPracticeVisit((n) => n + 1);
+    setView(next);
+    mainRef.current?.scrollTo({ top: 0 });
+  };
+
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+    // The page itself never scrolls: <main> does, so the header (and its tabs) stay on screen
+    // however far down a score he has gone (#5058).
+    <div className="h-screen bg-gray-950 text-white flex flex-col">
       {/* Header */}
       <header className="flex items-center justify-between px-6 py-3 border-b border-gray-800/50">
         <div className="flex items-center gap-6">
-          <h1 className="text-lg font-bold tracking-tight text-indigo-400">MidiTutor</h1>
+          <h1>
+            <button
+              onClick={() => go('practice')}
+              title="Back to Practice"
+              className="text-lg font-bold tracking-tight text-indigo-400 hover:text-indigo-300"
+            >
+              MidiTutor
+            </button>
+          </h1>
           <nav className="flex items-center gap-1">
             {TABS.map((t) => (
               <button
                 key={t.id}
-                onClick={() => setView(t.id)}
+                onClick={() => go(t.id)}
                 className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${
                   view === t.id
                     ? 'bg-gray-800 text-white'
@@ -51,9 +71,9 @@ export function App() {
       </header>
 
       {/* Main content */}
-      <main className="flex-1 flex flex-col items-center p-6 gap-6">
+      <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center p-6 gap-6">
         <div className="w-full max-w-3xl flex-1">
-          {view === 'practice' && <ExerciseView />}
+          {view === 'practice' && <ExerciseView key={practiceVisit} />}
           {view === 'monitor' && <MidiMonitor />}
           {view === 'score' && <ScoreView />}
         </div>

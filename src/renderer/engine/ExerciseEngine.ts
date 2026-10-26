@@ -1,7 +1,7 @@
 import { Exercise, ExerciseType, ExerciseResult } from '../types/exercise';
 import { Clef } from '../types/music';
 import { DifficultyManager } from './DifficultyManager';
-import { generateRandomNote, generateInterval } from './NoteGenerator';
+import { generateRandomNote, generateJpInterval } from './NoteGenerator';
 import { evaluate } from './Evaluator';
 
 let exerciseCounter = 0;
@@ -11,6 +11,7 @@ export class ExerciseEngine {
   private clef: Clef;
   private exerciseType: ExerciseType;
   private lastMidiNumber?: number;
+  private lastInterval?: string;
 
   constructor(clef: Clef = 'treble', exerciseType: ExerciseType = 'note-identification') {
     this.difficulty = new DifficultyManager();
@@ -51,14 +52,16 @@ export class ExerciseEngine {
         clef: this.clef,
       };
     } else {
-      const [first, second] = generateInterval(options);
-      this.lastMidiNumber = second.midiNumber;
+      // JP's assigned set (m2..P8) rather than random semitone pairs, which were mostly half steps.
+      const { interval, notes: [first, second] } = generateJpInterval(this.clef, this.lastInterval);
+      this.lastInterval = interval.short;
       return {
         id,
         type: 'interval',
         prompt: [first, second],
         expectedMidiNumbers: [first.midiNumber, second.midiNumber],
         clef: this.clef,
+        intervalName: interval.name,
       };
     }
   }
@@ -77,6 +80,7 @@ export class ExerciseEngine {
   reset(): void {
     this.difficulty.reset();
     this.lastMidiNumber = undefined;
+    this.lastInterval = undefined;
     exerciseCounter = 0;
   }
 }

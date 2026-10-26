@@ -4,29 +4,25 @@ import { FeedbackOverlay } from '../feedback/FeedbackOverlay';
 import { useExerciseStore } from '../../store/useExerciseStore';
 import { useSessionStore } from '../../store/useSessionStore';
 import { useMidiStore } from '../../store/useMidiStore';
-import { useSettingsStore } from '../../store/useSettingsStore';
+import { useSettingsStore, localDay } from '../../store/useSettingsStore';
 import { ExerciseEngine } from '../../engine/ExerciseEngine';
-import { getIntervalName, midiNumberToPitch, pitchToDisplayName } from '../../engine/MusicTheory';
-import { Pitch } from '../../types/music';
-import { playChord, playCorrectSound, playWrongSound, initAudio, isInitialized } from '../../audio/AudioEngine';
+import { pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
+import { playChord, initAudio, isInitialized } from '../../audio/AudioEngine';
 
 const FEEDBACK_DURATION = 1200;
-
-// The keys he played that were not asked for, spelled like the prompt (flats if it uses flats).
-function wrongPitches(played: number[], expected: number[], prompt: Pitch[]): Pitch[] {
-  const flats = prompt.some((p) => p.accidental === 'flat');
-  return [...new Set(played.filter((n) => !expected.includes(n)))].map((n) => midiNumberToPitch(n, flats));
-}
+/** JP's assignment: 10 correct a day. */
+const DAILY_GOAL = 10;
 
 export function IntervalExercise() {
   const engineRef = useRef<ExerciseEngine | null>(null);
-  const { currentExercise, lastResult, phase, playedNotes, presentedAt, setExercise, setResult, setPhase, addPlayedNote, clearPlayedNotes } =
+  const { currentExercise, lastResult, phase, presentedAt, setExercise, setResult, setPhase, clearPlayedNotes } =
     useExerciseStore();
   const { recordResult, startSession } = useSessionStore();
-  const { clef, audioEnabled } = useSettingsStore();
-  const [highlightColor, setHighlightColor] = useState<string | null>(null);
-  const [wrongNotes, setWrongNotes] = useState<Pitch[]>([]);
+  const held = useMidiStore((s) => s.held);
+  const { clef, audioEnabled, showNoteNames, intervalGoal, countIntervalCorrect } = useSettingsStore();
   const [started, setStarted] = useState(false);
+  // A miss counts once per interval; the interval stays up until he plays it right.
+  const missedRef = useRef(false);
 
   if (!engineRef.current) {
     engineRef.current = new ExerciseEngine(clef, 'interval');
@@ -38,12 +34,9 @@ export function IntervalExercise() {
   }, [clef]);
 
   const nextExercise = useCallback(() => {
-    setHighlightColor(null);
-    setWrongNotes([]);
+    missedRef.current = false;
     clearPlayedNotes();
-    const engine = engineRef.current!;
-    const exercise = engine.generateExercise();
-    setExercise(exercise);
+    setExercise(engineRef.current!.generateExercise());
     setPhase('awaiting-input');
   }, [setExercise, setPhase, clearPlayedNotes]);
 
@@ -56,54 +49,51 @@ export function IntervalExercise() {
     nextExercise();
   }, [nextExercise, startSession]);
 
-  // Handle MIDI input — collect two notes. Subscribe to every note-on: two keys struck
-  // together can land in one React render, and an effect on lastNoteOn would see only one.
+  // Subscribe to every note-on: two keys struck together can land in one React render,
+  // and an effect on lastNoteOn would see only one.
   useEffect(() => {
     if (phase !== 'awaiting-input' || !currentExercise) return;
+    const expected = currentExercise.expectedMidiNumbers;
     return useMidiStore.subscribe((state, prev) => {
-      if (state.lastNoteOn && state.lastNoteOn !== prev.lastNoteOn) addPlayedNote(state.lastNoteOn.note);
-    });
-  }, [phase, currentExercise, addPlayedNote]);
-
-  // Evaluate when we have enough notes
-  useEffect(() => {
-    if (phase !== 'awaiting-input') return;
-    if (!currentExercise) return;
-    if (playedNotes.length < currentExercise.expectedMidiNumbers.length) return;
-
-    const responseTime = presentedAt ? Date.now() - presentedAt : 0;
-    const engine = engineRef.current!;
-    const result = engine.evaluate(currentExercise, playedNotes, responseTime);
-
-    setResult(result);
-    recordResult(result.correct);
-
-    if (result.correct) {
-      setHighlightColor('green');
-      if (audioEnabled) playCorrectSound();
-    } else {
-      // The target stays black; the key(s) he played wrong are drawn red beside it (#4045).
-      setWrongNotes(wrongPitches(playedNotes, currentExercise.expectedMidiNumbers, currentExercise.prompt));
-      if (audioEnabled) {
-        playWrongSound();
-        setTimeout(() => {
-          playChord(currentExercise.expectedMidiNumbers);
-        }, 300);
+      const ev = state.lastNoteOn;
+      if (!ev || ev === prev.lastNoteOn) return;
+      const store = useExerciseStore.getState();
+      if (!expected.includes(ev.note)) {
+        // Wrong key: start the pair over; it shows red only while he holds it (#5059).
+        store.clearPlayedNotes();
+        if (!missedRef.current) {
+          missedRef.current = true;
+          recordResult(false);
+          if (audioEnabled) playChord(expected);
+        }
+        return;
       }
-    }
+      if (!store.playedNotes.includes(ev.note)) store.addPlayedNote(ev.note);
+      const played = useExerciseStore.getState().playedNotes;
+      if (!expected.every((n) => played.includes(n))) return;
+      const result = engineRef.current!.evaluate(currentExercise, played, presentedAt ? Date.now() - presentedAt : 0);
+      setResult(result);
+      if (!missedRef.current) {
+        recordResult(true);
+        countIntervalCorrect();
+      }
+      setTimeout(nextExercise, FEEDBACK_DURATION);
+    });
+  }, [phase, currentExercise, presentedAt, audioEnabled, recordResult, setResult, countIntervalCorrect, nextExercise]);
 
-    setTimeout(() => {
-      nextExercise();
-    }, FEEDBACK_DURATION);
-  }, [playedNotes, phase, currentExercise, presentedAt, setResult, recordResult, audioEnabled, nextExercise]);
+  // Wrong keys show only while held (#5059).
+  const wrongNotes = currentExercise && phase === 'awaiting-input'
+    ? wrongPitches(held, currentExercise.expectedMidiNumbers, currentExercise.prompt)
+    : [];
+  const todayCorrect = intervalGoal.day === localDay() ? intervalGoal.correct : 0;
 
   if (!started) {
     return (
       <div className="flex flex-col items-center justify-center gap-6 py-12">
-        <h2 className="text-2xl font-bold text-white">Interval Identification</h2>
-        <p className="text-gray-400 text-center max-w-md">
-          Two notes will appear on the staff. Play both notes on your MIDI keyboard.
-          Order doesn't matter.
+        <h2 className="text-2xl font-bold text-white">Intervals</h2>
+        <p className="text-gray-300 text-center max-w-md">
+          JP's interval set: minor 2nd up to the octave. Two notes appear on the staff; play both
+          (together or one after the other). Goal: {DAILY_GOAL} right today.
         </p>
         <button
           onClick={startExercises}
@@ -115,34 +105,29 @@ export function IntervalExercise() {
     );
   }
 
-  const intervalSemitones = currentExercise
-    ? Math.abs(currentExercise.expectedMidiNumbers[1] - currentExercise.expectedMidiNumbers[0])
-    : 0;
-
   return (
     <div className="flex flex-col items-center gap-4 w-full">
+      <div className={`text-sm font-medium ${todayCorrect >= DAILY_GOAL ? 'text-emerald-400' : 'text-gray-300'}`}>
+        {todayCorrect} / {DAILY_GOAL} right today
+      </div>
+
       <div className="relative w-full max-w-2xl">
         <StaffDisplay
           notes={currentExercise?.prompt ?? []}
           clef={clef}
-          highlightColor={highlightColor}
+          // Green when he gets it, and while a wrong key is down so he can see the target beside it.
+          highlightColor={phase === 'feedback' || wrongNotes.length > 0 ? 'green' : null}
           wrongNotes={wrongNotes}
         />
         <FeedbackOverlay result={lastResult} visible={phase === 'feedback'} />
       </div>
 
-      <div className="text-gray-500 text-sm">
-        {phase === 'awaiting-input' && (
-          <span>Play {currentExercise ? currentExercise.expectedMidiNumbers.length - playedNotes.length : 0} more note(s)</span>
-        )}
-        {phase === 'feedback' && currentExercise && (
-          <span>
-            {getIntervalName(intervalSemitones)}
-            {' — '}
-            {currentExercise.prompt.map(pitchToDisplayName).join(' to ')}
-          </span>
-        )}
-      </div>
+      {currentExercise && (
+        <div className="text-gray-200 text-lg font-semibold">
+          {currentExercise.intervalName}
+          {showNoteNames && <span className="text-gray-300 font-normal">: {currentExercise.prompt.map(pitchToDisplayName).join(' to ')}</span>}
+        </div>
+      )}
     </div>
   );
 }

@@ -29,8 +29,18 @@ export function ExerciseView() {
           selected={clef}
           onChange={(v) => setClef(v as 'treble' | 'bass')}
         />
-        <Toggle label="Audio" checked={audioEnabled} onChange={setAudioEnabled} />
-        <Toggle label="Note Names" checked={showNoteNames} onChange={setShowNoteNames} />
+        <Toggle
+          label="Audio"
+          title="Off: the tutor makes no sound. On: after a miss it plays the right notes so you can hear them."
+          checked={audioEnabled}
+          onChange={setAudioEnabled}
+        />
+        <Toggle
+          label="Note names"
+          title="Shows the letter names (like C4, E4) under the staff as a hint."
+          checked={showNoteNames}
+          onChange={setShowNoteNames}
+        />
       </div>
 
       {/* Exercise */}
@@ -75,21 +85,24 @@ function ToggleGroup({
 
 function Toggle({
   label,
+  title,
   checked,
   onChange,
 }: {
   label: string;
+  title: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }) {
   return (
     <button
+      title={title}
       onClick={() => onChange(!checked)}
       className={`flex items-center gap-1.5 px-3 py-1 rounded-md text-sm font-medium transition-colors ${
         checked ? 'bg-indigo-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
       }`}
     >
-      {label}
+      {label}: {checked ? 'on' : 'off'}
     </button>
   );
 }

@@ -6,17 +6,11 @@ import { useSessionStore } from '../../store/useSessionStore';
 import { useMidiStore } from '../../store/useMidiStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { ExerciseEngine } from '../../engine/ExerciseEngine';
-import { midiNumberToPitch, pitchToDisplayName } from '../../engine/MusicTheory';
+import { pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
 import { Pitch } from '../../types/music';
-import { playNote, playCorrectSound, playWrongSound, initAudio, isInitialized } from '../../audio/AudioEngine';
+import { playNote, initAudio, isInitialized } from '../../audio/AudioEngine';
 
 const FEEDBACK_DURATION = 800;
-
-// The keys he played that were not asked for, spelled like the prompt (flats if it uses flats).
-function wrongPitches(played: number[], expected: number[], prompt: Pitch[]): Pitch[] {
-  const flats = prompt.some((p) => p.accidental === 'flat');
-  return [...new Set(played.filter((n) => !expected.includes(n)))].map((n) => midiNumberToPitch(n, flats));
-}
 
 export function NoteExercise() {
   const engineRef = useRef<ExerciseEngine | null>(null);
@@ -76,17 +70,11 @@ export function NoteExercise() {
 
     if (result.correct) {
       setHighlightColor('green');
-      if (audioEnabled) playCorrectSound();
     } else {
       // The target stays black; the key he played is drawn red beside it (#4045).
       setWrongNotes(wrongPitches([lastNoteOn.note], currentExercise.expectedMidiNumbers, currentExercise.prompt));
-      if (audioEnabled) {
-        playWrongSound();
-        // Play the correct note so student can hear it
-        setTimeout(() => {
-          playNote(currentExercise.expectedMidiNumbers[0]);
-        }, 300);
-      }
+      // No sound effects (#5059); with Audio on he hears the right note.
+      if (audioEnabled) playNote(currentExercise.expectedMidiNumbers[0]);
     }
 
     // Move to next exercise after feedback duration
@@ -127,8 +115,8 @@ export function NoteExercise() {
         <FeedbackOverlay result={lastResult} visible={phase === 'feedback'} />
       </div>
 
-      {showNoteNames && currentExercise && phase === 'feedback' && (
-        <div className="text-gray-400 text-sm">
+      {showNoteNames && currentExercise && (
+        <div className="text-gray-200 text-lg font-semibold">
           {currentExercise.prompt.map(pitchToDisplayName).join(', ')}
         </div>
       )}

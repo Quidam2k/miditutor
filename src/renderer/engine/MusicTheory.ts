@@ -89,15 +89,50 @@ export function isWhiteKey(midiNumber: number): boolean {
   return [0, 2, 4, 5, 7, 9, 11].includes(semitone);
 }
 
+export interface IntervalSpec {
+  /** JP's short name, e.g. "m3". */
+  short: string;
+  /** Spoken name, e.g. "Minor 3rd". */
+  name: string;
+  /** Letter steps up from the root (a 3rd = 2). */
+  steps: number;
+  semitones: number;
+}
+
+/** The intervals JP assigned (musictheory.net, quality required): m2 through P8. */
+export const JP_INTERVALS: IntervalSpec[] = [
+  { short: 'm2', name: 'Minor 2nd', steps: 1, semitones: 1 },
+  { short: 'M2', name: 'Major 2nd', steps: 1, semitones: 2 },
+  { short: 'm3', name: 'Minor 3rd', steps: 2, semitones: 3 },
+  { short: 'M3', name: 'Major 3rd', steps: 2, semitones: 4 },
+  { short: 'P4', name: 'Perfect 4th', steps: 3, semitones: 5 },
+  { short: 'A4', name: 'Augmented 4th', steps: 3, semitones: 6 },
+  { short: 'd5', name: 'Diminished 5th', steps: 4, semitones: 6 },
+  { short: 'P5', name: 'Perfect 5th', steps: 4, semitones: 7 },
+  { short: 'm6', name: 'Minor 6th', steps: 5, semitones: 8 },
+  { short: 'M6', name: 'Major 6th', steps: 5, semitones: 9 },
+  { short: 'm7', name: 'Minor 7th', steps: 6, semitones: 10 },
+  { short: 'M7', name: 'Major 7th', steps: 6, semitones: 11 },
+  { short: 'P8', name: 'Octave', steps: 7, semitones: 12 },
+];
+
+const LETTERS: NoteName[] = ['C', 'D', 'E', 'F', 'G', 'A', 'B'];
+
 /**
- * Get interval name between two MIDI numbers
+ * The upper note of `interval` above a natural root, spelled by quality (F up an A4 is B,
+ * B up a d5 is F, F up a P4 is Bb). From a natural root it never needs a double accidental.
  */
-export function getIntervalName(semitones: number): string {
-  const names: Record<number, string> = {
-    0: 'Unison', 1: 'Minor 2nd', 2: 'Major 2nd', 3: 'Minor 3rd',
-    4: 'Major 3rd', 5: 'Perfect 4th', 6: 'Tritone', 7: 'Perfect 5th',
-    8: 'Minor 6th', 9: 'Major 6th', 10: 'Minor 7th', 11: 'Major 7th',
-    12: 'Octave',
-  };
-  return names[Math.abs(semitones)] ?? `${Math.abs(semitones)} semitones`;
+export function spellIntervalAbove(root: Pitch, interval: IntervalSpec): Pitch {
+  const index = LETTERS.indexOf(root.note) + interval.steps;
+  const note = LETTERS[index % 7];
+  const octave = root.octave + Math.floor(index / 7);
+  const diff = root.midiNumber + interval.semitones - pitchToMidiNumber(note, octave);
+  const accidental: Accidental | undefined = diff === 1 ? 'sharp' : diff === -1 ? 'flat' : undefined;
+  return { note, accidental, octave, midiNumber: root.midiNumber + interval.semitones };
+}
+
+/** Keys he played that were not asked for, spelled like the prompt (flats if it uses flats), low to high. */
+export function wrongPitches(played: Iterable<number>, expected: number[], prompt: Pitch[]): Pitch[] {
+  const flats = prompt.some((p) => p.accidental === 'flat');
+  return [...new Set(played)].filter((n) => !expected.includes(n)).sort((a, b) => a - b).map((n) => midiNumberToPitch(n, flats));
 }
