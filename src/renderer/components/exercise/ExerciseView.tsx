@@ -2,6 +2,8 @@ import { useSettingsStore } from '../../store/useSettingsStore';
 import { SessionStats } from '../feedback/SessionStats';
 import { NoteExercise } from './NoteExercise';
 import { IntervalExercise } from './IntervalExercise';
+import { HomeworkExercise } from './HomeworkExercise';
+import { ExerciseType } from '../../types/exercise';
 
 export function ExerciseView() {
   const { exerciseType, setExerciseType, clef, setClef, audioEnabled, setAudioEnabled, showNoteNames, setShowNoteNames } =
@@ -16,38 +18,45 @@ export function ExerciseView() {
           options={[
             { value: 'note-identification', label: 'Notes' },
             { value: 'interval', label: 'Intervals' },
+            { value: 'homework', label: 'Homework' },
           ]}
           selected={exerciseType}
-          onChange={(v) => setExerciseType(v as 'note-identification' | 'interval')}
+          onChange={(v) => setExerciseType(v as ExerciseType)}
         />
-        <ToggleGroup
-          label="Clef"
-          options={[
-            { value: 'treble', label: 'Treble' },
-            { value: 'bass', label: 'Bass' },
-          ]}
-          selected={clef}
-          onChange={(v) => setClef(v as 'treble' | 'bass')}
-        />
-        <Toggle
-          label="Audio"
-          title="Off: the tutor makes no sound. On: after a miss it plays the right notes so you can hear them."
-          checked={audioEnabled}
-          onChange={setAudioEnabled}
-        />
-        <Toggle
-          label="Note names"
-          title="Shows the letter names (like C4, E4) under the staff as a hint."
-          checked={showNoteNames}
-          onChange={setShowNoteNames}
-        />
+        {exerciseType !== 'homework' && (
+          <>
+            <ToggleGroup
+              label="Clef"
+              options={[
+                { value: 'treble', label: 'Treble' },
+                { value: 'bass', label: 'Bass' },
+              ]}
+              selected={clef}
+              onChange={(v) => setClef(v as 'treble' | 'bass')}
+            />
+            <Toggle
+              label="Audio"
+              title="Off: the tutor makes no sound. On: after a miss it plays the right notes so you can hear them."
+              checked={audioEnabled}
+              onChange={setAudioEnabled}
+            />
+            <Toggle
+              label="Note names"
+              title="Shows the letter names (like C4, E4) under the staff as a hint."
+              checked={showNoteNames}
+              onChange={setShowNoteNames}
+            />
+          </>
+        )}
       </div>
 
       {/* Exercise */}
-      {exerciseType === 'note-identification' ? <NoteExercise /> : <IntervalExercise />}
+      {exerciseType === 'note-identification' && <NoteExercise />}
+      {exerciseType === 'interval' && <IntervalExercise />}
+      {exerciseType === 'homework' && <HomeworkExercise />}
 
       {/* Stats */}
-      <SessionStats />
+      {exerciseType !== 'homework' && <SessionStats />}
     </div>
   );
 }

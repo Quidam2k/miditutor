@@ -12,6 +12,8 @@ interface SettingsState {
   favoritePieces: string[];
   /** Interval drill: right answers today toward JP's 10 a day (local date, YYYY-MM-DD). */
   intervalGoal: { day: string; correct: number };
+  /** Homework item id -> local day he last finished it on the keyboard (#5058). */
+  homeworkPracticed: Record<string, string>;
 
   setClef: (clef: Clef) => void;
   setExerciseType: (type: ExerciseType) => void;
@@ -19,6 +21,7 @@ interface SettingsState {
   setShowNoteNames: (show: boolean) => void;
   toggleFavoritePiece: (title: string) => void;
   countIntervalCorrect: () => void;
+  markHomeworkPracticed: (id: string) => void;
 }
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
@@ -36,6 +39,7 @@ export const useSettingsStore = create<SettingsState>()(
       showNoteNames: false,
       favoritePieces: [],
       intervalGoal: { day: '', correct: 0 },
+      homeworkPracticed: {},
 
       setClef: (clef) => set({ clef }),
       setExerciseType: (type) => set({ exerciseType: type }),
@@ -52,6 +56,7 @@ export const useSettingsStore = create<SettingsState>()(
           const day = localDay();
           return { intervalGoal: { day, correct: (s.intervalGoal.day === day ? s.intervalGoal.correct : 0) + 1 } };
         }),
+      markHomeworkPracticed: (id) => set((s) => ({ homeworkPracticed: { ...s.homeworkPracticed, [id]: localDay() } })),
     }),
     {
       name: 'miditutor-settings',

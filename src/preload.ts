@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   openPiece: () => ipcRenderer.invoke('piece:open'),
   // Every score in ~/MidiTutor Pieces: [{ file, title, musicxml, trust? }] (trust from trust.json).
   listPieces: () => ipcRenderer.invoke('pieces:list'),
+  // ~/MidiTutor Pieces/homework.json (JP's newest lesson entry), or null.
+  getHomework: () => ipcRenderer.invoke('homework:get'),
   // Take recorder (#9574): toggle, current status, and the piano audio rendered after Stop.
   toggleRecording: () => ipcRenderer.invoke('recorder:toggle'),
   recordingStatus: () => ipcRenderer.invoke('recorder:status'),

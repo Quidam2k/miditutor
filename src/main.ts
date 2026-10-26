@@ -227,6 +227,14 @@ const startTutorApi = () => {
     else settleAudio(msg.id, null, { sampleRate: msg.sampleRate, channels: msg.channels });
   });
   ipcMain.handle('pieces:list', listPieces);
+  // JP's newest lesson entry, written by scripts/homework_sync.py; null until the first sync (#5058).
+  ipcMain.handle('homework:get', async () => {
+    try {
+      return JSON.parse(await fs.readFile(path.join(piecesDir(), 'homework.json'), 'utf8'));
+    } catch {
+      return null;
+    }
+  });
   ipcMain.handle('piece:open', async () => {
     await fs.mkdir(piecesDir(), { recursive: true }).catch(() => undefined);
     const options: OpenDialogOptions = {

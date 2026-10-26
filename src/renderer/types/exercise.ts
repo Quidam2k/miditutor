@@ -1,6 +1,6 @@
 import { Clef, Pitch } from './music';
 
-export type ExerciseType = 'note-identification' | 'interval';
+export type ExerciseType = 'note-identification' | 'interval' | 'homework';
 
 export type ExercisePhase = 'idle' | 'presenting' | 'awaiting-input' | 'feedback';
 
