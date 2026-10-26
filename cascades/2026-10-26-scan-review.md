@@ -40,4 +40,20 @@ Decided: (A) DESK on Solace, inside the MidiTutor app (Review tab). Not TV, not 
   of the packaged exe with --review --library); e2e; real end to end on a SCRATCH copy of O Holy Night m27; screenshots;
   commit (marker #9664); memory miditutor-scan-review; app build to Pinocchio under idle guard (badge text).
 
+## AMEND #9666 (Todd msg 50722): BOTH surfaces, shared core, desk FIRST
+Todd sits at Pinocchio on a stool with keyboard + mouse/trackball. Build: desk interface (P1-P4 above), THEN P5.
+- One store on Solace (authoritative): library/review/<slug>.events.jsonl, append-only events
+  {id uuid, origin solace|pinocchio, ts, kind mark|confirm_system|accept|reject|note, ...}; state = fold of events.
+  Both UIs read/write events only (no whole-file last-write-wins).
+- Conflict rule: merge by event id. A later mark on a system voids that system's confirm. Accept applies only if the
+  proposal's base sha256 == current score file; else "score changed, re-checking" and re-queue. Verified-by-you is
+  recomputed from the fold on every apply.
+- P5 Pinocchio data path: review_layout.py also writes 150-dpi JPEG system crops -> library/review-pages/<slug>/;
+  sync_pieces.sh copies review-pages + review/*.json(l) + proposals to ~/MidiTutor Pieces/review/.
+  Pinocchio app appends its events to ~/MidiTutor Pieces/review/outbox/*.jsonl (persisted until acked).
+  Solace `review_queue.py pull` (scp only, no tunnel needed): fetch outbox -> merge -> run proposals (single flight,
+  load tripwire) -> push proposals + merged events + repaired scores back (sync_pieces). App fs.watch's review/.
+  Trigger: a Pantheon scheduled task (like #319, owner jarvis) every 2 min, no-op on empty outbox -- Jarvis creates it.
+  Mark shows "checking…" until a proposal arrives.
+
 ⚠️ NEXT: P1. Start by reading ScoreView.tsx:180-260 and the omr-* page outputs for o-holy-night.
