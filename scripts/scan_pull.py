@@ -23,6 +23,9 @@ from PIL import Image
 
 SCANNER = "~/Applications/sane/bin/scanimage"
 SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+# Show-through from the back of the sheet scans as light gray staves that homr reads
+# as extra bars (a one-page song came back with 40 bars instead of 8, #9499).
+BLEED_CUTOFF = 140
 
 
 def progress(message: str) -> None:
@@ -49,6 +52,14 @@ def parse_stat(text: str) -> dict[str, int]:
             raise ValueError(f"Duplicate remote filename: {name}")
         files[name] = int(size)
     return files
+
+
+def without_bleed(png: Path) -> Path:
+    """A grayscale copy of png with the show-through whitened, for OMR."""
+    clean = png.with_name(png.stem + ".omr.png")
+    with Image.open(png) as img, img.convert("L") as gray:
+        gray.point(lambda v: 255 if v > BLEED_CUTOFF else v).save(clean)
+    return clean
 
 
 def ink_fraction(img: Image.Image) -> float:
@@ -213,7 +224,11 @@ def execute(args: argparse.Namespace) -> int:
         musicxml = error = None
         if args.music and not blank:
             try:
-                xml = photo_to_musicxml(png)
+                clean = without_bleed(png)
+                try:
+                    xml = photo_to_musicxml(clean)
+                finally:
+                    clean.unlink()
                 target = args.library / stamp / (png.stem + ".musicxml")
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(xml, encoding="utf-8")
