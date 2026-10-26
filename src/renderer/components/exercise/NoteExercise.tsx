@@ -6,10 +6,17 @@ import { useSessionStore } from '../../store/useSessionStore';
 import { useMidiStore } from '../../store/useMidiStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { ExerciseEngine } from '../../engine/ExerciseEngine';
-import { pitchToDisplayName } from '../../engine/MusicTheory';
+import { midiNumberToPitch, pitchToDisplayName } from '../../engine/MusicTheory';
+import { Pitch } from '../../types/music';
 import { playNote, playCorrectSound, playWrongSound, initAudio, isInitialized } from '../../audio/AudioEngine';
 
 const FEEDBACK_DURATION = 800;
+
+// The keys he played that were not asked for, spelled like the prompt (flats if it uses flats).
+function wrongPitches(played: number[], expected: number[], prompt: Pitch[]): Pitch[] {
+  const flats = prompt.some((p) => p.accidental === 'flat');
+  return [...new Set(played.filter((n) => !expected.includes(n)))].map((n) => midiNumberToPitch(n, flats));
+}
 
 export function NoteExercise() {
   const engineRef = useRef<ExerciseEngine | null>(null);
@@ -19,6 +26,7 @@ export function NoteExercise() {
   const { lastNoteOn } = useMidiStore();
   const { clef, audioEnabled, showNoteNames } = useSettingsStore();
   const [highlightColor, setHighlightColor] = useState<string | null>(null);
+  const [wrongNotes, setWrongNotes] = useState<Pitch[]>([]);
   const [started, setStarted] = useState(false);
   const lastProcessedTimestamp = useRef<number>(0);
 
@@ -34,6 +42,7 @@ export function NoteExercise() {
 
   const nextExercise = useCallback(() => {
     setHighlightColor(null);
+    setWrongNotes([]);
     const engine = engineRef.current!;
     const exercise = engine.generateExercise();
     setExercise(exercise);
@@ -69,7 +78,8 @@ export function NoteExercise() {
       setHighlightColor('green');
       if (audioEnabled) playCorrectSound();
     } else {
-      setHighlightColor('red');
+      // The target stays black; the key he played is drawn red beside it (#4045).
+      setWrongNotes(wrongPitches([lastNoteOn.note], currentExercise.expectedMidiNumbers, currentExercise.prompt));
       if (audioEnabled) {
         playWrongSound();
         // Play the correct note so student can hear it
@@ -112,6 +122,7 @@ export function NoteExercise() {
           notes={currentExercise?.prompt ?? []}
           clef={clef}
           highlightColor={highlightColor}
+          wrongNotes={wrongNotes}
         />
         <FeedbackOverlay result={lastResult} visible={phase === 'feedback'} />
       </div>

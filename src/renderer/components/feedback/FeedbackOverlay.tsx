@@ -26,14 +26,14 @@ export function FeedbackOverlay({ result, visible }: FeedbackOverlayProps) {
   return (
     <div
       className={`
-        absolute inset-0 flex items-center justify-center pointer-events-none z-10
+        absolute inset-0 flex items-end justify-center pb-2 pointer-events-none z-10
         transition-opacity duration-300
         ${visible ? 'opacity-100' : 'opacity-0'}
       `}
     >
       <div
         className={`
-          px-8 py-4 rounded-2xl text-2xl font-bold
+          px-5 py-2 rounded-2xl text-xl font-bold
           ${correct
             ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
             : 'bg-red-500/20 text-red-400 border border-red-500/30'

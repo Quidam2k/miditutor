@@ -5,10 +5,11 @@ interface StaffDisplayProps {
   notes: Pitch[];
   clef: Clef;
   highlightColor?: string | null;
+  wrongNotes?: Pitch[];
 }
 
-export function StaffDisplay({ notes, clef, highlightColor = null }: StaffDisplayProps) {
-  const containerRef = useVexFlow({ notes, clef, highlightColor });
+export function StaffDisplay({ notes, clef, highlightColor = null, wrongNotes }: StaffDisplayProps) {
+  const containerRef = useVexFlow({ notes, clef, highlightColor, wrongNotes });
 
   return (
     <div

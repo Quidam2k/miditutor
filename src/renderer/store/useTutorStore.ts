@@ -17,17 +17,23 @@ interface TutorState {
   pieces: PushedPiece[];
   /** Bumped when a piece is pushed, so the Score view selects it. */
   selectPieceId: string | null;
+  /** A loop the API asked for (bars, 1-based); null = clear. `seq` makes repeats distinct. */
+  loopRequest: { seq: number; firstBar: number; lastBar: number } | { seq: number; clear: true } | null;
   setTask: (task: Task | null) => void;
+  requestLoop: (bars: { firstBar: number; lastBar: number } | null) => void;
   addPiece: (p: Omit<PushedPiece, 'id'>) => void;
 }
 
 let pieceSeq = 0;
+let loopSeq = 0;
 
 export const useTutorStore = create<TutorState>((set) => ({
   task: null,
   pieces: [],
   selectPieceId: null,
+  loopRequest: null,
   setTask: (task) => set({ task }),
+  requestLoop: (bars) => set({ loopRequest: bars ? { seq: ++loopSeq, ...bars } : { seq: ++loopSeq, clear: true } }),
   addPiece: (p) =>
     set((s) => {
       const id = `pushed-${++pieceSeq}`;

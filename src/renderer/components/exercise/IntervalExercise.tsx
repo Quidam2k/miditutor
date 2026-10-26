@@ -6,21 +6,27 @@ import { useSessionStore } from '../../store/useSessionStore';
 import { useMidiStore } from '../../store/useMidiStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { ExerciseEngine } from '../../engine/ExerciseEngine';
-import { getIntervalName, pitchToDisplayName } from '../../engine/MusicTheory';
+import { getIntervalName, midiNumberToPitch, pitchToDisplayName } from '../../engine/MusicTheory';
+import { Pitch } from '../../types/music';
 import { playChord, playCorrectSound, playWrongSound, initAudio, isInitialized } from '../../audio/AudioEngine';
 
 const FEEDBACK_DURATION = 1200;
+
+// The keys he played that were not asked for, spelled like the prompt (flats if it uses flats).
+function wrongPitches(played: number[], expected: number[], prompt: Pitch[]): Pitch[] {
+  const flats = prompt.some((p) => p.accidental === 'flat');
+  return [...new Set(played.filter((n) => !expected.includes(n)))].map((n) => midiNumberToPitch(n, flats));
+}
 
 export function IntervalExercise() {
   const engineRef = useRef<ExerciseEngine | null>(null);
   const { currentExercise, lastResult, phase, playedNotes, presentedAt, setExercise, setResult, setPhase, addPlayedNote, clearPlayedNotes } =
     useExerciseStore();
   const { recordResult, startSession } = useSessionStore();
-  const { lastNoteOn } = useMidiStore();
   const { clef, audioEnabled } = useSettingsStore();
   const [highlightColor, setHighlightColor] = useState<string | null>(null);
+  const [wrongNotes, setWrongNotes] = useState<Pitch[]>([]);
   const [started, setStarted] = useState(false);
-  const lastProcessedTimestamp = useRef<number>(0);
 
   if (!engineRef.current) {
     engineRef.current = new ExerciseEngine(clef, 'interval');
@@ -33,6 +39,7 @@ export function IntervalExercise() {
 
   const nextExercise = useCallback(() => {
     setHighlightColor(null);
+    setWrongNotes([]);
     clearPlayedNotes();
     const engine = engineRef.current!;
     const exercise = engine.generateExercise();
@@ -49,16 +56,14 @@ export function IntervalExercise() {
     nextExercise();
   }, [nextExercise, startSession]);
 
-  // Handle MIDI input — collect two notes
+  // Handle MIDI input — collect two notes. Subscribe to every note-on: two keys struck
+  // together can land in one React render, and an effect on lastNoteOn would see only one.
   useEffect(() => {
-    if (!lastNoteOn) return;
-    if (phase !== 'awaiting-input') return;
-    if (!currentExercise) return;
-    if (lastNoteOn.timestamp <= lastProcessedTimestamp.current) return;
-
-    lastProcessedTimestamp.current = lastNoteOn.timestamp;
-    addPlayedNote(lastNoteOn.note);
-  }, [lastNoteOn, phase, currentExercise, addPlayedNote]);
+    if (phase !== 'awaiting-input' || !currentExercise) return;
+    return useMidiStore.subscribe((state, prev) => {
+      if (state.lastNoteOn && state.lastNoteOn !== prev.lastNoteOn) addPlayedNote(state.lastNoteOn.note);
+    });
+  }, [phase, currentExercise, addPlayedNote]);
 
   // Evaluate when we have enough notes
   useEffect(() => {
@@ -77,7 +82,8 @@ export function IntervalExercise() {
       setHighlightColor('green');
       if (audioEnabled) playCorrectSound();
     } else {
-      setHighlightColor('red');
+      // The target stays black; the key(s) he played wrong are drawn red beside it (#4045).
+      setWrongNotes(wrongPitches(playedNotes, currentExercise.expectedMidiNumbers, currentExercise.prompt));
       if (audioEnabled) {
         playWrongSound();
         setTimeout(() => {
@@ -120,6 +126,7 @@ export function IntervalExercise() {
           notes={currentExercise?.prompt ?? []}
           clef={clef}
           highlightColor={highlightColor}
+          wrongNotes={wrongNotes}
         />
         <FeedbackOverlay result={lastResult} visible={phase === 'feedback'} />
       </div>

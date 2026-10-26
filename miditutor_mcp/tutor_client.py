@@ -117,6 +117,11 @@ def recent(seconds: float | None = None, limit: int = 50) -> dict:
         compact_gestures.append(
             {"id": gesture["id"], "names": gesture["names"], "chord": chord}
         )
+    # Pedal, follower verdicts, loop/lap/piece changes (#9481) carry no plain note:
+    # pass them through as-is. Velocity etc. stay in the raw /events.
+    feed_kinds = {"pedal", "follow", "loop", "lap", "piece", "screenshot"}
+    notes = [e for e in events if "note" in e and e.get("kind") not in feed_kinds]
+    feed = [{k: v for k, v in e.items() if k != "seq"} for e in events if e.get("kind") in feed_kinds]
     return {
         "notes": [
             {
@@ -124,8 +129,9 @@ def recent(seconds: float | None = None, limit: int = 50) -> dict:
                 "kind": event["kind"],
                 "t": event["timestamp"],
             }
-            for event in events
+            for event in notes
         ],
+        "feed": feed,
         "gestures": compact_gestures,
     }
 

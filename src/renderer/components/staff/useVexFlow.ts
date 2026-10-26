@@ -30,9 +30,14 @@ interface UseVexFlowOptions {
   notes: Pitch[];
   clef: Clef;
   highlightColor?: string | null; // null = default, 'green', 'red'
+  /** Keys he played that were not asked for, drawn red beside the target. */
+  wrongNotes?: Pitch[];
 }
 
-export function useVexFlow({ notes, clef, highlightColor }: UseVexFlowOptions) {
+const HIGHLIGHT: Record<string, string> = { green: '#22c55e', red: '#ef4444' };
+const WRONG_RED = '#ef4444';
+
+export function useVexFlow({ notes, clef, highlightColor, wrongNotes }: UseVexFlowOptions) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const render = useCallback(() => {
@@ -59,68 +64,27 @@ export function useVexFlow({ notes, clef, highlightColor }: UseVexFlowOptions) {
 
     if (notes.length === 0) return;
 
-    // Create VexFlow notes
-    const staveNotes = notes.map((pitch) => {
-      const key = pitchToVexFlowKey(pitch);
-      const staveNote = new StaveNote({
-        keys: [key],
-        duration: 'w', // whole note
-        clef,
-      });
-
-      // Add accidental if needed
-      const acc = getVexFlowAccidental(pitch);
-      if (acc) {
-        staveNote.addModifier(new Accidental(acc));
-      }
-
-      // Color the note
-      if (highlightColor) {
-        const color = highlightColor === 'green' ? '#22c55e' : '#ef4444';
-        staveNote.setStyle({ fillStyle: color, strokeStyle: color });
-      }
-
-      return staveNote;
-    });
-
-    // If multiple notes, show them as a chord (single StaveNote with multiple keys)
-    // But our current approach creates separate StaveNotes, which is fine for intervals
-    // displayed sequentially. For the MVP, let's show them as separate whole notes.
-
-    // Actually, for intervals we want both notes visible. Let's create one StaveNote
-    // with multiple keys if there are multiple pitches.
-    if (notes.length > 1) {
-      const keys = notes.map(pitchToVexFlowKey);
-      const chordNote = new StaveNote({
-        keys: keys.sort(), // VexFlow expects keys sorted low to high
-        duration: 'w',
-        clef,
-      });
-
-      // Add accidentals
-      notes.forEach((pitch, i) => {
+    // One whole note (or chord) per group: the target, then, after a wrong answer,
+    // the key(s) he actually played in red beside it (#4045).
+    const makeNote = (pitches: Pitch[], color: string | null) => {
+      const sorted = [...pitches].sort((a, b) => a.midiNumber - b.midiNumber);
+      const note = new StaveNote({ keys: sorted.map(pitchToVexFlowKey), duration: 'w', clef });
+      sorted.forEach((pitch, i) => {
         const acc = getVexFlowAccidental(pitch);
-        if (acc) {
-          chordNote.addModifier(new Accidental(acc), i);
-        }
+        if (acc) note.addModifier(new Accidental(acc), i);
       });
+      if (color) note.setStyle({ fillStyle: color, strokeStyle: color });
+      return note;
+    };
 
-      if (highlightColor) {
-        const color = highlightColor === 'green' ? '#22c55e' : '#ef4444';
-        chordNote.setStyle({ fillStyle: color, strokeStyle: color });
-      }
+    const tickables = [makeNote(notes, highlightColor ? HIGHLIGHT[highlightColor] ?? null : null)];
+    if (wrongNotes && wrongNotes.length > 0) tickables.push(makeNote(wrongNotes, WRONG_RED));
 
-      const voice = new Voice({ numBeats: 4, beatValue: 4 });
-      voice.addTickables([chordNote]);
-      new Formatter().joinVoices([voice]).format([voice], staveWidth - 60);
-      voice.draw(context, stave);
-    } else {
-      const voice = new Voice({ numBeats: 4, beatValue: 4 });
-      voice.addTickables(staveNotes);
-      new Formatter().joinVoices([voice]).format([voice], staveWidth - 60);
-      voice.draw(context, stave);
-    }
-  }, [notes, clef, highlightColor]);
+    const voice = new Voice({ numBeats: 4 * tickables.length, beatValue: 4 });
+    voice.addTickables(tickables);
+    new Formatter().joinVoices([voice]).format([voice], staveWidth - 60);
+    voice.draw(context, stave);
+  }, [notes, clef, highlightColor, wrongNotes]);
 
   useEffect(() => {
     render();

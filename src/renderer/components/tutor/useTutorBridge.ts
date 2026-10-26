@@ -9,6 +9,7 @@ import type { RendererCommand } from '../../../main/tutorApi';
 
 interface TutorBridge {
   note: (ev: unknown) => void;
+  event?: (ev: unknown) => void;
   screen: (state: unknown) => void;
   device: (d: unknown) => void;
   openPiece: () => Promise<{ title: string; musicxml: string } | null>;
@@ -24,6 +25,11 @@ declare global {
 /** Report on-screen state (piece, bar, feedback) to the tutor API. No-op outside Electron. */
 export function reportScreen(state: Record<string, unknown>) {
   window.tutorBridge?.screen(state);
+}
+
+/** Add one entry to the API's debugging feed (/events + the on-box log). No-op outside Electron. */
+export function reportEvent(kind: string, data: Record<string, unknown> = {}) {
+  window.tutorBridge?.event?.({ kind, timestamp: Date.now(), ...data });
 }
 
 export function useTutorBridge(onShowScore: () => void) {
@@ -45,6 +51,10 @@ export function useTutorBridge(onShowScore: () => void) {
         source: latest.source,
         timestamp: latest.timestamp,
       });
+    });
+
+    const unsubPedal = useMidiStore.subscribe((s, p) => {
+      if (s.pedal !== p.pedal) reportEvent('pedal', { down: s.pedal });
     });
 
     const reportDevice = () => {
@@ -76,6 +86,13 @@ export function useTutorBridge(onShowScore: () => void) {
         case 'clear-task':
           useTutorStore.getState().setTask(null);
           break;
+        case 'loop':
+          useTutorStore.getState().requestLoop({ firstBar: cmd.firstBar, lastBar: cmd.lastBar });
+          onShowScore();
+          break;
+        case 'clear-loop':
+          useTutorStore.getState().requestLoop(null);
+          break;
         case 'piece':
           useTutorStore.getState().addPiece({ label: cmd.title, xml: cmd.musicxml, photo: cmd.photo });
           onShowScore();
@@ -85,6 +102,7 @@ export function useTutorBridge(onShowScore: () => void) {
 
     return () => {
       unsubNotes();
+      unsubPedal();
       unsubDevice();
       unsubCmd();
     };

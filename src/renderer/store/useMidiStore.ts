@@ -22,6 +22,12 @@ interface MidiState {
   noteLog: MidiLogEntry[];
   enabled: boolean;
   error: string | null;
+  /** Sustain pedal (CC64) down. */
+  pedal: boolean;
+  /** Keys physically held down right now. */
+  held: ReadonlySet<number>;
+  /** Keys released while the pedal is down: still ringing until it lifts. */
+  pedalRinging: ReadonlySet<number>;
 
   setConnected: (connected: boolean) => void;
   setDevices: (devices: MidiDevice[]) => void;
@@ -31,6 +37,7 @@ interface MidiState {
   // appends to the monitor log and, on note-on, drives the exercise engine.
   ingestNote: (args: IngestArgs) => void;
   clearLog: () => void;
+  setPedal: (down: boolean) => void;
   setEnabled: (enabled: boolean) => void;
   setError: (error: string | null) => void;
 }
@@ -43,6 +50,9 @@ export const useMidiStore = create<MidiState>((set) => ({
   noteLog: [],
   enabled: false,
   error: null,
+  pedal: false,
+  held: new Set<number>(),
+  pedalRinging: new Set<number>(),
 
   setConnected: (connected) => set({ connected }),
   setDevices: (devices) => set({ devices }),
@@ -63,10 +73,20 @@ export const useMidiStore = create<MidiState>((set) => ({
         timestamp: ts,
       };
       const noteLog = [entry, ...state.noteLog].slice(0, MAX_LOG);
-      return kind === 'noteon'
-        ? { noteLog, lastNoteOn: { note, velocity, timestamp: ts } }
-        : { noteLog };
+      const held = new Set(state.held);
+      const pedalRinging = new Set(state.pedalRinging);
+      if (kind === 'noteon') {
+        held.add(note);
+        pedalRinging.delete(note);
+        return { noteLog, held, pedalRinging, lastNoteOn: { note, velocity, timestamp: ts } };
+      }
+      held.delete(note);
+      if (state.pedal) pedalRinging.add(note);
+      return { noteLog, held, pedalRinging };
     }),
+
+  setPedal: (down) =>
+    set((state) => (down === state.pedal ? {} : { pedal: down, pedalRinging: down ? state.pedalRinging : new Set<number>() })),
 
   clearLog: () => set({ noteLog: [] }),
   setEnabled: (enabled) => set({ enabled }),

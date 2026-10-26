@@ -30,7 +30,9 @@ export type RendererCommand =
   | { type: 'task'; task: Task }
   | { type: 'clear-task' }
   | { type: 'piece'; title: string; musicxml: string; photo?: string }
-  | { type: 'inject'; kind: 'noteon' | 'noteoff'; note: number; velocity: number };
+  | { type: 'inject'; kind: 'noteon' | 'noteoff'; note: number; velocity: number }
+  | { type: 'loop'; firstBar: number; lastBar: number }
+  | { type: 'clear-loop' };
 
 type NoteEvent = {
   kind: 'noteon' | 'noteoff';
@@ -39,6 +41,12 @@ type NoteEvent = {
   source: string;
   timestamp: number;
 };
+
+/**
+ * Anything else the renderer reports for remote debugging (#9481): pedal changes,
+ * what the score follower made of each key, loop/restart/piece changes.
+ */
+type FeedEvent = { kind: string; timestamp: number } & Record<string, unknown>;
 
 type Waiter = {
   after: number;
@@ -74,7 +82,9 @@ export class TutorApi {
   private interval: ReturnType<typeof setInterval> | null = null;
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private readonly waiters = new Set<Waiter>();
-  private readonly events: (NoteEvent & { seq: number })[] = [];
+  private readonly events: ((NoteEvent | FeedEvent) & { seq: number })[] = [];
+  private wrongTimes: number[] = [];
+  private lastBurstShot = 0;
   private readonly gestures: Gesture[] = [];
   private eventSeq = 0;
   private lastGestureId = 0;
@@ -94,6 +104,8 @@ export class TutorApi {
     now?: () => number;
     /** PNG of the window, for GET /screenshot. */
     capture?: () => Promise<Buffer>;
+    /** Append-only on-box log folder: one JSONL file a day, plus wrong-burst screenshots. */
+    logDir?: string;
   }) {
     this.now = opts.now ?? Date.now;
   }
@@ -151,10 +163,57 @@ export class TutorApi {
   }
 
   onNote(ev: NoteEvent): void {
-    this.events.push({ ...ev, seq: ++this.eventSeq });
-    if (this.events.length > 2000) this.events.shift();
+    this.record(ev);
     if (ev.kind === 'noteon') this.tracker.noteOn(ev.note, this.now());
     else this.tracker.noteOff(ev.note, this.now());
+  }
+
+  onEvent(ev: FeedEvent): void {
+    if (!ev || typeof ev.kind !== 'string' || ev.kind === 'noteon' || ev.kind === 'noteoff') return;
+    this.record({ ...ev, timestamp: typeof ev.timestamp === 'number' ? ev.timestamp : this.now() });
+    if (ev.kind === 'follow' && ev.result === 'wrong') this.noteWrong();
+  }
+
+  private record(ev: NoteEvent | FeedEvent): void {
+    const entry = { ...ev, seq: ++this.eventSeq };
+    this.events.push(entry);
+    if (this.events.length > 2000) this.events.shift();
+    this.appendLog(entry);
+  }
+
+  private logFile(day = new Date(this.now())): string | null {
+    if (!this.opts.logDir) return null;
+    const d = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+    return path.join(this.opts.logDir, `${d}.jsonl`);
+  }
+
+  private appendLog(entry: unknown): void {
+    const file = this.logFile();
+    if (!file) return;
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+    } catch (error) {
+      console.warn('[tutor-api] log append failed:', (error as Error).message);
+    }
+  }
+
+  // Three wrong notes inside 5 s saves a screenshot next to the log (at most one per 30 s).
+  private noteWrong(): void {
+    const now = this.now();
+    this.wrongTimes = [...this.wrongTimes.filter((t) => now - t < 5000), now];
+    if (this.wrongTimes.length < 3 || now - this.lastBurstShot < 30000) return;
+    const { capture, logDir } = this.opts;
+    if (!capture || !logDir) return;
+    this.lastBurstShot = now;
+    const file = path.join(logDir, `wrong-burst-${now}.png`);
+    capture()
+      .then((png) => {
+        fs.mkdirSync(logDir, { recursive: true });
+        fs.writeFileSync(file, png);
+        this.record({ kind: 'screenshot', reason: 'wrong-burst', file: path.basename(file), timestamp: now });
+      })
+      .catch((error: unknown) => console.warn('[tutor-api] burst screenshot failed:', (error as Error).message));
   }
 
   onRendererState(s: Record<string, unknown>): void {
@@ -280,6 +339,32 @@ export class TutorApi {
           this.waiters.delete(waiter);
         }
       });
+    } else if (route === 'GET /log') {
+      // The on-box log for one day (default today), last `tail` lines.
+      const day = url.searchParams.get('date');
+      if (day !== null && !/^\d{4}-\d{2}-\d{2}$/.test(day)) throw new HttpError(400, 'Invalid date');
+      const tail = this.number(url, 'tail', 500, 20000, 1);
+      const file = day && this.opts.logDir ? path.join(this.opts.logDir, `${day}.jsonl`) : this.logFile();
+      if (!file) throw new HttpError(404, 'Not found');
+      let lines: string[] = [];
+      try {
+        lines = fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      send({ file: path.basename(file), total: lines.length,
+        entries: lines.slice(-tail).map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } }) });
+    } else if (route === 'POST /loop') {
+      const { firstBar, lastBar } = await this.body(req);
+      if (!Number.isSafeInteger(firstBar) || !Number.isSafeInteger(lastBar) ||
+          (firstBar as number) < 1 || (lastBar as number) < 1) {
+        throw new HttpError(400, 'Expected firstBar and lastBar (1-based bar numbers)');
+      }
+      this.opts.sendToRenderer({ type: 'loop', firstBar: firstBar as number, lastBar: lastBar as number });
+      send({ ok: true });
+    } else if (route === 'DELETE /loop') {
+      this.opts.sendToRenderer({ type: 'clear-loop' });
+      send({ ok: true });
     } else if (route === 'GET /screenshot') {
       if (!this.opts.capture) throw new HttpError(404, 'Not found');
       const png = await this.opts.capture();

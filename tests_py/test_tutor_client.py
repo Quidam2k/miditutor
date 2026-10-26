@@ -130,6 +130,7 @@ def test_bearer_header(app):
 def test_recent_filters_old_notes_and_gestures(app):
     assert tutor_client.recent(seconds=5) == {
         "notes": [{"name": "D#4", "kind": "on", "t": app["now_ms"]}],
+        "feed": [],
         "gestures": [{"id": 2, "names": ["F4", "A4", "C5"], "chord": "F major"}],
     }
     assert [entry["path"] for entry in app["seen"]] == [

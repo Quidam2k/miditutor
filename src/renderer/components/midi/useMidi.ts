@@ -1,5 +1,5 @@
 import { useEffect, useCallback } from 'react';
-import { WebMidi, Input, NoteMessageEvent } from 'webmidi';
+import { WebMidi, Input, NoteMessageEvent, ControlChangeMessageEvent } from 'webmidi';
 import { useMidiStore } from '../../store/useMidiStore';
 import { MidiDevice } from '../../types/midi';
 
@@ -12,7 +12,7 @@ function toDevice(input: Input): MidiDevice {
 }
 
 export function useMidi() {
-  const { setDevices, setActiveDevice, ingestNote, setEnabled, setError, setConnected } =
+  const { setDevices, setActiveDevice, ingestNote, setPedal, setEnabled, setError, setConnected } =
     useMidiStore();
 
   // Attach note-on / note-off listeners that funnel through the store's single
@@ -39,8 +39,12 @@ export function useMidi() {
           timestamp: Date.now(),
         });
       });
+      // Sustain pedal: notes released while it is down keep ringing (#9480).
+      input.addListener('controlchange', (e: ControlChangeMessageEvent) => {
+        if (e.controller.number === 64) setPedal((e.rawValue ?? 0) >= 64);
+      });
     },
-    [ingestNote],
+    [ingestNote, setPedal],
   );
 
   const connectFirstInput = useCallback(() => {

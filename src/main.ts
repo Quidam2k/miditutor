@@ -89,6 +89,7 @@ const startTutorApi = () => {
   tutorApi = new TutorApi({
     port: Number(process.env.MIDITUTOR_PORT ?? 47800),
     token: loadOrCreateToken(app.getPath('userData')),
+    logDir: path.join(app.getPath('userData'), 'logs'),
     allowInject: !app.isPackaged || process.env.MIDITUTOR_ALLOW_INJECT === '1',
     sendToRenderer: send,
     capture: async () => {
@@ -97,6 +98,7 @@ const startTutorApi = () => {
     },
   });
   ipcMain.on('tutor:note', (_e, ev) => tutorApi?.onNote(ev));
+  ipcMain.on('tutor:event', (_e, ev) => tutorApi?.onEvent(ev));
   ipcMain.on('tutor:screen', (_e, st) => tutorApi?.onRendererState(st));
   ipcMain.on('tutor:device', (_e, d) => tutorApi?.onDevice(d));
   tutorApi
