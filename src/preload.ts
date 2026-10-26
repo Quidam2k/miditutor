@@ -15,6 +15,11 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   openPiece: () => ipcRenderer.invoke('piece:open'),
   // Every score in ~/MidiTutor Pieces: [{ file, title, musicxml }].
   listPieces: () => ipcRenderer.invoke('pieces:list'),
+  // Take recorder (#9574): toggle, current status, and the piano audio rendered after Stop.
+  toggleRecording: () => ipcRenderer.invoke('recorder:toggle'),
+  recordingStatus: () => ipcRenderer.invoke('recorder:status'),
+  takePcm: (id: string, data: Uint8Array) => ipcRenderer.send('recorder:pcm', { id, data }),
+  takePcmDone: (msg: unknown) => ipcRenderer.send('recorder:pcm-done', msg),
   onCommand: (cb: Listener) => {
     const handler = (_e: IpcRendererEvent, cmd: unknown) => cb(cmd);
     ipcRenderer.on('tutor:command', handler);

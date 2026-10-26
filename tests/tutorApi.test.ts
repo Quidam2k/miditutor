@@ -66,6 +66,7 @@ describe('TutorApi', () => {
       lastGestureId: 0,
       eventSeq: 0,
       injectEnabled: true,
+      recording: null,
     });
   });
 

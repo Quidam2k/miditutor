@@ -1,9 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, OpenDialogOptions, session } from 'electron';
+import { createWriteStream, WriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import JSZip from 'jszip';
 import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
+import { Recorder, outputSize } from './main/recorder';
 import {
   MUSICXML_EXTENSIONS,
   isPieceFileName,
@@ -114,7 +116,97 @@ const savePiece = async (title: string, musicxml: string) => {
   await fs.writeFile(path.join(piecesDir(), pieceFileName(title)), musicxml, 'utf8');
 };
 
+// Take recorder (#9574): the window's own frames -> bundled ffmpeg, plus piano
+// audio the renderer renders from his MIDI after Stop. Saved to ~/Movies/MidiTutor
+// (Videos\MidiTutor on Windows). beginFrameSubscription needs no Screen
+// Recording permission, unlike desktopCapturer.
+const ffmpegPath = () => {
+  if (process.env.MIDITUTOR_FFMPEG) return process.env.MIDITUTOR_FFMPEG;
+  const name = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  return app.isPackaged
+    ? path.join(process.resourcesPath, name)
+    : path.join(app.getAppPath(), 'node_modules', 'ffmpeg-static', name);
+};
+const recordingsDir = () =>
+  process.env.MIDITUTOR_RECORDINGS_DIR || path.join(app.getPath('videos'), 'MidiTutor');
+
+// The renderer streams a take's PCM back in chunks; each take waits here until done.
+const pendingAudio = new Map<string, {
+  out: WriteStream;
+  resolve: (fmt: { sampleRate: number; channels: number }) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
+
+const settleAudio = (id: string, err: Error | null, fmt?: { sampleRate: number; channels: number }) => {
+  const pending = pendingAudio.get(id);
+  if (!pending) return;
+  pendingAudio.delete(id);
+  clearTimeout(pending.timer);
+  if (err || !fmt) {
+    pending.out.destroy();
+    pending.reject(err ?? new Error('no audio'));
+  } else {
+    pending.out.end((e?: Error | null) => (e ? pending.reject(e) : pending.resolve(fmt)));
+  }
+};
+
+// Built once the app is ready (app paths), in startTutorApi.
+let recorder!: Recorder;
+const makeRecorder = () => new Recorder({
+  ffmpegPath: ffmpegPath(),
+  outDir: recordingsDir(),
+  frames: (size) => {
+    const wc = mainWindow?.webContents;
+    if (!wc) throw new Error('no window');
+    return {
+      subscribe: (cb) => wc.beginFrameSubscription(false, (image) =>
+        cb(() => image.resize({ ...size, quality: 'good' }).toBitmap())),
+      unsubscribe: () => { if (!wc.isDestroyed()) wc.endFrameSubscription(); },
+    };
+  },
+  renderAudio: ({ id, events, durationMs, pcmPath }) => new Promise((resolve, reject) => {
+    if (!mainWindow) return reject(new Error('no window'));
+    // A minute of audio renders in well under a second; allow generously for long takes.
+    const timer = setTimeout(() => settleAudio(id, new Error('render timed out')), 60_000 + durationMs);
+    const out = createWriteStream(pcmPath);
+    out.on('error', (err) => settleAudio(id, err));   // disk full, permissions
+    pendingAudio.set(id, { out, resolve, reject, timer });
+    mainWindow.webContents.send('tutor:command', { type: 'render-take', id, events, durationMs });
+  }),
+  onStatus: (status) => mainWindow?.webContents.send('tutor:command', { type: 'recording', status }),
+  onEvent: (ev) => tutorApi?.onEvent({ kind: 'recording', timestamp: Date.now(), ...ev }),
+});
+
+const startTake = () => {
+  if (!mainWindow) throw new Error('no window');
+  const [width, height] = mainWindow.getContentSize();
+  return recorder.start(outputSize(width, height));
+};
+
+// The button does not wait for the save; the status push reports it.
+const stopTake = () => {
+  recorder.stop().catch((err) => console.warn('[recorder] take failed:', (err as Error).message));
+};
+
 const startTutorApi = () => {
+  recorder = makeRecorder();
+  ipcMain.handle('recorder:status', () => recorder.status());
+  ipcMain.handle('recorder:toggle', () => {
+    if (recorder.status().state === 'recording') {
+      stopTake();
+    } else {
+      startTake();
+    }
+    return recorder.status();
+  });
+  ipcMain.on('recorder:pcm', (_e, { id, data }: { id: string; data: Uint8Array }) => {
+    pendingAudio.get(id)?.out.write(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+  });
+  ipcMain.on('recorder:pcm-done', (_e, msg: { id: string; sampleRate?: number; channels?: number; error?: string }) => {
+    if (msg.error || !msg.sampleRate || !msg.channels) settleAudio(msg.id, new Error(msg.error ?? 'bad audio'));
+    else settleAudio(msg.id, null, { sampleRate: msg.sampleRate, channels: msg.channels });
+  });
   ipcMain.handle('pieces:list', listPieces);
   ipcMain.handle('piece:open', async () => {
     await fs.mkdir(piecesDir(), { recursive: true }).catch(() => undefined);
@@ -144,9 +236,16 @@ const startTutorApi = () => {
       if (!mainWindow) throw new Error('no window');
       return (await mainWindow.webContents.capturePage()).toPNG();
     },
+    recorder: { status: () => recorder.status(), start: startTake, stop: () => recorder.stop() },
   });
-  ipcMain.on('tutor:note', (_e, ev) => tutorApi?.onNote(ev));
-  ipcMain.on('tutor:event', (_e, ev) => tutorApi?.onEvent(ev));
+  ipcMain.on('tutor:note', (_e, ev) => {
+    tutorApi?.onNote(ev);
+    recorder.noteEvent(ev);
+  });
+  ipcMain.on('tutor:event', (_e, ev) => {
+    tutorApi?.onEvent(ev);
+    if (ev?.kind === 'pedal') recorder.pedalEvent({ down: !!ev.down, timestamp: ev.timestamp ?? Date.now() });
+  });
   ipcMain.on('tutor:screen', (_e, st) => tutorApi?.onRendererState(st));
   ipcMain.on('tutor:device', (_e, d) => tutorApi?.onDevice(d));
   tutorApi
@@ -179,6 +278,12 @@ const createWindow = () => {
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
+
+  // A take outliving its window (closing it on macOS) saves what it has.
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    if (recorder?.status().state === 'recording') stopTake();
+  });
 
   // Log renderer errors to console
   mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {

@@ -3,6 +3,7 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { GestureTracker, checkChord, type Gesture } from '../shared/music';
+import type { RecordingStatus, TakeEvent } from './recorder';
 
 export type TaskResult = {
   verdict: 'correct' | 'wrong' | 'incomplete';
@@ -32,7 +33,9 @@ export type RendererCommand =
   | { type: 'piece'; title: string; musicxml: string; photo?: string }
   | { type: 'inject'; kind: 'noteon' | 'noteoff'; note: number; velocity: number }
   | { type: 'loop'; firstBar: number; lastBar: number }
-  | { type: 'clear-loop' };
+  | { type: 'clear-loop' }
+  | { type: 'recording'; status: RecordingStatus }
+  | { type: 'render-take'; id: string; events: TakeEvent[]; durationMs: number };
 
 type NoteEvent = {
   kind: 'noteon' | 'noteoff';
@@ -108,6 +111,8 @@ export class TutorApi {
     savePiece?: (title: string, musicxml: string) => void;
     /** Append-only on-box log folder: one JSONL file a day, plus wrong-burst screenshots. */
     logDir?: string;
+    /** Take recorder (#9574): POST /record and `recording` in /state. */
+    recorder?: { status(): unknown; start(): unknown; stop(): Promise<string> };
   }) {
     this.now = opts.now ?? Date.now;
   }
@@ -319,7 +324,7 @@ export class TutorApi {
       send({ ok: true, rendererConnected: this.rendererConnected, device: this.device,
         screen: this.screen, task: this.task,
         lastGestureId: this.lastGestureId, eventSeq: this.eventSeq,
-        injectEnabled: this.opts.allowInject });
+        injectEnabled: this.opts.allowInject, recording: this.opts.recorder?.status() ?? null });
     } else if (route === 'GET /events' || route === 'GET /gestures') {
       const since = this.number(url, 'since', 0);
       const limit = this.number(url, 'limit', 200, 2000, 1);
@@ -367,6 +372,29 @@ export class TutorApi {
     } else if (route === 'DELETE /loop') {
       this.opts.sendToRenderer({ type: 'clear-loop' });
       send({ ok: true });
+    } else if (route === 'POST /record') {
+      // Start or stop a take. Stop answers once the mp4 is saved, with its path.
+      const recorder = this.opts.recorder;
+      if (!recorder) throw new HttpError(404, 'Not found');
+      const { action } = await this.body(req);
+      if (action === 'start') {
+        try {
+          recorder.start();
+        } catch (error) {
+          throw new HttpError(409, (error as Error).message);
+        }
+        send({ ok: true, recording: recorder.status() });
+      } else if (action === 'stop') {
+        let file: string;
+        try {
+          file = await recorder.stop();
+        } catch (error) {
+          throw new HttpError(409, (error as Error).message);
+        }
+        send({ ok: true, path: file, recording: recorder.status() });
+      } else {
+        throw new HttpError(400, 'Expected action "start" or "stop"');
+      }
     } else if (route === 'GET /screenshot') {
       if (!this.opts.capture) throw new HttpError(404, 'Not found');
       const png = await this.opts.capture();

@@ -140,7 +140,8 @@ def tutor_status() -> dict:
     """Is the MidiTutor app up, is the keyboard connected, and what is on his
     screen right now (piece, bar, what he must play next, wrong-note count,
     current chord task). screen.expressionMarks lists the dynamics/tempo marks
-    the piece carries; screen.expression is this pass's expression telemetry."""
+    the piece carries; screen.expression is this pass's expression telemetry.
+    `recording` is the take recorder: state, startedAt, lastPath, lastError."""
     return _tutor(tutor_client.state)
 
 
@@ -187,6 +188,16 @@ def tutor_screenshot() -> dict:
 
     dest = Path(tempfile.gettempdir()) / "miditutor-screen.png"  # overwritten each call
     return _tutor(tutor_client.screenshot, dest)
+
+
+@mcp.tool()
+def tutor_record(action: str) -> dict:
+    """Start ("start") or stop ("stop") recording a take of his MidiTutor window
+    as an mp4 with piano audio rendered from his MIDI (a sampled Salamander
+    grand, not the Roland's own sound). Only when Todd asks for it. Stop
+    returns the saved file's path on the app's machine (~/Movies/MidiTutor on
+    Pinocchio); tutor_status shows `recording` (state, lastPath, lastError)."""
+    return _tutor(tutor_client.record, action)
 
 
 @mcp.tool()

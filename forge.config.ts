@@ -7,9 +7,15 @@ import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 
+// The take recorder's ffmpeg (#9574) ships beside app.asar (Resources/ffmpeg),
+// since a binary inside the asar cannot be executed. npm installs the build
+// for the platform doing the packaging.
+const ffmpegBinary = `node_modules/ffmpeg-static/${process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'}`;
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    extraResource: [ffmpegBinary],
   },
   // No native modules are needed at runtime. OSMD pulls in 'gl' (headless image
   // export only), which fails to build for Electron, so skip rebuilding it.

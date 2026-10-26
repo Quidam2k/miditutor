@@ -6,6 +6,7 @@ import { VirtualKeyboardDev } from './components/midi/VirtualKeyboardDev';
 import { ExerciseView } from './components/exercise/ExerciseView';
 import { ScoreView } from './components/score/ScoreView';
 import { useTutorBridge } from './components/tutor/useTutorBridge';
+import { RecordButton, PIANO_CREDIT } from './components/tutor/RecordButton';
 
 type View = 'practice' | 'monitor' | 'score';
 
@@ -43,7 +44,10 @@ export function App() {
             ))}
           </nav>
         </div>
-        <MidiStatus />
+        <div className="flex items-center gap-4">
+          <RecordButton />
+          <MidiStatus />
+        </div>
       </header>
 
       {/* Main content */}
@@ -62,6 +66,7 @@ export function App() {
           </div>
         )}
       </main>
+      <footer className="px-6 py-1 text-[10px] text-gray-600">{PIANO_CREDIT}</footer>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useMidiStore } from '../../store/useMidiStore';
 import { useTutorStore } from '../../store/useTutorStore';
 import type { RendererCommand } from '../../../main/tutorApi';
+import type { RecordingStatus } from '../../../main/recorder';
 
 // Wires the renderer to the tutor API in the main process: every note that
 // goes through the store's single ingest path is reported up, and commands
@@ -15,6 +16,10 @@ interface TutorBridge {
   openPiece: () => Promise<{ title: string; musicxml: string } | null>;
   listPieces?: () => Promise<{ file: string; title: string; musicxml: string }[]>;
   onCommand: (cb: (cmd: RendererCommand) => void) => () => void;
+  toggleRecording?: () => Promise<RecordingStatus>;
+  recordingStatus?: () => Promise<RecordingStatus>;
+  takePcm?: (id: string, data: Uint8Array) => void;
+  takePcmDone?: (msg: { id: string; sampleRate?: number; channels?: number; error?: string }) => void;
 }
 
 declare global {

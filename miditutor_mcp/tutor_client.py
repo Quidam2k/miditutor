@@ -182,6 +182,14 @@ def inject(notes: list[int], kind: str = "chord", hold_ms: int = 300) -> dict:
     return request("POST", "/inject", {"notes": notes, "kind": kind, "holdMs": hold_ms})
 
 
+def record(action: str) -> dict:
+    """Start or stop a take (#9574). Stop waits for the mp4 and returns its path
+    (the path is on the machine running the app)."""
+    if action not in ("start", "stop"):
+        return {"error": 'action must be "start" or "stop"'}
+    return request("POST", "/record", {"action": action}, timeout=180 if action == "stop" else 10)
+
+
 def screenshot(dest: str | Path) -> dict:
     """Save a PNG of the app window to dest."""
     data = request("GET", "/screenshot", timeout=15, raw=True)
