@@ -12,6 +12,7 @@ import { useTutorStore } from '../../store/useTutorStore';
 import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
 import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
+import { ChordSymbol, chordSymbol, playsChord } from './chordSymbols';
 import {
   WrittenNote,
   accidentalMark,
@@ -69,6 +70,28 @@ interface OsmdMeasure {
 interface OsmdGraphicalNote {
   getSVGGElement?: () => SVGGElement | undefined;
 }
+type OsmdPitch = { FundamentalNote: number; AccidentalHalfTones: number };
+interface OsmdChordContainer {
+  RootPitch?: OsmdPitch;
+  BassPitch?: OsmdPitch;
+  ChordKind: number;
+}
+interface OsmdVoiceEntry {
+  ParentSourceStaffEntry?: { ChordContainers?: OsmdChordContainer[] };
+}
+interface OsmdStaffEntry {
+  graphicalChordContainers?: { GetChordSymbolContainer: unknown; GraphicalLabel?: { SVGNode?: Node } }[];
+}
+
+/** A printed chord symbol (<harmony>) and the OSMD object it came from. */
+type StepChord = ChordSymbol & { container: OsmdChordContainer };
+
+const pcOf = (p: OsmdPitch) => p.FundamentalNote + p.AccidentalHalfTones;
+const noChord = (): { chord: StepChord | null; played: Set<number>; lit: boolean } => ({
+  chord: null,
+  played: new Set(),
+  lit: false,
+});
 
 const LETTER_OF: Record<number, WrittenNote['letter']> = { 0: 'C', 2: 'D', 4: 'E', 5: 'F', 7: 'G', 9: 'A', 11: 'B' };
 
@@ -116,10 +139,19 @@ function keepCursorHeight(container: HTMLElement): MutationObserver {
 // Also records, per step, the written notes still sounding there (tie continuations
 // and longer notes struck earlier), so a re-strike of one is not called wrong and a
 // played note can be placed on the staff it is written on.
-function extractSteps(osmd: OpenSheetMusicDisplay): { steps: ScoreStep[]; notes: OsmdNote[][]; ringing: OsmdNote[][] } {
+// Also the chord symbol in force at each step: one printed at a step lasts until
+// the next one.
+function extractSteps(osmd: OpenSheetMusicDisplay): {
+  steps: ScoreStep[];
+  notes: OsmdNote[][];
+  ringing: OsmdNote[][];
+  chords: (StepChord | null)[];
+} {
   const steps: ScoreStep[] = [];
   const notes: OsmdNote[][] = [];
   const ringing: OsmdNote[][] = [];
+  const chords: (StepChord | null)[] = [];
+  let chord: StepChord | null = null;
   let active: { note: OsmdNote; end: number }[] = [];
   const cursor = osmd.cursor;
   cursor.reset();
@@ -137,13 +169,39 @@ function extractSteps(osmd: OpenSheetMusicDisplay): { steps: ScoreStep[]; notes:
     });
     notes.push(under);
     ringing.push(ring);
+    const entries = cursor.iterator.CurrentVoiceEntries as unknown as OsmdVoiceEntry[];
+    for (const c of entries.flatMap((ve) => ve.ParentSourceStaffEntry?.ChordContainers ?? [])) {
+      const sym = c.RootPitch && chordSymbol(pcOf(c.RootPitch), c.ChordKind, c.BassPitch && pcOf(c.BassPitch));
+      // A kind we can't spell (Neapolitan, 11ths) still ends the previous chord's span.
+      chord = sym ? { ...sym, container: c } : null;
+    }
+    chords.push(chord);
     for (const n of all) {
       if (!n.isRest() && n.Length) active.push({ note: n, end: beat + n.Length.RealValue * 4 });
     }
     cursor.next();
   }
   cursor.reset();
-  return { steps, notes, ringing };
+  return { steps, notes, ringing, chords };
+}
+
+// Colour a chord symbol's text (green = he is playing that chord), or reset it.
+function paintChord(osmd: OpenSheetMusicDisplay, container: OsmdChordContainer, on: boolean) {
+  const list = osmd.GraphicSheet.MeasureList as unknown as ({ staffEntries?: OsmdStaffEntry[] } | undefined)[][];
+  for (const staves of list) {
+    for (const m of staves) {
+      for (const se of m?.staffEntries ?? []) {
+        for (const gc of se.graphicalChordContainers ?? []) {
+          const node = gc.GetChordSymbolContainer === container ? gc.GraphicalLabel?.SVGNode : undefined;
+          if (!(node instanceof SVGElement)) continue;
+          for (const el of [node, ...node.querySelectorAll('*')] as SVGElement[]) {
+            el.style.fill = on ? '#16a34a' : '';
+            el.style.fontWeight = on ? 'bold' : '';
+          }
+        }
+      }
+    }
+  }
 }
 
 // Pixel box of every bar (all staves of one system), relative to the score's <svg>.
@@ -179,6 +237,10 @@ export function ScoreView() {
   const followerRef = useRef<ScoreFollower | null>(null);
   const stepNotesRef = useRef<OsmdNote[][]>([]);
   const ringNotesRef = useRef<OsmdNote[][]>([]);
+  const stepChordsRef = useRef<(StepChord | null)[]>([]);
+  // The chord symbol in force where he is playing, the keys struck under it, and
+  // whether they now cover it (then the symbol is green).
+  const chordLitRef = useRef(noChord());
   const lapStartRef = useRef<number | null>(null);
   const cursorIndexRef = useRef(0);
   const flashTimerRef = useRef<number | undefined>(undefined);
@@ -358,6 +420,25 @@ export function ScoreView() {
     }
   }, []);
 
+  // Light the chord symbol once the keys struck under it (plus any still sounding)
+  // hold all its notes: broken chords and arpeggios count. Passing chord=null
+  // just turns the current one off.
+  const trackChord = useCallback((chord: StepChord | null, notes: number[], bar?: number) => {
+    const osmd = osmdRef.current;
+    let cur = chordLitRef.current;
+    if (cur.chord !== chord) {
+      if (osmd && cur.chord && cur.lit) paintChord(osmd, cur.chord.container, false);
+      cur = chordLitRef.current = { chord, played: new Set(), lit: false };
+    }
+    if (!chord || !osmd) return;
+    notes.forEach((n) => cur.played.add(n));
+    if (!cur.lit && playsChord(chord, cur.played)) {
+      cur.lit = true;
+      paintChord(osmd, chord.container, true);
+      reportEvent('chord_match', { symbol: chord.label, bar });
+    }
+  }, []);
+
   const syncUi = useCallback(() => {
     const f = followerRef.current;
     if (!f) return;
@@ -372,6 +453,7 @@ export function ScoreView() {
     const f = followerRef.current;
     if (!osmd || !f) return;
     setMarks([]);
+    trackChord(null, []);
     osmd.cursor.reset();
     osmd.cursor.show();
     cursorIndexRef.current = 0;
@@ -384,7 +466,7 @@ export function ScoreView() {
     setLap(f.lap);
     lapStartRef.current = null;
     syncUi();
-  }, [moveCursorTo, syncUi]);
+  }, [moveCursorTo, syncUi, trackChord]);
 
   // --- loop range (#5004) ---
   const applyLoop = useCallback(
@@ -519,9 +601,11 @@ export function ScoreView() {
         if (disposed) return;
         osmd.render();
         osmd.cursor.show();
-        const { steps, notes, ringing } = extractSteps(osmd);
+        const { steps, notes, ringing, chords } = extractSteps(osmd);
         stepNotesRef.current = notes;
         ringNotesRef.current = ringing;
+        stepChordsRef.current = chords;
+        chordLitRef.current = noChord();
         followerRef.current = new ScoreFollower(steps);
         setLoopBars(null);
         setPicking('off');
@@ -573,6 +657,7 @@ export function ScoreView() {
       const { held, pedal, pedalRinging } = useMidiStore.getState();
       const sounding = new Set([...held, ...(pedal ? pedalRinging : [])]);
       sounding.delete(ev.note);
+      trackChord(stepChordsRef.current[idx] ?? null, [ev.note, ...sounding], step?.measure);
       const result = f.noteOn(ev.note, ev.timestamp, sounding);
       if (result.kind !== 'ignored') {
         const mark = placePlayed(idx, ev.note, result.kind === 'wrong');
@@ -640,13 +725,15 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, status, moveCursorTo, syncUi, placePlayed, noteName]);
+  }, [following, status, moveCursorTo, syncUi, placePlayed, noteName, trackChord]);
 
   // OSMD re-renders on resize, which moves every note; drop stale marks.
   useEffect(() => {
     let timer: number | undefined;
     const onResize = () => {
       setMarks([]);
+      // The re-render draws the symbols afresh (uncoloured); start the chord over.
+      chordLitRef.current = noChord();
       // OSMD re-lays out after a short debounce; re-shade the loop once it has.
       window.clearTimeout(timer);
       timer = window.setTimeout(() => setLayoutTick((t) => t + 1), 600);
