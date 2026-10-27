@@ -1,7 +1,7 @@
 """End-to-end check of expression telemetry (#9569) against the RUNNING app.
 
 Start a local app with no window on a spare port first, e.g.
-    MIDITUTOR_HIDDEN=1 MIDITUTOR_PORT=47811 npm start
+    MIDITUTOR_HIDDEN=1 MIDITUTOR_PORT=47811 MIDITUTOR_VITE_PORT=5182 npm start  # #9926 own Vite port beside a dev copy
 then:
     MIDITUTOR_URL=http://127.0.0.1:47811 python scripts/e2e_expression.py
 

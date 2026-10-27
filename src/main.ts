@@ -349,10 +349,24 @@ const startTutorApi = () => {
   });
   ipcMain.on('tutor:screen', (_e, st) => tutorApi?.onRendererState(st));
   ipcMain.on('tutor:device', (_e, d) => tutorApi?.onDevice(d));
-  tutorApi
+  // #9926: the tutor API port is this copy's single-instance claim. Another MidiTutor already holding it
+  // (default 47800, or MIDITUTOR_PORT) means this copy exits quietly and logs it. It never focuses or raises
+  // the running window. e2e runs on their own MIDITUTOR_PORT still start alongside.
+  return tutorApi
     .start()
-    .then((port) => console.log(`[tutor-api] listening on 127.0.0.1:${port}`))
-    .catch((err) => console.error('[tutor-api] failed to start:', err));
+    .then((port) => {
+      console.log(`[tutor-api] listening on 127.0.0.1:${port}`);
+      return true;
+    })
+    .catch((err: NodeJS.ErrnoException) => {
+      if (err?.code === 'EADDRINUSE') {
+        console.log(`[single-instance] MidiTutor already holds port ${process.env.MIDITUTOR_PORT ?? 47800}; this copy exits (#9926)`);
+        app.exit(0);
+        return false;
+      }
+      console.error('[tutor-api] failed to start:', err);
+      return true;
+    });
 };
 
 const hidden = process.env.MIDITUTOR_HIDDEN === '1';
@@ -401,9 +415,9 @@ const createWindow = () => {
   });
 };
 
-app.on('ready', () => {
+app.on('ready', async () => {
   grantMidiPermissions();
-  startTutorApi();
+  if (!(await startTutorApi())) return; // #9926 a second copy: exit before any window exists
   createWindow();
 });
 

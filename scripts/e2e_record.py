@@ -1,6 +1,6 @@
 """End-to-end take recorder sync test (#9574) against the RUNNING app.
 
-    MIDITUTOR_HIDDEN=1 MIDITUTOR_PORT=47931 npm start
+    MIDITUTOR_HIDDEN=1 MIDITUTOR_PORT=47931 MIDITUTOR_VITE_PORT=5183 npm start  # #9926 own Vite port beside a dev copy
     MIDITUTOR_URL=http://127.0.0.1:47931 python scripts/e2e_record.py --seconds 30
 
 Use --analyze <mp4> to check an existing recording without contacting the app.
