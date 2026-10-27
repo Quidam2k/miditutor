@@ -12,6 +12,8 @@ export interface MixSection {
 }
 export type MixChoice = 'easy' | 'harder';
 
+import type { PieceTrust, TrustStatus } from './trust';
+
 // MusicXML child order inside <attributes>
 const ATTR_ORDER = ['footnote', 'level', 'divisions', 'key', 'time', 'staves', 'part-symbol', 'instruments',
   'clef', 'staff-details', 'transpose', 'directive', 'measure-style'];
@@ -93,17 +95,27 @@ function keyElement(doc: Document, fifths: number, mode: string | undefined): El
   return key;
 }
 
-/** Put the full effective attributes into the bar's first <attributes> (new one if none); returns it. */
-function restateAttributes(doc: Document, measure: Element, effective: Map<string, Element>, key: Element): Element {
+const sameAttr = (a: Element | undefined, b: Element) =>
+  a !== undefined && a.textContent?.replace(/\s+/g, '') === b.textContent?.replace(/\s+/g, '');
+
+/**
+ * Put the source's effective attributes into the bar's first <attributes> (new one if none), less
+ * what the mix already has in force (a redrawn 4/4 or clef mid-line is noise); divisions always.
+ */
+function restateAttributes(
+  doc: Document, measure: Element, effective: Map<string, Element>, key: Element, inForce: Map<string, Element>,
+): Element {
   const lead = leadingAttributes(measure);
   const target = lead[0] ?? make(doc, 'attributes');
   for (const extra of lead.slice(1)) remove(extra);
   for (const el of elements(target)) remove(el);
   const items = [...effective.entries()].map(([id, el]) => (id === 'key' ? key : (doc.importNode(el, true) as Element)));
   if (!effective.has('key')) items.push(key);
-  items.sort((a, b) => rank(a) - rank(b) || Number(a.getAttribute('number') ?? 0) - Number(b.getAttribute('number') ?? 0));
-  for (const el of items) target.appendChild(el);
-  if (!target.parentNode) {
+  const needed = items.filter((el) => el.tagName === 'divisions' || !sameAttr(inForce.get(attrId(el)), el));
+  needed.sort((a, b) => rank(a) - rank(b) || Number(a.getAttribute('number') ?? 0) - Number(b.getAttribute('number') ?? 0));
+  for (const el of needed) target.appendChild(el);
+  if (!needed.length) remove(target);
+  else if (!target.parentNode) {
     let before: Node | null = null;
     for (const el of elements(measure)) {
       if (el.tagName === 'print' || (el.tagName === 'barline' && el.getAttribute('location') === 'left')) continue;
@@ -207,7 +219,8 @@ export function spliceMix(
       }
       if (n === 0 && previous !== from) {
         const effective = effectiveAttributes(measures, measures.indexOf(original));
-        const attributes = restateAttributes(doc, measure, effective, keyElement(doc, easyFifths, easyMode));
+        const inForce = effectiveAttributes(mixed, mixed.length);
+        const attributes = restateAttributes(doc, measure, effective, keyElement(doc, easyFifths, easyMode), inForce);
         if (from === 'harder') {
           const direction = doc.createElement('direction');
           direction.setAttribute('placement', 'above');
@@ -215,7 +228,9 @@ export function spliceMix(
           type.appendChild(make(doc, 'words', 'Harder: no fingering'));
           direction.appendChild(type);
           direction.appendChild(make(doc, 'staff', '1'));
-          measure.insertBefore(direction, attributes.nextSibling);
+          const at = attributes.parentNode ? attributes.nextSibling
+            : elements(measure).find((el) => el.tagName === 'note' || el.tagName === 'backup' || el.tagName === 'forward') ?? null;
+          measure.insertBefore(direction, at);
         }
       }
       mixed.push(measure);
@@ -250,4 +265,44 @@ function setTitle(doc: Document, value: string) {
     work.insertBefore(workTitle, number ? number.nextSibling : work.firstChild);
   }
   setText(doc, workTitle, value);
+}
+
+/** The mix's own bar ranges (it is renumbered 1..n) taken from each source, adjacent runs merged. */
+export function mixRanges(sections: MixSection[], choice: MixChoice[]): Record<MixChoice, [number, number][]> {
+  const out: Record<MixChoice, [number, number][]> = { easy: [], harder: [] };
+  let next = 1;
+  let last: MixChoice | undefined;
+  sections.forEach((section, k) => {
+    const from = choice[k];
+    const [lo, hi] = section[from];
+    const range: [number, number] = [next, next + hi - lo];
+    next = range[1] + 1;
+    const runs = out[from];
+    if (last === from) runs[runs.length - 1][1] = range[1];
+    else runs.push(range);
+    last = from;
+  });
+  return out;
+}
+
+// Worst first; his own "verified" counts only as "checked" here, because the mix is a new file.
+const LEVEL: Record<TrustStatus, number> = { verified: 0, checked: 0, unverified: 1, issues: 2 };
+
+/** A mix is trusted no more than its weakest source, and the note names the bars that are not checked. */
+export function mixTrust(easy: PieceTrust | undefined, harder: PieceTrust | undefined, sections: MixSection[], choice: MixChoice[]): PieceTrust {
+  const ranges = mixRanges(sections, choice);
+  const sources = [['easy', 'Easy', easy], ['harder', 'Harder', harder]] as const;
+  let worst: TrustStatus = 'checked';
+  const notes: string[] = [];
+  for (const [key, label, trust] of sources) {
+    if (!ranges[key].length) continue;
+    const status = trust?.status ?? 'unverified';
+    if (LEVEL[status] > LEVEL[worst]) worst = status;
+    if (LEVEL[status] === 0) continue;
+    const bars = ranges[key].map(([a, b]) => (a === b ? `${a}` : `${a}-${b}`)).join(', ');
+    notes.push(status === 'issues'
+      ? `${label} bars ${bars} have known issues${trust?.note.trim() ? ` (${trust.note.trim()})` : ''}`
+      : `${label} bars ${bars} not yet checked`);
+  }
+  return { status: worst, note: notes.join('; ') };
 }

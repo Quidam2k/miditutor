@@ -17,7 +17,8 @@ shopt -s nullglob nocaseglob
 files=()
 for f in "$LIBRARY"/*.musicxml "$LIBRARY"/*.mxl; do
   # annotate_scan.py's backups (*.pre-annotate.musicxml) are not pieces.
-  [[ $f == *.pre-annotate.* ]] || files+=("$f")
+  # *-my-mix files are made on each box (mixes.json, #9627): never copied, so his own survives.
+  [[ $f == *.pre-annotate.* || $f == *-my-mix.* ]] || files+=("$f")
 done
 (( ${#files[@]} )) || { echo "No scores in $LIBRARY." >&2; exit 1; }
 # trust.json is copied alongside the scores so the picker can show each one's badge (#9644).

@@ -77,27 +77,32 @@ describe('spliceMix', () => {
     expect(pitches(measures(mix(EASY, HARDER, ALL, ['harder'], 0))[0])).toEqual(['F#5', 'C#5']);
   });
 
-  it('restores divisions and clefs when going back to easy after a harder segment', () => {
+  it('restates divisions going back to easy, but not clefs or time that are already in force', () => {
     const ms = measures(mix(EASY, HARDER, HALVES, ['harder', 'easy']));
     expect(attr(ms[0], 'divisions')?.textContent).toBe('4');
     expect(attr(ms[2], 'divisions')?.textContent).toBe('2');
-    const clefs = all(ms[2].getElementsByTagName('attributes')[0], 'clef');
-    expect(clefs.map((c) => c.getAttribute('number') + c.getElementsByTagName('sign')[0].textContent)).toEqual(['1G', '2F']);
-    expect(attr(ms[2], 'staves')?.textContent).toBe('2');
-    expect(attr(ms[2], 'time')?.getElementsByTagName('beats')[0].textContent).toBe('4');
+    const tags = all(ms[2].getElementsByTagName('attributes')[0], '*').map((c) => c.tagName);
+    expect(tags).toEqual(['divisions']);
+  });
+
+  it('restates a clef the harder segment changed when easy comes back', () => {
+    const sections: MixSection[] = [{ easy: [1, 3], harder: [1, 3] }, { easy: [4, 4], harder: [4, 4] }];
+    const ms = measures(mix(EASY, HARDER, sections, ['harder', 'easy']));
+    const clefs = all(ms[3].getElementsByTagName('attributes')[0], 'clef');
+    expect(clefs.map((c) => c.getAttribute('number') + c.getElementsByTagName('sign')[0].textContent)).toEqual(['1G']);
   });
 
   it('carries the harder clef change into a segment that starts on it', () => {
     const ms = measures(mix(EASY, HARDER, HALVES, ['easy', 'harder']));
     const clefs = all(ms[2].getElementsByTagName('attributes')[0], 'clef');
-    expect(clefs.map((c) => c.getAttribute('number') + c.getElementsByTagName('sign')[0].textContent)).toEqual(['1F', '2F']);
+    expect(clefs.map((c) => c.getAttribute('number') + c.getElementsByTagName('sign')[0].textContent)).toEqual(['1F']);
     expect(attr(ms[2], 'divisions')?.textContent).toBe('4');
   });
 
   it('writes the easy key everywhere and keeps attribute child order', () => {
     const doc = mix(EASY, HARDER, HALVES, ['harder', 'easy']);
     const fifths = all(doc.documentElement, 'fifths').map((f) => f.textContent);
-    expect(fifths.length).toBeGreaterThanOrEqual(2);
+    expect(fifths.length).toBeGreaterThanOrEqual(1);
     expect(new Set(fifths)).toEqual(new Set(['0']));
     const order = Array.from(measures(doc)[0].getElementsByTagName('attributes')[0].childNodes)
       .filter((c) => c.nodeType === 1).map((c) => (c as Element).tagName);
@@ -150,7 +155,7 @@ describe('spliceMix on the real O scores', () => {
     const ms = measures(doc);
     expect(ms.length).toBe(34);
     expect(attr(ms[8], 'divisions')?.textContent).toBe('6');
-    expect(attr(ms[8], 'key')?.getElementsByTagName('fifths')[0].textContent).toBe('0');
+    expect(new Set(all(doc.documentElement, 'fifths').map((f) => f.textContent))).toEqual(new Set(['0']));
     expect(attr(ms[0], 'divisions')?.textContent).toBe('4');
   });
 });

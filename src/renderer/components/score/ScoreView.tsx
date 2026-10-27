@@ -14,10 +14,12 @@ import { ExpressionTracker, describeMark, parseExpression, type ExpressionFindin
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustBadge, trustMark } from '../../../shared/trust';
+import type { MixChoice } from '../../../shared/mix';
 import type { PieceGroupRef } from '../../../shared/versions';
 import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
 import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
+import { MixBuilder } from './MixBuilder';
 import { ChordSymbol, chordSymbol, playsChord } from './chordSymbols';
 import {
   WrittenNote,
@@ -299,6 +301,8 @@ export function ScoreView() {
   // Built-in pieces, his Pieces folder on disk, then anything pushed this session.
   // The folder is re-read when the window regains focus, so a synced file shows up.
   const [folder, setFolder] = useState<Piece[]>([]);
+  // Re-read the folder now (after a mix is saved), whatever it looked like before.
+  const reloadFolderRef = useRef<(() => Promise<void>) | undefined>(undefined);
   useEffect(() => {
     const list = window.tutorBridge?.listPieces;
     if (!list) return;
@@ -307,7 +311,7 @@ export function ScoreView() {
       list()
         .then((files) => {
           const key = files
-            .map((f) => `${f.file}:${f.musicxml.length}:${f.trust?.status}:${f.trust?.note}:${f.group?.slug}:${f.group?.label}`)
+            .map((f) => `${f.file}:${f.musicxml.length}:${f.trust?.status}:${f.trust?.note}:${f.group?.slug}:${f.group?.label}:${JSON.stringify(f.group?.mix?.choice)}`)
             .join('|');
           if (key === lastKey) return;
           lastKey = key;
@@ -322,6 +326,10 @@ export function ScoreView() {
           );
         })
         .catch((err) => console.warn('[pieces] list failed:', err));
+    reloadFolderRef.current = () => {
+      lastKey = '';
+      return refresh();
+    };
     refresh();
     window.addEventListener('focus', refresh);
     return () => window.removeEventListener('focus', refresh);
@@ -358,6 +366,21 @@ export function ScoreView() {
   }, [selectPieceId]);
   const piece = onScreen ?? PIECES[0];
   const versions = piece.group ? versionsOf(piece.group.slug) : [];
+  // My mix (#9627): the builder needs both source scores loaded.
+  const [mixing, setMixing] = useState(false);
+  const mixPlan = piece.group?.mix;
+  const easyPiece = mixPlan && allPieces.find((p) => p.id === `file:${mixPlan.easy}`);
+  const harderPiece = mixPlan && allPieces.find((p) => p.id === `file:${mixPlan.harder}`);
+  const hasMix = versions.some((v) => v.group.label === 'My mix');
+  const saveMix = async (choice: MixChoice[], musicxml: string, trust: PieceTrust) => {
+    if (!piece.group || !mixPlan || !window.tutorBridge?.saveMix) throw new Error("Can't save a mix here.");
+    const { slug } = piece.group;
+    const { file } = await window.tutorBridge.saveMix(slug, { harder: mixPlan.harder, choice, musicxml, trust });
+    await reloadFolderRef.current?.();
+    setPieceId(`file:${file}`);
+    setPieceVersion(slug, file);
+    setMixing(false);
+  };
   const pieceName = piece.group ? `${piece.label} (${piece.group.label})` : piece.label;
   const fifths = useMemo(() => fifthsOf(piece.xml), [piece.xml]);
 
@@ -947,6 +970,11 @@ export function ScoreView() {
             ))}
           </div>
         )}
+        {mixPlan && easyPiece && harderPiece && window.tutorBridge?.saveMix && (
+          <button onClick={() => setMixing(true)} className={btn}>
+            {hasMix ? 'Edit my mix' : 'Make my mix'}
+          </button>
+        )}
         {/* Visible, not hover-only: what the OMR audit knows about this score (#9644). */}
         <span
           className={`text-xs ${
@@ -957,8 +985,22 @@ export function ScoreView() {
                 : 'text-gray-400'
           }`}
         >
-          {trustBadge(piece.trust)}
+          {piece.group?.label === 'My mix'
+            ? `My mix: ${piece.trust?.note || 'from checked versions'}`
+            : trustBadge(piece.trust)}
         </span>
+        {mixing && mixPlan && easyPiece && harderPiece && (
+          <MixBuilder
+            title={piece.label}
+            plan={mixPlan}
+            easyXml={easyPiece.xml}
+            harderXml={harderPiece.xml}
+            easyTrust={easyPiece.trust}
+            harderTrust={harderPiece.trust}
+            onSave={saveMix}
+            onClose={() => setMixing(false)}
+          />
+        )}
         {window.tutorBridge && (
           <button onClick={openPiece} className={btn}>
             Open piece…

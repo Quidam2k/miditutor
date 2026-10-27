@@ -17,7 +17,7 @@ import {
   titleFromPath,
 } from './shared/pieceFiles';
 import { TrustMap, parseTrust, trustFor } from './shared/trust';
-import { VersionMap, groupOf, parseVersions } from './shared/versions';
+import { SavedMix, VersionMap, groupOf, mixPlanOf, parseMixes, parseVersions, withMixes } from './shared/versions';
 
 if (started) {
   app.quit();
@@ -114,6 +114,34 @@ const readVersions = async (dir: string): Promise<VersionMap> => {
   }
 };
 
+// mixes.json (#9627): his My mix files, made on whichever box he is on. Local only:
+// sync_pieces.sh never copies it (or the *-my-mix files), so the desk can't clobber Pinocchio's.
+const readMixes = async (dir: string): Promise<Record<string, SavedMix>> => {
+  try {
+    return parseMixes(JSON.parse(await fs.readFile(path.join(dir, 'mixes.json'), 'utf8')));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn('[pieces] mixes.json unreadable:', (err as Error).message);
+    return {};
+  }
+};
+
+// The renderer splices the mix (it has the DOM); main checks it belongs to an aligned song and writes it.
+const saveMix = async (slug: string, mix: { harder: string; choice: unknown; musicxml: string; trust: unknown }) => {
+  const dir = piecesDir();
+  const group = (await readVersions(dir))[slug];
+  const plan = group && mixPlanOf(group);
+  if (!plan || plan.harder !== mix.harder) throw new Error(`${slug} has no My mix`);
+  if (!isScoreXml(mix.musicxml)) throw new Error('The mix is not a MusicXML score');
+  const file = `${slug}-my-mix.musicxml`;
+  const saved = parseMixes({ [slug]: { file, harder: mix.harder, choice: mix.choice, trust: mix.trust } })[slug];
+  if (!saved || saved.choice.length !== plan.sections.length) throw new Error('The mix choices do not fit its sections');
+  await fs.writeFile(path.join(dir, file), mix.musicxml, 'utf8');
+  const mixes = { ...(await readMixes(dir)), [slug]: saved };
+  await fs.writeFile(path.join(dir, 'mixes.json'), JSON.stringify(mixes, null, 2) + '\n', 'utf8');
+  tutorApi?.onEvent({ kind: 'pieces', timestamp: Date.now(), dir, mix: file, choice: saved.choice });
+  return { file };
+};
+
 const fileSha256 = async (filePath: string) =>
   createHash('sha256').update(await fs.readFile(filePath)).digest('hex');
 
@@ -125,11 +153,13 @@ const listPieces = async () => {
     await fs.mkdir(dir, { recursive: true });
     const names = (await fs.readdir(dir)).filter(isPieceFileName).sort();
     const trust = await readTrust(dir);
-    const versions = await readVersions(dir);
+    const mixes = await readMixes(dir);
+    const versions = withMixes(await readVersions(dir), mixes);
+    const mixTrust = new Map(Object.values(mixes).map((m) => [m.file, m.trust]));
     for (const name of names) {
       try {
         const musicxml = await readScoreFile(path.join(dir, name));
-        let entry = trustFor(trust, name);
+        let entry = mixTrust.get(name) ?? trustFor(trust, name);
         // His "Verified by you" holds only for the exact file he reviewed (#9664).
         if (entry?.status === 'verified' && entry.sha !== await fileSha256(path.join(dir, name))) entry = undefined;
         const group = groupOf(versions, name);
@@ -249,6 +279,7 @@ const startTutorApi = () => {
     else settleAudio(msg.id, null, { sampleRate: msg.sampleRate, channels: msg.channels });
   });
   ipcMain.handle('pieces:list', listPieces);
+  ipcMain.handle('pieces:saveMix', (_e, slug: string, mix) => saveMix(slug, mix));
   // JP's newest lesson entry, written by scripts/homework_sync.py; null until the first sync (#5058).
   ipcMain.handle('homework:get', async () => {
     try {
