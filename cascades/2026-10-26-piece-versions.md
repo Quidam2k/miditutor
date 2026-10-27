@@ -74,8 +74,13 @@ P3b
   loop over it. Then CI dispatch + deploy_pinocchio.sh, sync_pieces.sh, check on Pinocchio, leave the app as found.
 
 Notes P3b: renderer splices (DOMParser; xmldom is dev-only), main validates + writes; builder is a portal (toolbar was its fixed box); a splice restates only attributes that change (no redrawn 4/4).
-⚠️ NEXT (only gated work left): when omr_second_engine gate opens (>=600 s idle, >=12 GB):
-  1. `python scripts/align_versions.py o` (expect semis -2, diagonal 34 bars, 9 sections; it writes group.align into library versions.json)
-  2. `PINOCCHIO_HOST=toddwalker@192.168.50.27 bash scripts/sync_pieces.sh` (copies versions.json; *-my-mix files are skipped)
-  3. Check: desk + Pinocchio O picker shows "Make my mix" (Pinocchio tutor API via ssh -N -L 47800:127.0.0.1:47800 ...). Then close #9627 (closes: #5060).
-  Also pending on the gate: review_layout.py --force o-musicnotes-arrangement let-me-fall-musicnotes-vocal-arrangement.
+## CASCADE COMPLETE #9627 (2026-10-26 23:10, worker picker-38e9)
+- Idle gate open (71 min idle, 22 GB): align_versions.py o -> semis -2, 9 sections (matches dry-run); written to library versions.json.
+- review_layout.py --force: O harder exact (34/34, 9 systems). LMF harder: match "none" -- its scan pages are 3 staves/system
+  (vocal+piano), the piano-only XML is 2. Follow-up, not part of DONE.
+- sync_pieces.sh to Pinocchio (versions.json with align confirmed there; app running, d404a12 code from the 21:05 deploy).
+- Desk "MidiTutor Review" install predated P1 (18:49): repackaged + install_review_desk.py.
+- e2e 9627-e2e_versions_p3.py 13/13 on dev AND on the installed desk exe (packaged needs MIDITUTOR_ALLOW_INJECT=1), scratch copies of the real files.
+- Not checked: Pinocchio's picker on screen (app not on the Score view; did not drive his Mac).
+- Follow-ups: LMF harder key repair (bar 16) + Review stave mismatch; Quidam harder OMR repair; per-hand / note-level hybrids on group.align.bars;
+  two stale hidden dev instances (electron PIDs 26172, 47276) hold 47800/9335 and 47811/9346 -- kill denied to workers.
