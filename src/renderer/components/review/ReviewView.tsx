@@ -10,16 +10,18 @@ import {
   ReviewEvent,
   ReviewState,
   cropToPage,
-  measureAtX,
   staffAtY,
   systemRange,
 } from '../../../shared/review';
+import { BarSpan, MarkNote, NoteBox, barsUnder, describeNotes, markNotes, notesInCircle, notesInShare } from '../../../shared/reviewCircle';
+import { addBeams } from '../../engine/autoBeam';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustMark } from '../../../shared/trust';
 
 // Scan review (#9664): check an OMR'd score against the scan, one printed line at
-// a time. He circles a wrong bar on either side, or confirms the line. The desk
-// app only appends events through the bridge; everything shown is the returned state.
+// a time. He circles what's wrong on either side (as many as he likes; a circle
+// over a bar line marks each bar), or confirms the line. The app only appends
+// events through the bridge; everything shown is the returned state.
 
 interface Summary {
   slug: string;
@@ -45,7 +47,7 @@ interface Piece {
 }
 
 type AppendEvent =
-  | { kind: 'mark'; system: number; measure: number | null; staff: number | null; note: string; circle: Circle }
+  | { kind: 'mark'; system: number; measure: number | null; staff: number | null; note: string; circle: Circle; notes?: MarkNote[] }
   | { kind: 'confirm_system'; system: number }
   | { kind: 'withdraw'; mark: string }
   | { kind: 'reject'; mark: string; note: string };
@@ -73,7 +75,8 @@ const OSMD_OPTIONS = {
   drawLyricist: false,
   drawPartNames: false,
   drawMeasureNumbers: true,
-  autoBeam: false,
+  // Beams come from addBeams (#9764); OSMD's own pass only picks up what that leaves, like tuplets.
+  autoBeam: true,
 } as const;
 const LEARNING = ['o-from-o', 'the-stormy-sea', 'sorcerers-apprentice', 'let-me-fall-from-quidam'];
 
@@ -162,6 +165,55 @@ function barBoxes(osmd: OpenSheetMusicDisplay, from: number, to: number): BarBox
   return boxes;
 }
 
+interface OsmdNoteShape {
+  sourceNote?: { halfTone: number; isRest(): boolean; Pitch?: { FundamentalNote: number; AccidentalHalfTones: number } };
+  PositionAndShape?: OsmdBox;
+}
+interface OsmdStaffEntryShape {
+  relInMeasureTimestamp?: { RealValue: number };
+  graphicalVoiceEntries?: { notes?: OsmdNoteShape[] }[];
+}
+const LETTERS: Record<number, string> = { 0: 'C', 2: 'D', 4: 'E', 5: 'F', 7: 'G', 9: 'A', 11: 'B' };
+
+// "F#4" from OSMD's spelling; its halfTone + 12 is the MIDI number (C4 = 60).
+function noteName(n: NonNullable<OsmdNoteShape['sourceNote']>): string {
+  const midi = n.halfTone + 12;
+  const p = n.Pitch;
+  if (!p || LETTERS[p.FundamentalNote] === undefined) return String(midi);
+  const acc = p.AccidentalHalfTones;
+  const octave = Math.floor((midi - p.FundamentalNote - acc) / 12) - 1;
+  return `${LETTERS[p.FundamentalNote]}${acc > 0 ? '#'.repeat(acc) : 'b'.repeat(-acc)}${octave}`;
+}
+
+// Every drawn note head of bars from..to, in the OSMD <svg> user frame.
+function noteBoxes(osmd: OpenSheetMusicDisplay, from: number, to: number): NoteBox[] {
+  const space = 10 * osmd.Zoom;
+  const list = osmd.GraphicSheet.MeasureList as unknown as ({
+    staffEntries?: OsmdStaffEntryShape[];
+    ParentMusicSystem?: unknown;
+    parentSourceMeasure?: { ActiveTimeSignature?: { Denominator: number } };
+  } | undefined)[][];
+  const out: NoteBox[] = [];
+  for (let measure = from; measure <= to; measure++) {
+    (list[measure - 1] ?? []).forEach((m, staffIdx) => {
+      if (!m?.ParentMusicSystem) return;
+      const unit = m.parentSourceMeasure?.ActiveTimeSignature?.Denominator ?? 4;
+      for (const se of m.staffEntries ?? []) {
+        const beat = 1 + Math.round((se.relInMeasureTimestamp?.RealValue ?? 0) * unit * 100) / 100;
+        for (const ve of se.graphicalVoiceEntries ?? []) {
+          for (const gn of ve.notes ?? []) {
+            const src = gn.sourceNote;
+            const pos = gn.PositionAndShape?.AbsolutePosition;
+            if (!src || src.isRest() || !pos) continue;
+            out.push({ measure, staff: staffIdx + 1, x: pos.x * space, y: pos.y * space, name: noteName(src), beat });
+          }
+        }
+      }
+    });
+  }
+  return out;
+}
+
 // The bar a score-side circle centre falls in (else the nearest sideways), and the staff.
 function scoreHit(boxes: BarBox[], cx: number, cy: number): { measure: number | null; staff: number | null } {
   if (boxes.length === 0) return { measure: null, staff: null };
@@ -189,9 +241,12 @@ interface Rect {
 }
 interface Tint extends Rect {
   tone: 'amber' | 'red';
+  /** Just an outline: his circle says what's wrong, the bar is context. */
+  outline?: boolean;
 }
 
 const TINT = { amber: 'rgba(245, 158, 11, 0.32)', red: 'rgba(239, 68, 68, 0.28)' };
+const OUTLINE = { amber: 'rgba(245, 158, 11, 0.9)', red: 'rgba(239, 68, 68, 0.7)' };
 const CLICK_PX = 8;
 const CLICK_RADIUS_PX = 12;
 
@@ -260,7 +315,19 @@ function DrawOverlay(props: {
       onPointerCancel={cancel}
     >
       {tints.map((t, i) => (
-        <rect key={i} x={t.x} y={t.y} width={t.w} height={t.h} fill={TINT[t.tone]} pointerEvents="none" />
+        <rect
+          key={i}
+          x={t.x}
+          y={t.y}
+          width={t.w}
+          height={t.h}
+          fill={t.outline ? 'none' : TINT[t.tone]}
+          stroke={t.outline ? OUTLINE[t.tone] : 'none'}
+          strokeWidth={1.5}
+          strokeDasharray={t.outline ? '6 4' : undefined}
+          vectorEffect="non-scaling-stroke"
+          pointerEvents="none"
+        />
       ))}
       {circles.map((c, i) => (
         <circle
@@ -292,15 +359,20 @@ function DrawOverlay(props: {
 // ---- piece view ----
 
 interface Pending {
+  /** Keys this pending mark in the list (circles can share a bar). */
+  key: number;
   circle: Circle;
-  measure: number | null;
+  measure: number;
   staff: number | null;
+  notes: MarkNote[];
+  note: string;
 }
 
 interface ScoreData {
   key: string; // "from-to": boxes only count for the range they were measured on
   frame: Frame;
   boxes: BarBox[];
+  notes: NoteBox[];
 }
 
 const STATUS_ORDER: Record<MarkState['status'], number> = { open: 0, applied: 1, withdrawn: 2 };
@@ -310,6 +382,18 @@ const staffWords = (staff: number | null) => (staff ? (staff === 1 ? ', upper st
 function isTyping(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }
+
+/** Bars with a lint flag on this line, in order (a bar flagged twice counts once). */
+const suspectBars = (s: LayoutSystem | undefined): number[] =>
+  [...new Set((s?.suspects ?? []).map((f) => f.measure))].sort((a, b) => a - b);
+
+const KEYS: [string, string][] = [
+  ['Space / C', 'this line matches, next line'],
+  ['J / K', 'next / previous suspect bar'],
+  ['← / →', 'previous / next line'],
+  ['Enter', 'save the circled marks'],
+  ['Esc', 'drop the last circle'],
+];
 
 function nextUnconfirmed(p: Piece, from: number): number {
   const systems = p.layout?.systems ?? [];
@@ -326,8 +410,11 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [lineIdx, setLineIdx] = useState(0);
-  const [pending, setPending] = useState<Pending | null>(null);
-  const [note, setNote] = useState('');
+  const [pending, setPending] = useState<Pending[]>([]);
+  const [notice, setNotice] = useState('');
+  // The suspect bar J/K landed on; it only shows on its own line.
+  const [focus, setFocus] = useState<{ system: number; measure: number } | null>(null);
+  const pendingKey = useRef(0);
 
   // Scan side.
   const crops = useRef(new Map<string, string>());
@@ -373,27 +460,29 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   const mapped = !!range?.mapped;
   const sha = piece?.sha ?? '';
 
+  const canConfirmRef = useRef(false);
   const go = useCallback(
     (i: number) => setLineIdx(Math.max(0, Math.min(i, systems.length - 1))),
     [systems.length],
   );
 
-  // A pending mark belongs to the line it was drawn on.
+  // Pending marks belong to the line they were drawn on: moving on drops them, and says so.
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
   useEffect(() => {
-    setPending(null);
-    setNote('');
+    const dropped = pendingRef.current.length;
+    setPending([]);
+    setNotice(dropped ? `${dropped} unsaved circle${dropped > 1 ? 's' : ''} dropped when you left that line.` : '');
   }, [lineIdx, slug]);
 
+  // Keys run whatever this render's handlers are (set below, once they exist).
+  const keyRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
   useEffect(() => {
     if (!hasLines) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (isTyping(e.target)) return;
-      if (e.key === 'ArrowLeft') setLineIdx((i) => Math.max(0, i - 1));
-      else if (e.key === 'ArrowRight') setLineIdx((i) => Math.min(systems.length - 1, i + 1));
-    };
+    const onKey = (e: KeyboardEvent) => keyRef.current(e);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [hasLines, systems.length]);
+  }, [hasLines]);
 
   // Crop for the current line.
   const cropRel = sys?.crop ?? '';
@@ -436,7 +525,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
       stretchLastSystemLine: true,
     });
     osmd
-      .load(xmlRef.current)
+      .load(addBeams(xmlRef.current))
       .then(() => !disposed && setEngine(osmd))
       .catch((e) => !disposed && setScoreError(errText(e)));
     return () => {
@@ -462,7 +551,10 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
       const box = svg.getBoundingClientRect();
       const w = parseFloat(svg.getAttribute('width') ?? '') || box.width;
       const h = parseFloat(svg.getAttribute('height') ?? '') || box.height;
-      setScoreData({ key: `${range.from}-${range.to}`, frame: { w, h }, boxes: barBoxes(engine, range.from, range.to) });
+      setScoreData({
+        key: `${range.from}-${range.to}`, frame: { w, h },
+        boxes: barBoxes(engine, range.from, range.to), notes: noteBoxes(engine, range.from, range.to),
+      });
       setScoreError('');
     } catch (e) {
       setScoreError(errText(e));
@@ -515,48 +607,143 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     (m === null ? undefined : score?.boxes.find((x) => x.measure === m)) ?? null;
   const tinted = (r: Rect | null, tone: Tint['tone']): Tint[] => (r ? [{ x: r.x, y: r.y, w: r.w, h: r.h, tone }] : []);
 
+  const focusBar = focus && sys && focus.system === sys.index ? focus.measure : null;
   const openHere = (piece?.state.marks ?? []).filter((m) => m.status === 'open' && sys && m.system === sys.index);
+  // His circle shows what's wrong; the bar is only outlined (a mark from before circles kept notes is filled).
   const circlesOn = (side: Circle['side']): Circle[] => [
     ...openHere.flatMap((m) => (m.circle?.side === side ? [m.circle] : [])),
-    ...(pending?.circle.side === side ? [pending.circle] : []),
+    ...pending.flatMap((pm, i) =>
+      pm.circle.side === side && pending.findIndex((q) => q.circle === pm.circle) === i ? [pm.circle] : []),
   ];
   const tintsOn = (bar: (m: number | null) => Rect | null): Tint[] => [
-    ...openHere.flatMap((m) => tinted(bar(m.measure), 'red')),
-    ...(pending ? tinted(bar(pending.measure), 'amber') : []),
+    ...openHere.flatMap((m) => tinted(bar(m.measure), 'red').map((t) => ({ ...t, outline: !!m.circle }))),
+    ...pending.flatMap((pm) => tinted(bar(pm.measure), 'amber').map((t) => ({ ...t, outline: true }))),
+    ...(focusBar !== null ? tinted(bar(focusBar), 'amber').map((t) => ({ ...t, outline: true })) : []),
   ];
+  const suspectHere = focusBar === null ? [] : (sys?.suspects ?? []).filter((f) => f.measure === focusBar);
 
+  // One pending mark per bar the circle covers, each with the notes inside it.
+  const addPending = (circle: Circle, perBar: { measure: number; staff: number | null; notes: NoteBox[] }[]) => {
+    if (perBar.length === 0) {
+      setNotice("That circle isn't on a bar of this line, so it wasn't kept.");
+      return;
+    }
+    setNotice('');
+    setPending((list) => [...list, ...perBar.map((b) => ({
+      key: ++pendingKey.current, circle, measure: b.measure, staff: b.staff, notes: markNotes(b.notes), note: '',
+    }))]);
+  };
   const onScanCircle = (c: { cx: number; cy: number; r: number }) => {
-    if (!layout || !sys) return;
-    const p = cropToPage(layout, sys, c.cx, c.cy);
-    setPending({ circle: { side: 'scan', ...c }, measure: measureAtX(sys, p.x), staff: staffAtY(sys, p.y) });
+    const first = sys?.measures?.[0];
+    if (!layout || !sys || first === undefined) return;
+    const scale = layout.crop_scale;
+    const spans: BarSpan[] = Array.from({ length: sys.bars }, (_, i) => ({
+      measure: first + i, x0: sys.barlines[i] * scale, x1: sys.barlines[i + 1] * scale,
+    }));
+    const staff = staffAtY(sys, cropToPage(layout, sys, c.cx, c.cy).y);
+    addPending({ side: 'scan', ...c }, barsUnder(spans, c.cx, c.r).map((measure) => {
+      const span = spans.find((b) => b.measure === measure) as BarSpan;
+      const box = score?.boxes.find((b) => b.measure === measure);
+      const share = (x: number) => (x - span.x0) / (span.x1 - span.x0);
+      const notes = box && score ? notesInShare(score.notes, measure, staff, box, share(c.cx - c.r), share(c.cx + c.r)) : [];
+      return { measure, staff, notes };
+    }));
   };
   const onScoreCircle = (c: { cx: number; cy: number; r: number }) => {
-    const hit = scoreHit(score?.boxes ?? [], c.cx, c.cy);
-    setPending({ circle: { side: 'score', ...c }, ...hit });
+    const boxes = score?.boxes ?? [];
+    const spans: BarSpan[] = boxes.map((b) => ({ measure: b.measure, x0: b.x, x1: b.x + b.w }));
+    // A note's position is its head's corner: a little slack so a snug circle still catches it.
+    const reach = { ...c, r: c.r * 1.15 + 4 };
+    addPending({ side: 'score', ...c }, barsUnder(spans, c.cx, c.r).map((measure) => ({
+      measure,
+      staff: scoreHit(boxes.filter((b) => b.measure === measure), c.cx, c.cy).staff,
+      notes: score ? notesInCircle(score.notes, measure, reach) : [],
+    })));
   };
 
-  const submitMark = async () => {
-    if (!pending || !sys) return;
-    const p = await append({
-      kind: 'mark',
-      system: sys.index,
-      measure: pending.measure,
-      staff: pending.staff,
-      note: note.trim(),
-      circle: pending.circle,
-    });
-    if (p) {
-      setPending(null);
-      setNote('');
+  // One save at a time (a held Enter or Enter-then-click would save the rest twice).
+  const savingRef = useRef(false);
+  const submitMarks = async () => {
+    if (!sys || savingRef.current) return;
+    savingRef.current = true;
+    setNotice('');
+    try {
+      for (const { key } of pending) {
+        // Read it fresh: leaving the line drops what's left, and a note may have been typed meanwhile.
+        const pm = pendingRef.current.find((q) => q.key === key);
+        if (!pm) return;
+        const p = await append({
+          kind: 'mark', system: sys.index, measure: pm.measure, staff: pm.staff,
+          note: pm.note.trim(), circle: pm.circle, notes: pm.notes,
+        });
+        if (!p) return; // the error shows; what's left stays pending
+        setPending((list) => list.filter((q) => q.key !== key));
+      }
+    } finally {
+      savingRef.current = false;
     }
+  };
+  const dropLast = () => {
+    const last = pending[pending.length - 1];
+    if (!last) return;
+    setPending(pending.slice(0, -1));
+    setNotice(`Dropped the circle on bar ${last.measure}; it wasn't saved.`);
   };
 
   const confirmLine = async () => {
-    if (!sys) return;
+    if (!sys || !piece || busy) return;
+    if (!canConfirmRef.current) {
+      if (openHere.length) setNotice("This line has an open mark, so it can't be confirmed yet.");
+      else if (pending.length) setNotice('Save or drop the circled marks first.');
+      else if (!mapped) setNotice("This line doesn't line up with the score, so it can't be confirmed.");
+      else if (piece.state.confirmed[sys.index] !== undefined) {
+        const next = nextUnconfirmed(piece, lineIdx);
+        if (next >= 0) go(next);
+        else setNotice('Every line is confirmed.');
+      }
+      return;
+    }
     const p = await append({ kind: 'confirm_system', system: sys.index });
     if (!p) return;
     const next = nextUnconfirmed(p, lineIdx);
     if (next >= 0) go(next);
+  };
+
+  // J/K: the next or previous lint-flagged bar, across lines. Only moves; never confirms.
+  const jumpSuspect = (dir: 1 | -1) => {
+    const all = systems.flatMap((s, i) => suspectBars(s).map((measure) => ({ i, system: s.index, measure })));
+    if (all.length === 0) {
+      setNotice('No suspect bars in this piece.');
+      return;
+    }
+    const at = focusBar ?? -Infinity;
+    const cmp = (a: { i: number; measure: number }) => a.i - lineIdx || a.measure - at;
+    const target = dir > 0
+      ? all.find((a) => cmp(a) > 0) ?? all[0]
+      : [...all].reverse().find((a) => cmp(a) < 0) ?? all[all.length - 1];
+    if (target.i !== lineIdx) go(target.i);
+    setFocus({ system: target.system, measure: target.measure });
+  };
+
+  keyRef.current = (e: KeyboardEvent) => {
+    // A circle's note box handles its own Enter / Esc.
+    if (isTyping(e.target) || e.ctrlKey || e.altKey || e.metaKey) return;
+    // A held key repeats: that may move, never confirm or save one line after another.
+    if (e.repeat && (e.key === ' ' || e.key === 'Enter' || e.key.toLowerCase() === 'c')) {
+      e.preventDefault();
+      return;
+    }
+    const onButton = e.target instanceof HTMLElement && !!e.target.closest('button, [role="button"]');
+    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (key === 'ArrowLeft') go(lineIdx - 1);
+    else if (key === 'ArrowRight') go(lineIdx + 1);
+    else if (key === 'j') jumpSuspect(1);
+    else if (key === 'k') jumpSuspect(-1);
+    else if (key === 'Escape') dropLast();
+    else if (key === ' ' || key === 'c') void confirmLine();
+    else if (key === 'Enter' && !onButton) void (pending.length ? submitMarks() : confirmLine());
+    else return;
+    e.preventDefault();
   };
 
   if (loadError || !piece) {
@@ -574,7 +761,8 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   const confirmedCount = systems.filter((s) => state.confirmed[s.index] !== undefined).length;
   const isConfirmed = !!sys && state.confirmed[sys.index] !== undefined;
   const hasOpen = openHere.length > 0;
-  const canConfirm = !!sys && mapped && !hasOpen && !isConfirmed && !busy;
+  const canConfirm = !!sys && mapped && !hasOpen && !isConfirmed && !busy && pending.length === 0;
+  canConfirmRef.current = canConfirm;
 
   const jumpToMark = (m: MarkState) => {
     const i = systems.findIndex((s) => s.index === m.system);
@@ -605,6 +793,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <button
               data-testid="review-prev"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => go(lineIdx - 1)}
               disabled={lineIdx <= 0}
               className="rounded bg-gray-800 px-3 py-1 text-sm hover:bg-gray-700 disabled:opacity-40"
@@ -616,6 +805,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
             </span>
             <button
               data-testid="review-next"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => go(lineIdx + 1)}
               disabled={lineIdx >= systems.length - 1}
               className="rounded bg-gray-800 px-3 py-1 text-sm hover:bg-gray-700 disabled:opacity-40"
@@ -630,13 +820,20 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
                   : state.confirmed[s.index] !== undefined
                     ? 'bg-green-700 hover:bg-green-600'
                     : 'bg-gray-700 hover:bg-gray-600';
+                const suspects = suspectBars(s).length;
                 return (
                   <button
                     key={s.index}
+                    data-testid={`review-line-${s.index}`}
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => go(i)}
-                    className={`h-6 min-w-6 rounded px-1 text-xs ${tone} ${i === lineIdx ? 'ring-2 ring-white' : ''}`}
+                    title={suspects ? `${suspects} suspect bar${suspects > 1 ? 's' : ''}` : undefined}
+                    className={`relative h-6 min-w-6 rounded px-1 text-xs ${tone} ${i === lineIdx ? 'ring-2 ring-white' : ''}`}
                   >
                     {s.index}
+                    {suspects > 0 && (
+                      <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber-400" data-testid="review-suspect-dot" />
+                    )}
                   </button>
                 );
               })}
@@ -689,47 +886,77 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
             {scoreError && <p className="p-3 text-sm text-red-600">{scoreError}</p>}
           </div>
 
-          {pending && (
-            <div className="mb-3 flex flex-wrap items-center gap-2 rounded bg-gray-900 p-3">
-              <span className="text-sm text-amber-300">
-                Bar {pending.measure ?? '?'}{staffWords(pending.staff)}: what's wrong? (optional)
-              </span>
-              <input
-                data-testid="review-mark-input"
-                autoFocus
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void submitMark();
-                  else if (e.key === 'Escape') setPending(null);
-                }}
-                className="min-w-48 flex-1 rounded border border-gray-700 bg-gray-950 px-2 py-1 text-sm text-white"
-              />
-              <button
-                data-testid="review-mark-submit"
-                onClick={() => void submitMark()}
-                disabled={busy}
-                className="rounded bg-red-700 px-3 py-1 text-sm hover:bg-red-600 disabled:opacity-40"
-              >
-                Mark it
-              </button>
-              <button
-                onClick={() => setPending(null)}
-                className="rounded bg-gray-800 px-3 py-1 text-sm hover:bg-gray-700"
-              >
-                Cancel
-              </button>
+          {suspectHere.length > 0 && (
+            <p className="mb-2 text-sm text-amber-300" data-testid="review-suspect">
+              Suspect bar {focusBar}: {suspectHere.map((f) => f.detail).join('; ')}
+            </p>
+          )}
+          {notice && <p className="mb-2 text-sm text-amber-300" data-testid="review-notice">{notice}</p>}
+
+          {pending.length > 0 && (
+            <div className="mb-3 space-y-2 rounded bg-gray-900 p-3" data-testid="review-pending">
+              {pending.map((pm, i) => (
+                <div key={pm.key} className="flex flex-wrap items-center gap-2" data-testid="review-pending-mark">
+                  <span className="text-sm text-amber-300">
+                    Bar {pm.measure}{staffWords(pm.staff)}
+                    {pm.notes.length > 0 && <span className="text-amber-200">: {describeNotes(pm.notes)}</span>}
+                  </span>
+                  <input
+                    data-testid="review-mark-input"
+                    autoFocus={i === pending.length - 1}
+                    placeholder="what's wrong? (optional)"
+                    value={pm.note}
+                    onChange={(e) => {
+                      const note = e.target.value;
+                      setPending((list) => list.map((q) => (q.key === pm.key ? { ...q, note } : q)));
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void submitMarks();
+                      else if (e.key === 'Escape') dropLast();
+                    }}
+                    className="min-w-48 flex-1 rounded border border-gray-700 bg-gray-950 px-2 py-1 text-sm text-white"
+                  />
+                </div>
+              ))}
+              <div className="flex gap-2">
+                <button
+                  data-testid="review-mark-submit"
+                  onClick={() => void submitMarks()}
+                  disabled={busy}
+                  className="rounded bg-red-700 px-3 py-1 text-sm hover:bg-red-600 disabled:opacity-40"
+                >
+                  Save {pending.length > 1 ? `${pending.length} marks` : 'mark'}
+                </button>
+                <button
+                  data-testid="review-mark-drop"
+                  onClick={dropLast}
+                  className="rounded bg-gray-800 px-3 py-1 text-sm hover:bg-gray-700"
+                >
+                  Drop last
+                </button>
+              </div>
             </div>
           )}
 
-          <button
-            data-testid="review-confirm"
-            onClick={() => void confirmLine()}
-            disabled={!canConfirm}
-            className="mb-6 rounded bg-green-700 px-4 py-2 font-medium hover:bg-green-600 disabled:opacity-40"
-          >
-            {isConfirmed ? '✔ Confirmed' : 'This line matches'}
-          </button>
+          <div className="mb-6 flex flex-wrap items-center gap-x-6 gap-y-2">
+            <button
+              data-testid="review-confirm"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void confirmLine()}
+              disabled={!canConfirm}
+              className="rounded bg-green-700 px-4 py-2 font-medium hover:bg-green-600 disabled:opacity-40"
+            >
+              {isConfirmed ? '✔ Confirmed' : 'This line matches'}
+            </button>
+            <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400" data-testid="review-keys">
+              {KEYS.map(([k, what]) => (
+                <div key={k} className="flex gap-1">
+                  <dt><kbd className="rounded bg-gray-800 px-1 text-gray-200">{k}</kbd></dt>
+                  <dd>{what}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
         </>
       )}
 
@@ -778,7 +1005,10 @@ function MarksList(props: {
             className={`cursor-pointer rounded bg-gray-900 px-3 py-2 text-sm hover:bg-gray-800 ${m.status === 'withdrawn' ? 'opacity-50' : ''}`}
           >
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span className="font-medium">Line {m.system}, bar {m.measure ?? '?'}</span>
+              <span className="font-medium">
+                Line {m.system}, bar {m.measure ?? '?'}{staffWords(m.staff)}
+                {m.notes.length > 0 && <span className="font-normal text-gray-300">: {describeNotes(m.notes)}</span>}
+              </span>
               {m.note && <span className="text-gray-300">{m.note}</span>}
               <span className="ml-auto flex items-center gap-2 text-xs">
                 {m.status === 'open' && (

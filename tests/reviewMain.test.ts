@@ -18,7 +18,7 @@ const layout = (over: Record<string, unknown> = {}) => ({
   systems: [1, 2].map((i) => ({
     index: i, page: '01.png', y0: 0, y1: 10, spacing: 20, staves: [], x_left: 0, x_right: 10,
     barlines: [0, 5, 10], bars: 2, measures: [i * 2 - 1, i * 2], numbers: null,
-    crop: `review-pages/tiny/s0${i}.jpg`,
+    crop: `review-pages/tiny/s0${i}.jpg`, suspects: [],
   })),
   ...over,
 });

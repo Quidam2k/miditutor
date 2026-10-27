@@ -134,6 +134,28 @@ own notes; on-screen key legend in Review view (J/K, arrows, C/Space, Enter, Esc
 confirm); C (and Space) confirm only the line on screen, then move on; no bulk confirm; a mark that would be dropped
 (outside any bar, or Esc) SAYS SO on screen; ANNOUNCE the restart in the room before the Pinocchio deploy closes the app.
 
+P5 COMMITTED a45576f (pushed), NOT deployed. Real e2e 18/18 x2 on final build (scratchpad e2e_review_p5.py; copy
+Q:/project-reports/miditutor/9666-e2e_review_p5.py; run: E2E_LNK='Q:\UserData\Desktop\MidiTutor Review.lnk'
+Q:/Pantheon/.venv-omnivoice/Scripts/python.exe -I e2e_review_p5.py [BAR], bar 30 gives a real fix; bar 26 may say
+no change). Sonnet review fixes folded in. Waiting-mark count for Jarvis's #9763 report: 0 real marks so far
+(nothing deployed yet); say so and that the count needs a week of use.
+
+P6 PROGRESS (uncommitted, in tree), 2026-10-26 ~18:50:
+- DONE + VERIFIED: ReviewView JSX + keys (Space/C confirm+advance, Enter save, Esc drop last, J/K suspect jump, never
+  confirms; legend review-keys; amber suspect dots; notices). OSMD autoBeam does NOT beam x/8 (splits every eighth), so
+  src/renderer/engine/autoBeam.ts addBeams() adds <beam> to the in-memory XML before load (render only; vitest checks
+  O Holy Night pitches/durations unchanged). reviewMain fixture got suspects: [] (else flaky: layout re-run each test).
+  vitest 225 (6 runs green), pytest 48, tsc clean. Real library layouts have suspects (81 pieces). Packaged+installed.
+  Installed-app e2e 22/22 PASS: scratchpad e2e_review_p6.py (copy Q:/project-reports/miditutor/9764-e2e_review_p6.py),
+  screenshots screengrab/9764-p6-*.png. Codex gate refused (17%); Sonnet second read running/done.
+- TODO: act on the Sonnet read, re-package/install if code changed, commit (#9664 marker, --assignment 9767).
+- Then DEPLOY P5+P6: ANNOUNCE in the room first (orch_report to Jarvis that MidiTutor on Pinocchio will close for a
+  restart) -> gh workflow run macos.yml --ref master, gh run watch, confirm headSha -> idle-guarded deploy_pinocchio.sh
+  with PINOCCHIO_HOST=toddwalker@192.168.50.27 (name doesn't resolve) -> real sync_pieces.sh (same host) so the
+  Review tab appears on Pinocchio -> report app left CLOSED. Rm Mac scratch "~/MidiTutor Review Test" if left.
+- Then complete 9664, 9667, 9668, 9763, 9764 (closes: #5075), 9765, 9766, 9767; memory=miditutor-scan-review (update
+  for P5 mirror/pull + P6). Report waiting-mark count (#9763).
+
 ⚠️ NEXT: P5 (AMEND #9666 above): review_layout 150-dpi crops already exist (review-pages/); sync_pieces.sh carries
 review-pages + review/*.json(l) + proposals; Pinocchio Review tab reads ~/MidiTutor Pieces/review, appends to outbox;
 review_queue.py pull (scp, merge by event id, run proposals, push back); desk app 2-min pull timer while open; Pinocchio

@@ -6,6 +6,9 @@ Reads <library>/<slug>.musicxml and <library>/pages/<slug>/NN.png (300-dpi scans
 review/<slug>.layout.json and review-pages/<slug>/sNN.jpg (one crop per system) under the library,
 never the repo. No slugs = every slug that has both scans and a score. Up-to-date slugs are skipped
 unless --force. Pages are processed one at a time; there is no multiprocessing.
+Each mapped system also lists its `suspects`: the lint's flagged bars (#9764), so review can
+jump from one suspect bar to the next. A layout that is current but lacks them only gets them
+added (a lint, no page analysis).
 """
 import argparse
 from datetime import datetime, timezone
@@ -387,20 +390,36 @@ def layout_piece(library, slug, out_dir=None):
                 "staves_per_system": score["staves_per_system"]},
         "scan": {"bars": sum(s["bars"] for s in systems), "systems": len(systems)},
         "match": match, "pages": page_info, "systems": out_systems}
+    add_suspects(data, score_path)
     write_json(out_dir / "review" / f"{slug}.layout.json", data)
+    return data
+
+
+def add_suspects(data, score_path):
+    """Each mapped system's lint-flagged bars of the score as it is now: [{measure, staff, check, detail}]."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import omr_audit
+    flags = [f for f in omr_audit.lint_piece(score_path)["flags"] if not f.get("raw_only")]
+    for system in data["systems"]:
+        span = system["measures"]
+        system["suspects"] = [{k: f[k] for k in ("measure", "staff", "check", "detail")}
+                              for f in flags if span and span[0] <= f["measure"] <= span[1]]
     return data
 
 
 # ---- CLI -----------------------------------------------------------------------------------
 
 def is_current(out_dir, slug, score_path):
+    """The layout on disk if it matches the score and its crops exist, else None."""
     path = Path(out_dir) / "review" / f"{slug}.layout.json"
     try:
         data = json.loads(path.read_text(encoding="ascii"))
-        return (data.get("version") == VERSION and data.get("score_sha256") == _sha256(score_path)
-                and all((Path(out_dir) / s["crop"]).is_file() for s in data["systems"]))
+        if (data.get("version") == VERSION and data.get("score_sha256") == _sha256(score_path)
+                and all((Path(out_dir) / s["crop"]).is_file() for s in data["systems"])):
+            return data
     except (OSError, ValueError, KeyError, TypeError):
-        return False
+        pass
+    return None
 
 
 def all_slugs(library):
@@ -423,8 +442,13 @@ def main(argv=None):
     failed = False
     for slug in args.slugs or all_slugs(library):
         try:
-            if not args.force and is_current(out_dir, slug, library / f"{slug}.musicxml"):
+            current = None if args.force else is_current(out_dir, slug, library / f"{slug}.musicxml")
+            if current and all("suspects" in sy for sy in current["systems"]):
                 print(f"{slug}: skipped (current)")
+                continue
+            if current:
+                write_json(out_dir / "review" / f"{slug}.layout.json", add_suspects(current, library / f"{slug}.musicxml"))
+                print(f"{slug}: suspects added")
                 continue
             d = layout_piece(library, slug, out_dir)
             print(f"{slug}: {d['match']} scan={d['scan']['bars']} xml={d['xml']['measures']} "

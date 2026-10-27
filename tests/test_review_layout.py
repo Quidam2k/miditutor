@@ -106,3 +106,18 @@ def test_learning_first_pieces_map_exactly(tmp_path, slug):
     # The pieces he reviews first (O, Stormy Sea, Sorcerer's, Let Me Fall): each bar must land on its line.
     data = review_layout.layout_piece(LIBRARY, slug, out_dir=tmp_path)
     assert data["match"] == "exact", [s["bars"] for s in data["systems"]]
+
+
+def test_suspects_are_the_current_scores_flags_per_line(monkeypatch):
+    import omr_audit
+    flags = [
+        {"measure": 2, "number": "2", "staff": 1, "check": "bar_length", "detail": "underfull"},
+        {"measure": 4, "number": "4", "staff": None, "check": "time_signature", "detail": "old", "raw_only": True},
+        {"measure": 5, "number": "5", "staff": 2, "check": "range", "detail": "low"},
+    ]
+    monkeypatch.setattr(omr_audit, "lint_piece", lambda path: {"flags": flags})
+    data = {"systems": [{"measures": [1, 3]}, {"measures": [4, 6]}, {"measures": None}]}
+    review_layout.add_suspects(data, "unused.musicxml")
+    assert data["systems"][0]["suspects"] == [{"measure": 2, "staff": 1, "check": "bar_length", "detail": "underfull"}]
+    assert data["systems"][1]["suspects"] == [{"measure": 5, "staff": 2, "check": "range", "detail": "low"}]
+    assert data["systems"][2]["suspects"] == []

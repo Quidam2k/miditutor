@@ -274,6 +274,25 @@ def test_propose_prompt_includes_rejections_and_earlier_proposals(lib):
     assert record["rejections_seen"] == 1 and record["id"] != first["id"]
 
 
+def test_propose_names_his_circled_notes_and_draws_his_circle(lib):
+    layout = json.loads((lib / "review" / f"{SLUG}.layout.json").read_text())
+    system = layout["systems"][0]
+    x0, y0, *_ = rq.crop_box(system, 2, Image.open(lib / "pages" / SLUG / system["page"]).size)
+    scale = layout["crop_scale"]
+    px, py, pr = x0 + 1400, system["y0"] + 60, 40                  # page px, inside the target bar
+    circle = {"side": "scan", "cx": px * scale, "cy": 60 * scale, "r": pr * scale}
+    _events(lib, [{"id": MARK, "kind": "mark", "system": 1, "measure": 2, "staff": 2, "ts": 1, "circle": circle,
+                   "notes": [{"name": "E3", "beat": 2, "staff": 2}, {"name": "G3", "beat": 2, "staff": 2}]}])
+    seen = []
+    record = rq.run_propose(lib, SLUG, MARK, "m", 5, caller=_fake(FIX, seen))[1]["proposal"]
+    assert "He circled these notes of the target bar: E3 (lower staff, beat 2), G3 (lower staff, beat 2)" in seen[0]
+    image = Image.open(lib / record["crop"]).convert("RGB")
+    k = image.width / 2780
+    r, g, b = image.getpixel((int((1400 + pr - 3) * k), int((py - y0) * k)))  # on the circle's right edge
+    assert r > 200 and g < 80 and b < 80
+    assert image.getpixel((int(1400 * k), int((py - y0) * k))) != (r, g, b)  # its middle is left clear
+
+
 def test_propose_correct_is_no_change(lib):
     answer = {"verdict": "correct", "explanation": "ok", "edits": []}
     fenced = "```json\n" + json.dumps(answer) + "\n```"

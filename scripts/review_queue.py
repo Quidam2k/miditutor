@@ -313,8 +313,11 @@ def crop_box(system, measure, page_size):
     return int(x0), int(y0), int(x1), int(y1), int(barlines[k] - x0), int(barlines[k + 1] - x0)
 
 
-def make_crop(library, slug, layout, system, measure, out_path):
-    """Write the bracketed scan crop of the target bar to out_path."""
+def make_crop(library, slug, layout, system, measure, out_path, circle=None):
+    """Write the bracketed scan crop of the target bar to out_path.
+
+    circle: his circle on the scan ({cx, cy, r} in the system's review crop px), drawn in red too
+    so the check looks at what he circled (#9764)."""
     file = system.get("page")
     page = next((p for p in layout.get("pages", []) if p.get("file") == file), {})
     path = Path(library) / "pages" / slug / str(file)
@@ -329,6 +332,11 @@ def make_crop(library, slug, layout, system, measure, out_path):
     y = min(int(1.5 * system["spacing"]), crop.height - 1)
     ImageDraw.Draw(crop).rectangle(
         [tx0, y - BRACKET_THICK // 2, tx1, y + BRACKET_THICK // 2 - 1], fill=BRACKET_COLOR)
+    if circle:
+        scale = layout.get("crop_scale") or 1
+        cx, cy = circle["cx"] / scale - x0, system["y0"] + circle["cy"] / scale - y0
+        r = circle["r"] / scale
+        ImageDraw.Draw(crop).ellipse([cx - r, cy - r, cx + r, cy + r], outline=BRACKET_COLOR, width=BRACKET_THICK)
     if crop.width > MAX_CROP_WIDTH:
         crop = crop.resize((MAX_CROP_WIDTH, max(1, round(crop.height * MAX_CROP_WIDTH / crop.width))),
                            Image.LANCZOS)
@@ -391,8 +399,15 @@ def _title(score):
     return None
 
 
-def build_prompt(score, target, listings, note, rejections, earlier):
-    """The stdin prompt for the model."""
+def describe_notes(notes):
+    """His circled notes as the prompt names them: "E3 (lower staff, beat 2)"."""
+    words = {1: "upper staff", 2: "lower staff"}
+    return ", ".join(f"{n.get('name')} ({words.get(n.get('staff'), 'staff ' + str(n.get('staff')))}, beat {n.get('beat')})"
+                     for n in notes if isinstance(n, dict))
+
+
+def build_prompt(score, target, listings, note, rejections, earlier, circled=None):
+    """The stdin prompt for the model. circled: the notes he circled in the target bar, if any."""
     here = listings[target]
     lines = [
         "Look at crop.png in the current directory (use the Read tool). It is a scan of a piano "
@@ -405,6 +420,10 @@ def build_prompt(score, target, listings, note, rejections, earlier):
         label = "TARGET bar" if position == target else "context bar"
         lines.append(f"{label}, measure {position}: {json.dumps(listings[position])}")
     lines += ["", f"Todd's note on this mark: {note or '(none)'}"]
+    if circled:
+        lines.append(f"He circled these notes of the target bar: {describe_notes(circled)}. Look at those "
+                     "first; the red circle on the scan (when there is one) shows where. Change other notes "
+                     "of the bar only if they are also wrong.")
     if rejections:
         lines.append("He marked earlier answers still wrong, with these notes:")
         lines += [f"- {n}" for n in rejections]
@@ -541,15 +560,18 @@ def _propose(library, slug, mark_id, model, timeout, caller):
         pid = uuid.uuid4().hex
         crop = proposals / f"{pid}.png"
         try:
-            make_crop(library, slug, layout, system, target, crop)
-        except (OSError, ValueError) as error:
+            circle = mark.get("circle")
+            make_crop(library, slug, layout, system, target, crop,
+                      circle if isinstance(circle, dict) and circle.get("side") == "scan" else None)
+        except (OSError, ValueError, KeyError, TypeError) as error:  # a malformed circle in the log too
             raise QueueError(2, f"The scan couldn't be cropped ({error}).")
         record = {"id": pid, "mark": mark_id, "slug": slug, "status": "failed", "reason": None,
                   "explanation": "", "edits": [], "measure": target, "staff": mark.get("staff"),
                   "base_sha256": score_sha, "crop": f"review/{slug}.proposals/{pid}.png",
                   "proposed": None, "flags_before": [], "flags_after": [], "model": model,
                   "usd": 0.0, "created": int(time.time() * 1000), "rejections_seen": len(rejects)}
-        prompt = build_prompt(score, target, listings, mark.get("note"), notes, earlier)
+        circled = mark.get("notes") if isinstance(mark.get("notes"), list) else None
+        prompt = build_prompt(score, target, listings, mark.get("note"), notes, earlier, circled)
         try:
             text, usd = caller(prompt, crop, model, timeout)
             record["usd"] = float(usd or 0)

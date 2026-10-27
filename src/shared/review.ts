@@ -1,3 +1,4 @@
+import type { MarkNote } from './reviewCircle';
 // Scan review (#9664): the review store is an append-only event log per piece
 // (library/review/<slug>.events.jsonl). Both UIs only append events; everything
 // shown (open marks, confirmed lines, "Verified by you") is a fold of the log.
@@ -16,6 +17,8 @@ export interface LayoutSystem {
   /** Both system ends and every barline between, left to right: bars = length - 1. */
   barlines: number[];
   bars: number;
+  /** The lint's flagged bars on this line (#9764), for jumping from suspect to suspect. */
+  suspects?: { measure: number; staff: number | null; check: string; detail: string }[];
   /** One-based measure positions in the score, or null when the scan and the XML disagree here. */
   measures: [number, number] | null;
   numbers: [string, string] | null;
@@ -53,7 +56,7 @@ interface EventBase {
 }
 
 export type ReviewEvent = EventBase & (
-  | { kind: 'mark'; system: number; measure: number | null; staff?: number | null; note?: string; circle?: Circle }
+  | { kind: 'mark'; system: number; measure: number | null; staff?: number | null; note?: string; circle?: Circle; notes?: MarkNote[] }
   /** "This line matches", against the score file as it was then. */
   | { kind: 'confirm_system'; system: number; sha: string }
   /** A proposal applied: the score went from `before` to `after`. */
@@ -80,6 +83,8 @@ export interface MarkState {
   staff: number | null;
   note: string;
   circle?: Circle;
+  /** The notes he circled (#9764); none = the whole bar. */
+  notes: MarkNote[];
   origin: Origin;
   ts: number;
   status: MarkStatus;
@@ -164,7 +169,7 @@ export function foldReview(events: ReviewEvent[], layout: Layout | null, current
       case 'mark':
         marks.set(e.id, {
           id: e.id, system: e.system, measure: e.measure, staff: e.staff ?? null, note: e.note ?? '',
-          circle: e.circle, origin: e.origin, ts: e.ts, status: 'open', rejections: [],
+          circle: e.circle, notes: e.notes ?? [], origin: e.origin, ts: e.ts, status: 'open', rejections: [],
         });
         delete confirmed[e.system];
         break;

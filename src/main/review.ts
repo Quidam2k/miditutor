@@ -242,8 +242,9 @@ export class Review {
   async ensureLayout(slug: string): Promise<ReviewPiece> {
     let piece = await this.piece(slug);
     if (this.mirror) return piece;
+    // A layout from before #9764 lacks the suspect bars: the script adds them without redoing the pages.
     if (!(piece.layout?.version === 1 && piece.layout.score_sha256 === piece.sha &&
-          await this.cropsExist(piece.layout))) {
+          piece.layout.systems.every((s) => s.suspects) && await this.cropsExist(piece.layout))) {
       await this.python('review_layout.py', ['--library', this.cfg.library, slug]);
       piece = await this.piece(slug);
     }
