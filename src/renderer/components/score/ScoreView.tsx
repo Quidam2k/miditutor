@@ -975,6 +975,15 @@ export function ScoreView() {
             {hasMix ? 'Edit my mix' : 'Make my mix'}
           </button>
         )}
+        {/* trust.json "no_mix" (#9794): say why, visibly, instead of just dropping the button. */}
+        {piece.group?.mixBlocked && (
+          <>
+            <button disabled data-mix-blocked className={`${btn} cursor-not-allowed opacity-50`}>
+              {hasMix ? 'Edit my mix' : 'Make my mix'}
+            </button>
+            <span className="text-xs text-amber-400">{piece.group.mixBlocked}</span>
+          </>
+        )}
         {/* Visible, not hover-only: what the OMR audit knows about this score (#9644). */}
         <span
           className={`text-xs ${

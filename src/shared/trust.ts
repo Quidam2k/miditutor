@@ -7,6 +7,10 @@ export interface PieceTrust {
   note: string;
   /** sha256 of the score he verified ('verified' only). */
   sha?: string;
+  /** trust.json "hide": true: leave this version out of its song's switch (#9794). */
+  hide?: true;
+  /** trust.json "no_mix": why My mix is off while this is the Harder source (#9794). */
+  noMix?: string;
 }
 
 export type TrustMap = Record<string, PieceTrust>;
@@ -19,12 +23,22 @@ export function parseTrust(json: unknown): TrustMap {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) continue;
-    const { status, note, score_sha256: sha } = value as Record<string, unknown>;
+    const { status, note, score_sha256: sha, hide, no_mix: noMix } = value as Record<string, unknown>;
     if (status !== 'checked' && status !== 'issues' && status !== 'unverified' && status !== 'verified') continue;
     // A verified entry without the score's hash can't be checked against the file: not trusted.
     if (status === 'verified' && typeof sha !== 'string') continue;
     const text = typeof note === 'string' ? note : '';
-    entries.push([file, status === 'verified' ? { status, note: text, sha: sha as string } : { status, note: text }]);
+    if (status === 'verified') {
+      // His own review wins: a verified file is never hidden or kept out of a mix.
+      entries.push([file, { status, note: text, sha: sha as string }]);
+      continue;
+    }
+    entries.push([file, {
+      status,
+      note: text,
+      ...(hide === true ? { hide: true as const } : {}),
+      ...(typeof noMix === 'string' && noMix.trim() ? { noMix: noMix.trim() } : {}),
+    }]);
   }
   return Object.fromEntries(entries);
 }

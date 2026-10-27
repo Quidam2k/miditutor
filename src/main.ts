@@ -17,7 +17,7 @@ import {
   titleFromPath,
 } from './shared/pieceFiles';
 import { TrustMap, parseTrust, trustFor } from './shared/trust';
-import { SavedMix, VersionMap, groupOf, mixPlanOf, parseMixes, parseVersions, withMixes } from './shared/versions';
+import { SavedMix, VersionMap, applyTrust, groupOf, mixPlanOf, parseMixes, parseVersions, withMixes } from './shared/versions';
 
 if (started) {
   app.quit();
@@ -128,7 +128,8 @@ const readMixes = async (dir: string): Promise<Record<string, SavedMix>> => {
 // The renderer splices the mix (it has the DOM); main checks it belongs to an aligned song and writes it.
 const saveMix = async (slug: string, mix: { harder: string; choice: unknown; musicxml: string; trust: unknown }) => {
   const dir = piecesDir();
-  const group = (await readVersions(dir))[slug];
+  // Same view as the picker: no mix from a hidden or no_mix Harder version (#9794).
+  const group = applyTrust(await readVersions(dir), await readTrust(dir)).versions[slug];
   const plan = group && mixPlanOf(group);
   if (!plan || plan.harder !== mix.harder) throw new Error(`${slug} has no My mix`);
   if (!isScoreXml(mix.musicxml)) throw new Error('The mix is not a MusicXML score');
@@ -154,9 +155,11 @@ const listPieces = async () => {
     const names = (await fs.readdir(dir)).filter(isPieceFileName).sort();
     const trust = await readTrust(dir);
     const mixes = await readMixes(dir);
-    const versions = withMixes(await readVersions(dir), mixes);
+    // trust.json can hide an unusable version or turn My mix off (#9794).
+    const { versions, hidden } = applyTrust(withMixes(await readVersions(dir), mixes), trust);
     const mixTrust = new Map(Object.values(mixes).map((m) => [m.file, m.trust]));
     for (const name of names) {
+      if (hidden.has(name)) continue;
       try {
         const musicxml = await readScoreFile(path.join(dir, name));
         let entry = mixTrust.get(name) ?? trustFor(trust, name);

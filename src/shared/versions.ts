@@ -3,7 +3,7 @@
 // picker lists the song once with a switch between them.
 
 import type { MixChoice, MixSection } from './mix';
-import { PieceTrust, parseTrust } from './trust';
+import { PieceTrust, TrustMap, parseTrust, trustFor } from './trust';
 
 export interface PieceVersion {
   file: string;
@@ -29,6 +29,8 @@ export interface VersionGroup {
   align?: Record<string, VersionAlign>;
   /** His saved My mix (mixes.json), merged in by withMixes. */
   saved?: SavedMix;
+  /** Why My mix is off: the Harder source's trust.json no_mix reason (applyTrust). */
+  mixBlocked?: string;
 }
 
 /** One saved My mix (mixes.json, local to each machine: never synced). */
@@ -60,6 +62,8 @@ export interface PieceGroupRef {
   index: number;
   /** Present when the song can be mixed (an aligned, mixable Harder version). */
   mix?: MixPlan;
+  /** Why My mix is off for this song, shown to him. */
+  mixBlocked?: string;
 }
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> => {
@@ -110,12 +114,18 @@ export function parseVersions(json: unknown): VersionMap {
   return Object.fromEntries(groups);
 }
 
-/** Easy plus the first aligned, mixable Harder version, with his saved choice when it still fits. */
-export function mixPlanOf(group: VersionGroup): MixPlan | undefined {
-  const easy = group.versions.find((v) => v.label === 'Easy');
-  const harder = group.versions.find(
+/** The first aligned, mixable Harder version: the My mix source. */
+function harderVersionOf(group: VersionGroup): PieceVersion | undefined {
+  return group.versions.find(
     (v) => v.label !== 'Easy' && v.label !== 'My mix' && v.mixable !== false && group.align?.[v.file],
   );
+}
+
+/** Easy plus the first aligned, mixable Harder version, with his saved choice when it still fits. */
+export function mixPlanOf(group: VersionGroup): MixPlan | undefined {
+  if (group.mixBlocked !== undefined) return undefined;
+  const easy = group.versions.find((v) => v.label === 'Easy');
+  const harder = harderVersionOf(group);
   if (!easy || !harder) return undefined;
   const { sections, semis } = group.align![harder.file];
   const saved = group.saved;
@@ -129,7 +139,14 @@ export function groupOf(map: VersionMap, file: string): PieceGroupRef | undefine
     const index = group.versions.findIndex((v) => v.file === file);
     if (index < 0) continue;
     const mix = mixPlanOf(group);
-    return { slug, title: group.title, label: group.versions[index].label, index, ...(mix ? { mix } : {}) };
+    return {
+      slug,
+      title: group.title,
+      label: group.versions[index].label,
+      index,
+      ...(mix ? { mix } : {}),
+      ...(group.mixBlocked !== undefined ? { mixBlocked: group.mixBlocked } : {}),
+    };
   }
   return undefined;
 }
@@ -158,4 +175,31 @@ export function withMixes(map: VersionMap, mixes: Record<string, SavedMix>): Ver
     out[slug] = { ...group, versions: [...group.versions, { file: saved.file, label: 'My mix', mixable: false }], saved };
   }
   return out;
+}
+
+/**
+ * trust.json can take a version out of the switch ("hide": true, an unusable scan) or turn
+ * My mix off ("no_mix": reason, wrong notes in the Harder source) (#9794). Data, not slugs:
+ * clearing the field, or his own Review "Verified", brings the version back. Easy, My mix
+ * and the Harder file his saved mix uses are never hidden; a group left with one version
+ * dissolves and that file stands alone. Hidden files are left out of the picker entirely.
+ */
+export function applyTrust(map: VersionMap, trust: TrustMap): { versions: VersionMap; hidden: Set<string> } {
+  const hidden = new Set<string>();
+  const groups: [string, VersionGroup][] = [];
+  for (const [slug, group] of Object.entries(map)) {
+    const versions = group.versions.filter((v) => {
+      if (v.label === 'Easy' || v.label === 'My mix' || v.file === group.saved?.harder) return true;
+      if (trustFor(trust, v.file)?.hide !== true) return true;
+      hidden.add(v.file);
+      return false;
+    });
+    if (versions.length < 2) continue;
+    const next: VersionGroup = { ...group, versions };
+    const harder = harderVersionOf(next);
+    const reason = harder ? trustFor(trust, harder.file)?.noMix : undefined;
+    if (reason) next.mixBlocked = reason;
+    groups.push([slug, next]);
+  }
+  return { versions: Object.fromEntries(groups), hidden };
 }

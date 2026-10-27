@@ -65,3 +65,23 @@ describe('trust badge text', () => {
     expect(trustBadge(undefined)).toBe('Not yet checked');
   });
 });
+
+describe('parseTrust version flags (#9794)', () => {
+  it('reads hide and no_mix', () => {
+    expect(parseTrust({
+      'a.musicxml': { status: 'issues', note: 'n', hide: true },
+      'b.musicxml': { status: 'issues', note: 'n', no_mix: ' Wrong notes ' },
+      'c.musicxml': { status: 'issues', note: 'n', hide: 'yes', no_mix: '  ' },
+    })).toEqual({
+      'a.musicxml': { status: 'issues', note: 'n', hide: true },
+      'b.musicxml': { status: 'issues', note: 'n', noMix: 'Wrong notes' },
+      'c.musicxml': { status: 'issues', note: 'n' },
+    });
+  });
+
+  it('drops both flags on his own verified entry', () => {
+    expect(parseTrust({
+      'a.musicxml': { status: 'verified', note: '', score_sha256: 'abc', hide: true, no_mix: 'x' },
+    })).toEqual({ 'a.musicxml': { status: 'verified', note: '', sha: 'abc' } });
+  });
+});
