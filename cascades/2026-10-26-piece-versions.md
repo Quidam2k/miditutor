@@ -24,7 +24,8 @@ save "My mix" (easy or harder per section) that plays, follows and loops like an
 |---|------|--------|
 | P1 | versions.json + parse + listPieces group + picker collapse + Easy/Harder switch + sync | DONE (P1 commit; e2e 13/13, scratchpad e2e_versions_p1.py) |
 | P2 | DONE (e2e 6/6, scratchpad e2e_versions_p2.py). IN PLACE, originals kept as <file>.musicxml.orig (precedent o-holy-night); piano-only harder copies (drop vocal part), fix O m17 / Let Me Fall m56 extra bars, seed labels | DONE except Quidam (below) |
-| P3 | align_versions.py (melody DTW) -> sections; "Make my mix" builder with side-by-side thumbnails; splice -> <slug>-my-mix.musicxml + recipe; capped trust | todo |
+| P3a | align_versions.py + src/shared/mix.ts splice (+ transpose) + tests | todo |
+| P3b | My mix builder UI (side-by-side thumbnails), save IPC, mixes.json, capped trust, e2e, deploy + sync | todo |
 
 Files P1: src/shared/versions.ts, tests/versions.test.ts, src/main.ts (listPieces), src/renderer/components/tutor/useTutorBridge.ts,
 src/renderer/components/score/ScoreView.tsx, src/renderer/store/useSettingsStore.ts, scripts/sync_pieces.sh.
@@ -42,4 +43,33 @@ scratchpad as quidam-piano-only-fails-bar37.musicxml. Follow-up: OMR repair of q
 PENDING (idle gate): review_layout.py --force o-musicnotes-arrangement let-me-fall-musicnotes-vocal-arrangement
 (their bar counts changed, so the Review tab's system->bar map is stale after the dropped bar).
 
-⚠️ NEXT: P3 (align_versions.py + My mix builder).
+## P3 design (decided 19:35; amendment reported to orch)
+KEYS DIFFER: O Easy C (fifths 0), O Harder D (2); LMF Easy C, LMF Harder reads -5 then 0 from bar 16 (OMR key
+misread); Quidam both -2 (but harder excluded). Fingering: Easy files have it (78/100/117 marks), Harder none.
+Default taken: a mix is in the EASY key; Harder sections are transposed into it at splice time (chromatic shift
+by the bar-1 key difference, respelled diatonically: step moves by the letter distance, alter fixes the rest).
+A harder file whose key changes where the easy one doesn't (LMF) is NOT mixable until its keys are repaired
+(versions.json mixable:false). So tonight My mix works for O only.
+P3a
+- scripts/align_versions.py <slug>: refuses unless the idle gate is open (omr_second_engine.gate_ok: >=600 s
+  idle, >=12 GB) per #9770. For Easy vs each mixable Harder: per bar, melody = highest staff-1 pitch per onset,
+  transposed into the easy key; DTW over bars (cost = normalized edit distance of the pitch-class sequences);
+  writes into versions.json group: `align: {<harder file>: [[easyBar, harderBar], ...]}` (the raw bar path, kept
+  so per-hand / note-level hybrids can reuse it, karen add 1) and `sections: [{easy:[a,b], harder:[c,d]}]`, cut
+  where the path is 1:1 diagonal, at 4-bar phrase boundaries (fallback: the easy file's systems).
+  parseVersions must keep align/sections.
+- src/shared/mix.ts spliceMix(easyXml, harderXml, sections, choice[], semis): the easy part's measures for Easy
+  sections, the harder part's (transposed) measures for Harder ones; the first bar of every segment gets the full
+  effective attributes of its source (divisions, key = easy key, time, staves, clefs); a "Harder: no fingering"
+  <words> direction opens each Harder segment (karen add 2); renumber; title "<title> (My mix)". vitest.
+P3b
+- Mix files are made on whichever box he is on, so they live in mixes.json (LOCAL, never synced: desk sync would
+  clobber them), merged into the group by listPieces as {label "My mix", mixable false}. IPC pieces:saveMix(slug,
+  choice[]) writes <slug>-my-mix.musicxml + mixes.json + a trust entry: weakest source wins (issues > unverified >
+  checked), never verified, note names the harder bars used (karen add 3), source "piece-versions".
+- UI: "Make my mix" next to the switch when the group has sections; one row per section with Easy and Harder
+  thumbnails side by side (OSMD drawFromMeasureNumber / drawUpToMeasureNumber, small), a toggle, Save.
+- e2e (scratch lib, CDP 9335): build an O mix, save, "My mix" in the switch, loads, inject notes across a splice,
+  loop over it. Then CI dispatch + deploy_pinocchio.sh, sync_pieces.sh, check on Pinocchio, leave the app as found.
+
+⚠️ NEXT: P3a.
