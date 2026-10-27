@@ -14,6 +14,8 @@ export interface ReviewConfig {
   library: string;
   python: string;
   scripts: string;
+  /** Folder inside a private git repo that backup_review.py mirrors his work into; none -> no backup. */
+  backup?: string;
 }
 
 /** --name=value from argv, else the env var, else undefined. */
@@ -27,6 +29,7 @@ export function reviewConfig(argv: string[], appPath: string): ReviewConfig | nu
     library,
     python: option(argv, 'review-python', 'MIDITUTOR_REVIEW_PYTHON') ?? path.join(appPath, '.venv', 'Scripts', 'python.exe'),
     scripts: option(argv, 'review-scripts', 'MIDITUTOR_REVIEW_SCRIPTS') ?? path.join(appPath, 'scripts'),
+    backup: option(argv, 'review-backup', 'MIDITUTOR_REVIEW_BACKUP'),
   };
 }
 
@@ -37,6 +40,7 @@ const QUEUE_BUSY = 3;
 const QUEUE_DEFERRED = 4;
 const QUEUE_STALE = 5;
 const RETRY_MS = 60_000;
+const BACKUP_DELAY_MS = 60_000;
 const EVENT_KINDS = new Set(['mark', 'confirm_system', 'accept', 'reject', 'withdraw']);
 const TRUST_SOURCE = 'todd-review';
 
@@ -73,8 +77,13 @@ export class Review {
   /** `slug/mark` -> why its check is held back: busy or low memory (cleared on retry), or an error (until "Try again"). */
   private held = new Map<string, string>();
   private retry: NodeJS.Timeout | null = null;
+  private backupTimer: NodeJS.Timeout | null = null;
+  private backingUp = false;
 
-  constructor(private readonly cfg: ReviewConfig) {}
+  constructor(private readonly cfg: ReviewConfig) {
+    // Catches whatever the last session wrote after its final backup.
+    this.backup();
+  }
 
   get library() {
     return this.cfg.library;
@@ -348,6 +357,28 @@ export class Review {
   private async writeEvents(slug: string, events: ReviewEvent[]) {
     await fs.mkdir(this.reviewDir(), { recursive: true });
     await fs.appendFile(this.eventsPath(slug), events.map((e) => JSON.stringify(e) + '\n').join(''), 'utf8');
+    this.scheduleBackup();
+  }
+
+  /** Back up a minute after his last change, so a run of marks is one commit. */
+  private scheduleBackup() {
+    if (!this.cfg.backup) return;
+    if (this.backupTimer) clearTimeout(this.backupTimer);
+    this.backupTimer = setTimeout(() => {
+      this.backupTimer = null;
+      this.backup();
+    }, BACKUP_DELAY_MS);
+  }
+
+  private backup() {
+    if (!this.cfg.backup) return;
+    if (this.backingUp) return this.scheduleBackup();
+    this.backingUp = true;
+    this.python('backup_review.py', ['--library', this.cfg.library, '--dest', this.cfg.backup])
+      .catch((err) => console.warn(`[review] backup: ${(err as Error).message}`))
+      .finally(() => {
+        this.backingUp = false;
+      });
   }
 
   private async readJson<T>(file: string): Promise<T | null> {

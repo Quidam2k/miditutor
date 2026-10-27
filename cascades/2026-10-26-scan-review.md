@@ -62,9 +62,19 @@ Decided: (A) DESK on Solace, inside the MidiTutor app (Review tab). Not TV, not 
   Real run (scratch copy, O Holy Night m26: LH triplet-eighths misread) -> correct fix, lint flag cleared.
   Tests: pytest 46 (review_queue + omr_fix), vitest 207; e2e scratchpad e2e_review_p3.py 13/13 + P2 e2e PASS;
   screengrab/9664-p3-proposal.png, -accepted.png. Scratch lib: this session's scratchpad/lib (applied there, not real).
-- [ ] P4 launch + ship: hidden Windows launcher + shortcut "MidiTutor Review" (packaged win32 build, or .vbs launcher
-  of the packaged exe with --review --library); e2e; real end to end on a SCRATCH copy of O Holy Night m27; screenshots;
-  commit (marker #9664); memory miditutor-scan-review; app build to Pinocchio under idle guard (badge text).
+- [x] P4 DONE 2026-10-26 18:15: scripts/install_review_desk.py copies the packaged build (out/ is replaced by every
+  package run) to %LOCALAPPDATA%/MidiTutor Review and writes Desktop shortcut "MidiTutor Review" (GUI exe: no console;
+  helpers windowsHide). Flags: --review-library/-python/-scripts/-backup. Backup (Jarvis add 3): scripts/backup_review.py
+  mirrors events/logs/proposal json/changed scores/trust.json -> Q:/project-reports/miditutor/review-backup, path-only
+  commit + push (shared repo; index.lock retry); review.ts runs it on start + 60 s after his last write (single flight).
+  Seeded: project-reports 3f0bb62 pushed. Tests: pytest test_backup_review 3, vitest 207.
+  Real e2e IN THE INSTALLED APP (scratchpad e2e_review_p4.py; copy in project-reports/miditutor/9664-e2e_review_p4.py):
+  launches the shortcut's own target+flags hidden (MIDITUTOR_HIDDEN=1, CDP), scratch lib + scratch backup repo.
+  m27: vision "matches the scan" (correct, crop checked) -> "no change found". m26: real proposal 9-13 s (LH triplets
+  -> plain eighths), Accept -> score changed, .orig untouched, log, backup committed+pushed. 15/15 PASS.
+  screengrab/9664-p4-{checking,proposal,accepted,nochange-m27}.png. Seen: m30 has the same triplet misread (his to mark).
+  Pinocchio deploy DEFERRED to end of P5: no piece is verified yet (badge can't show), P5 changes the Pinocchio app,
+  and a deploy leaves MidiTutor closed there. Memory miditutor-scan-review (Pantheon cca8959 + project memory).
 
 ## AMEND #9666 (Todd msg 50722): BOTH surfaces, shared core, desk FIRST
 Todd sits at Pinocchio on a stool with keyboard + mouse/trackball. Build: desk interface (P1-P4 above), THEN P5.
@@ -85,6 +95,9 @@ Todd sits at Pinocchio on a stool with keyboard + mouse/trackball. Build: desk i
   Blocker on (a) -> report at P5 start; (c) script-only runner only via Orolo. Plan-back 35547 APPROVED (#9668, jarvis).
   Mark shows "checking…" until a proposal arrives.
 
-⚠️ NEXT: P4 launch + ship (hidden launcher + "MidiTutor Review" shortcut, backup of review/, real end to end in the
-app on a scratch copy, memory miditutor-scan-review). Also P4: wire sync_pieces.sh after accept? (repaired scores reach
-Pinocchio on the next sync; decide in P4). Backup of review/ (Jarvis add 3): P4 decides (Pinocchio copy via sync in P5 + ?).
+⚠️ NEXT: P5 (AMEND #9666 above): review_layout 150-dpi crops already exist (review-pages/); sync_pieces.sh carries
+review-pages + review/*.json(l) + proposals; Pinocchio Review tab reads ~/MidiTutor Pieces/review, appends to outbox;
+review_queue.py pull (scp, merge by event id, run proposals, push back); desk app 2-min pull timer while open; Pinocchio
+ping over the tutor tunnel (report a blocker if no Solace-side listener). Repaired scores reach Pinocchio via the pull's
+sync. Then CI dispatch + idle-guarded Pinocchio deploy (memory deploy-pinocchio-needs-ci-dispatch), then close
+9664/9667/9668.
