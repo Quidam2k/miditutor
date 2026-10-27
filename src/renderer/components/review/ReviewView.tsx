@@ -4,7 +4,9 @@ import {
   Circle,
   Layout,
   LayoutSystem,
+  MarkCheck,
   MarkState,
+  Proposal,
   ReviewEvent,
   ReviewState,
   cropToPage,
@@ -39,23 +41,40 @@ interface Piece {
   layout: Layout | null;
   events: ReviewEvent[];
   state: ReviewState;
+  checks: Record<string, MarkCheck>;
 }
 
 type AppendEvent =
   | { kind: 'mark'; system: number; measure: number | null; staff: number | null; note: string; circle: Circle }
   | { kind: 'confirm_system'; system: number }
-  | { kind: 'withdraw'; mark: string };
+  | { kind: 'withdraw'; mark: string }
+  | { kind: 'reject'; mark: string; note: string };
 
 interface ReviewBridge {
   reviewList(): Promise<Summary[]>;
   reviewPiece(slug: string): Promise<Piece>;
   reviewCrop(slug: string, rel: string): Promise<string>;
   reviewAppend(slug: string, event: AppendEvent): Promise<Piece>;
+  reviewAccept(slug: string, proposal: string): Promise<Piece>;
+  reviewRecheck(slug: string, mark: string): Promise<Piece>;
+  reviewProposal(slug: string, proposal: string): Promise<{ crop: string; musicxml: string | null }>;
 }
 
 const getBridge = () => (window as unknown as { tutorBridge?: ReviewBridge }).tutorBridge;
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+const CHECK_POLL_MS = 4000;
+const OSMD_OPTIONS = {
+  autoResize: false,
+  backend: 'svg',
+  drawTitle: false,
+  drawSubtitle: false,
+  drawComposer: false,
+  drawLyricist: false,
+  drawPartNames: false,
+  drawMeasureNumbers: true,
+  autoBeam: false,
+} as const;
 const LEARNING = ['o-from-o', 'the-stormy-sea', 'sorcerers-apprentice', 'let-me-fall-from-quidam'];
 
 // ---- list ordering ----
@@ -412,15 +431,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     setScoreData(null);
     setScoreError('');
     const osmd = new OpenSheetMusicDisplay(host, {
-      autoResize: false,
-      backend: 'svg',
-      drawTitle: false,
-      drawSubtitle: false,
-      drawComposer: false,
-      drawLyricist: false,
-      drawPartNames: false,
-      drawMeasureNumbers: true,
-      autoBeam: false,
+      ...OSMD_OPTIONS,
       // Each render is one line, which OSMD would leave unstretched as a "last" line: fill the width like the scan.
       stretchLastSystemLine: true,
     });
@@ -462,13 +473,13 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   const score = scoreData && scoreData.key === rangeKey ? scoreData : null;
   const scanFrame = natural && natural.url === cropUrl ? { w: natural.w, h: natural.h } : null;
 
-  // Write path: every change goes through the log, and the reply replaces the piece.
-  const append = async (event: AppendEvent): Promise<Piece | null> => {
+  // Write path: every change goes through main, and the reply replaces the piece.
+  const act = async (call: (bridge: ReviewBridge) => Promise<Piece>): Promise<Piece | null> => {
     const bridge = getBridge();
     if (!bridge) return null;
     setBusy(true);
     try {
-      const p = await bridge.reviewAppend(slug, event);
+      const p = await call(bridge);
       setPiece(p);
       setError('');
       return p;
@@ -479,6 +490,18 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
       setBusy(false);
     }
   };
+  const append = (event: AppendEvent) => act((b) => b.reviewAppend(slug, event));
+
+  // A re-check takes a minute or so: look again every few seconds while one is pending.
+  const pendingChecks = Object.values(piece?.checks ?? {}).some((c) => c.state === 'checking' || c.state === 'waiting');
+  useEffect(() => {
+    const bridge = getBridge();
+    if (!bridge || !pendingChecks) return;
+    const timer = setInterval(() => {
+      bridge.reviewPiece(slug).then(setPiece, () => undefined);
+    }, CHECK_POLL_MS);
+    return () => clearInterval(timer);
+  }, [slug, pendingChecks]);
 
   const scanBar = (m: number | null): Rect | null => {
     if (m === null || !sys?.measures || !layout || !scanFrame) return null;
@@ -710,16 +733,33 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
         </>
       )}
 
-      <MarksList marks={state.marks} busy={busy} onJump={jumpToMark} onWithdraw={(id) => void append({ kind: 'withdraw', mark: id })} />
+      <MarksList
+        slug={slug}
+        musicxml={piece.musicxml}
+        marks={state.marks}
+        checks={piece.checks ?? {}}
+        busy={busy}
+        onJump={jumpToMark}
+        onWithdraw={(id) => void append({ kind: 'withdraw', mark: id })}
+        onAccept={(proposal) => void act((b) => b.reviewAccept(slug, proposal))}
+        onReject={(mark, text) => void append({ kind: 'reject', mark, note: text })}
+        onRecheck={(mark) => void act((b) => b.reviewRecheck(slug, mark))}
+      />
     </div>
   );
 }
 
 function MarksList(props: {
+  slug: string;
+  musicxml: string;
   marks: MarkState[];
+  checks: Record<string, MarkCheck>;
   busy: boolean;
   onJump: (m: MarkState) => void;
   onWithdraw: (id: string) => void;
+  onAccept: (proposal: string) => void;
+  onReject: (mark: string, note: string) => void;
+  onRecheck: (mark: string) => void;
 }) {
   const sorted = [...props.marks].sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.ts - b.ts);
   return (
@@ -743,8 +783,7 @@ function MarksList(props: {
               <span className="ml-auto flex items-center gap-2 text-xs">
                 {m.status === 'open' && (
                   <>
-                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
-                    <span className="text-amber-300">checking…</span>
+                    <CheckBadge check={props.checks[m.id]} />
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -761,6 +800,18 @@ function MarksList(props: {
                 {m.status === 'withdrawn' && <span className="text-gray-400">withdrawn</span>}
               </span>
             </div>
+            {m.status === 'open' && (
+              <CheckDetail
+                slug={props.slug}
+                musicxml={props.musicxml}
+                mark={m}
+                check={props.checks[m.id]}
+                busy={props.busy}
+                onAccept={props.onAccept}
+                onReject={props.onReject}
+                onRecheck={props.onRecheck}
+              />
+            )}
             {m.rejections.length > 0 && (
               <ul className="mt-1 text-xs text-gray-500">
                 {m.rejections.map((r, i) => (
@@ -771,6 +822,156 @@ function MarksList(props: {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function CheckBadge({ check }: { check: MarkCheck | undefined }) {
+  if (!check || check.state === 'checking' || check.state === 'needed') {
+    return (
+      <>
+        <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+        <span className="text-amber-300">checking…</span>
+      </>
+    );
+  }
+  if (check.state === 'waiting') return <span className="text-amber-300">waiting</span>;
+  const status = check.proposal.status;
+  return status === 'ready'
+    ? <span className="text-sky-300">fix proposed</span>
+    : <span className="text-gray-300">{status === 'no_change' ? 'no change found' : "couldn't check"}</span>;
+}
+
+/** Under an open mark: why a check waits, or its proposal with the scan beside the proposed bar. */
+function CheckDetail(props: {
+  slug: string;
+  musicxml: string;
+  mark: MarkState;
+  check: MarkCheck | undefined;
+  busy: boolean;
+  onAccept: (proposal: string) => void;
+  onReject: (mark: string, note: string) => void;
+  onRecheck: (mark: string) => void;
+}) {
+  const { check, mark } = props;
+  const [view, setView] = useState<{ crop: string; musicxml: string | null } | null>(null);
+  const [text, setText] = useState('');
+  const proposal: Proposal | null = check?.state === 'done' ? check.proposal : null;
+  const proposalId = proposal?.id ?? '';
+  useEffect(() => {
+    const bridge = getBridge();
+    setView(null);
+    if (!bridge || !proposalId) return;
+    let disposed = false;
+    bridge.reviewProposal(props.slug, proposalId).then((v) => !disposed && setView(v), () => undefined);
+    return () => {
+      disposed = true;
+    };
+  }, [props.slug, proposalId]);
+
+  // Clicks in here are not "jump to this mark".
+  const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+  const retry = (
+    <button
+      onClick={() => props.onRecheck(mark.id)}
+      disabled={props.busy}
+      className="rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-700 disabled:opacity-40"
+    >
+      Try again
+    </button>
+  );
+  if (check?.state === 'waiting') {
+    return (
+      <div className="mt-1 flex items-center gap-2 text-xs text-amber-200" onClick={stop}>
+        <span>{check.reason}</span>
+        {mark.measure !== null && retry}
+      </div>
+    );
+  }
+  if (!proposal) return null;
+  if (proposal.status === 'failed') {
+    return (
+      <div className="mt-1 flex items-center gap-2 text-xs text-red-300" onClick={stop}>
+        <span>{proposal.reason}</span>
+        {retry}
+      </div>
+    );
+  }
+  const ready = proposal.status === 'ready';
+  return (
+    <div className="mt-2 space-y-2 border-t border-gray-800 pt-2" data-testid={`review-proposal-${mark.id}`} onClick={stop} onKeyDown={stop}>
+      <p className="text-gray-200">
+        {ready ? 'Proposed fix: ' : 'The checker thinks this bar matches the scan: '}
+        {proposal.explanation}
+      </p>
+      {view && <img src={view.crop} alt="The scan around this bar" className="max-h-56 rounded bg-white" />}
+      {ready && view?.musicxml && (
+        <div className="grid grid-cols-2 gap-2">
+          <BarRender label="Now" xml={props.musicxml} measure={proposal.measure} />
+          <BarRender label="Proposed" xml={view.musicxml} measure={proposal.measure} />
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-2">
+        {ready && (
+          <button
+            data-testid="review-accept"
+            onClick={() => props.onAccept(proposal.id)}
+            disabled={props.busy || !view?.musicxml}
+            className="rounded bg-green-700 px-3 py-1 font-medium hover:bg-green-600 disabled:opacity-40"
+          >
+            Accept
+          </button>
+        )}
+        <input
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="What's still wrong? (optional)"
+          className="min-w-0 flex-1 rounded bg-gray-800 px-2 py-1 text-sm"
+        />
+        <button
+          data-testid="review-still-wrong"
+          onClick={() => {
+            props.onReject(mark.id, text.trim());
+            setText('');
+          }}
+          disabled={props.busy}
+          className="rounded bg-gray-700 px-3 py-1 hover:bg-gray-600 disabled:opacity-40"
+        >
+          Still wrong
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** One bar of a score, drawn on its own. */
+function BarRender({ label, xml, measure }: { label: string; xml: string; measure: number }) {
+  const host = useRef<HTMLDivElement>(null);
+  const [failed, setFailed] = useState('');
+  useEffect(() => {
+    const el = host.current;
+    if (!el) return;
+    let disposed = false;
+    setFailed('');
+    const osmd = new OpenSheetMusicDisplay(el, {
+      ...OSMD_OPTIONS,
+      drawFromMeasureNumber: measure,
+      drawUpToMeasureNumber: measure,
+    });
+    osmd
+      .load(xml)
+      .then(() => !disposed && osmd.render())
+      .catch((e) => !disposed && setFailed(errText(e)));
+    return () => {
+      disposed = true;
+      el.innerHTML = '';
+    };
+  }, [xml, measure]);
+  return (
+    <div className="rounded bg-white p-1 text-black" data-testid={`review-bar-${label.toLowerCase()}`}>
+      <div className="text-xs text-gray-600">{label}</div>
+      <div ref={host} />
+      {failed && <p className="text-xs text-red-600">{failed}</p>}
     </div>
   );
 }

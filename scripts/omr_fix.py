@@ -15,7 +15,7 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
-sys.dontwritebytecode = True
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from annotate_scan import (
     Score, DOCTYPE_RE, _child, _children, _document_text, _name,
@@ -201,6 +201,46 @@ def _fill(measure, staves, divisions):
     measure[index:index] = stream
 
 
+CARRIED = ("tie", "notations", "lyric")
+NOTE_RANKS = {tag: index for index, tag in enumerate(NOTE_ORDER.split())}
+
+
+def _pitched(measure):
+    """Non-grace pitched notes by staff, in document order."""
+    lanes = {}
+    for note in _children(measure, "note"):
+        pitch = _note_pitch(note)
+        if _child(note, "grace") is None and pitch is not None:
+            lanes.setdefault(_text(note, "staff", "1"), []).append((pitch, note))
+    return lanes
+
+
+def _carry_marks(old, measure):
+    """Give each rebuilt note the ties, fingering, slurs and lyrics of the old note it replaces.
+
+    Notes pair up per staff in order by pitch, so a rhythm-only fix keeps the marks (#9664)."""
+    for staff, notes in _pitched(measure).items():
+        previous, start = old.get(staff, []), 0
+        for pitch, note in notes:
+            match = next((i for i in range(start, len(previous)) if previous[i][0] == pitch), None)
+            if match is None:
+                continue
+            start = match + 1
+            for child in previous[match][1]:
+                if _name(child) not in CARRIED:
+                    continue
+                child = deepcopy(child)
+                # A tuplet bracket belongs to the old rhythm, not to the note.
+                for tuplet in _children(child, "tuplet"):
+                    child.remove(tuplet)
+                if _name(child) == "notations" and len(child) == 0:
+                    continue
+                index = next((i for i, existing in enumerate(note)
+                              if NOTE_RANKS.get(_name(existing), len(NOTE_RANKS)) > NOTE_RANKS[_name(child)]),
+                             len(note))
+                note.insert(index, child)
+
+
 def _rows(root, measure):
     """Recompute onsets from the edited stream, including backup and forward."""
     divisions_el = _inherited(root, measure, "divisions", include=False)
@@ -380,8 +420,11 @@ def apply_edits(root, edits, log=lambda message: None):
                 detail = "removed"
             elif op in {"replace_measure", "split_measure"}:
                 divisions = _divisions(_inherited(root, measure, "divisions"))
+                old = _pitched(measure) if op == "replace_measure" else {}
                 _fill(measure, edit["staves"] if op == "replace_measure"
                       else edit["first"]["staves"], divisions)
+                if op == "replace_measure":
+                    _carry_marks(old, measure)
                 if op == "split_measure":
                     second = ET.Element(_tag(measure, "measure"))
                     _fill(second, edit["second"]["staves"], divisions)

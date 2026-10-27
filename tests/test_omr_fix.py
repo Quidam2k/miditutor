@@ -147,6 +147,23 @@ def test_replace_measure_builds_chord_and_eighths():
     assert len(_measures(out)[0].findall("backup")) == 1
 
 
+def test_replace_measure_keeps_ties_and_fingering_of_matching_notes():
+    root = _root(_score(BASE))
+    old = _measures(root)[0].find("note")
+    old.insert(list(old).index(old.find("voice")), ET.fromstring('<tie type="start"/>'))
+    old.append(ET.fromstring('<notations><tied type="start"/><tuplet type="start"/><technical>'
+                             '<fingering>4</fingering></technical></notations>'))
+    staves = {"1": {"1": [{"notes": ["C5"], "dur": "3"}, {"rest": True, "dur": "1"}]},
+              "2": {"1": [{"notes": ["C3"], "dur": "4"}]}}
+    out = omr_fix.apply_edits(root, [{"op": "replace_measure", "measure": 1, "staves": staves}])
+    note = _measures(out)[0].find("note")
+    assert note.find("tie").get("type") == "start"
+    assert note.find("notations/technical/fingering").text == "4"
+    assert note.find("notations/tuplet") is None
+    names = [child.tag for child in note]
+    assert names.index("tie") < names.index("voice") < names.index("notations")
+
+
 def test_unsupported_duration_raises():
     staves = {"1": {"1": [{"notes": ["C5"], "dur": "5/7"}]}}
     with pytest.raises(ValueError):

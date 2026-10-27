@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   reviewPiece: (slug: string) => ipcRenderer.invoke('review:piece', slug),
   reviewCrop: (slug: string, rel: string) => ipcRenderer.invoke('review:crop', slug, rel),
   reviewAppend: (slug: string, event: unknown) => ipcRenderer.invoke('review:append', slug, event),
+  reviewAccept: (slug: string, proposal: string) => ipcRenderer.invoke('review:accept', slug, proposal),
+  reviewRecheck: (slug: string, mark: string) => ipcRenderer.invoke('review:recheck', slug, mark),
+  reviewProposal: (slug: string, proposal: string) => ipcRenderer.invoke('review:proposal', slug, proposal),
   onCommand: (cb: Listener) => {
     const handler = (_e: IpcRendererEvent, cmd: unknown) => cb(cmd);
     ipcRenderer.on('tutor:command', handler);

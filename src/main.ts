@@ -266,6 +266,9 @@ const startTutorApi = () => {
     ipcMain.handle('review:piece', (_e, slug: string) => review.ensureLayout(slug));
     ipcMain.handle('review:crop', (_e, slug: string, rel: string) => review.crop(slug, rel));
     ipcMain.handle('review:append', (_e, slug: string, event: Record<string, unknown>) => review.append(slug, event));
+    ipcMain.handle('review:accept', (_e, slug: string, proposal: string) => review.accept(slug, proposal));
+    ipcMain.handle('review:recheck', (_e, slug: string, mark: string) => review.recheck(slug, mark));
+    ipcMain.handle('review:proposal', (_e, slug: string, proposal: string) => review.proposalView(slug, proposal));
   }
   const send = (cmd: RendererCommand) => mainWindow?.webContents.send('tutor:command', cmd);
   tutorApi = new TutorApi({

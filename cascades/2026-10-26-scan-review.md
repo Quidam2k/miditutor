@@ -47,10 +47,21 @@ Decided: (A) DESK on Solace, inside the MidiTutor app (Review tab). Not TV, not 
   MeasureList entries with ParentMusicSystem. Overlay svg viewBox = crop natural px (scan) / OSMD svg size (score).
   e2e: scratchpad e2e_review.py (stub bridge serves real library data, folds with real shared/review.ts via Vite import),
   17/17 PASS; screengrab/9664-p2-*.png. Open marks show "checking…" (P3 supplies proposals).
-- [ ] P3 proposals: scripts/review_queue.py (Codex if budget, else Sonnet; I review every line): crop bar ±1 from the
-  page, headless `claude -p` Sonnet with crop + bar listing -> omr_fix edit list JSON; validate (dry run + re-lint, reject
-  if fill worse); single-flight lock + load tripwire. Accept -> omr_fix apply, .orig first-only, review/<slug>.log,
-  re-render, sync_pieces.sh. Verified by you -> trust.json {status:'verified-by-you', source:'todd-review', date, systems}.
+- [x] P3 DONE 2026-10-26 17:50: scripts/review_queue.py (Codex gate refused -> Sonnet draft, reviewed every line)
+  `propose SLUG MARK` / `apply SLUG PID`, last stdout line JSON, exit 0/2/3 busy/4 low RAM (<6 GiB)/5 stale.
+  Crop = 300-dpi page rotated by layout angle, bar ±1, red bracket over target. Lean `claude -p` Sonnet, --tools Read,
+  temp cwd with crop.png (~8 s, ~$0.02 list-eq). Validate: only the marked bar, no structural ops, apply_edits, lint
+  bar±1: reject if target bar_length count rises or a new flag appears next door. Records in
+  review/<slug>.proposals/<pid>.{json,png,musicxml}. Locks: .queue.lock (propose) / .apply.lock (apply never waits on
+  a check). apply -> omr_fix.main (.orig first-only) + review/<slug>.log. omr_fix replace_measure now carries
+  tie/notations(minus tuplet)/lyric to rebuilt notes matched per staff by pitch (fingering survived rhythm fix).
+  Main (src/main/review.ts): piece.checks {checking|waiting|needed|done+proposal}; one check at a time; queued on mark,
+  "still wrong", piece open, after accept (stale ready proposals re-check); busy/low-RAM -> held, retry 60 s;
+  accept(slug,pid) -> apply, accept event, ensureLayout, trust; recheck; proposalView. IPC review:accept/recheck/proposal.
+  UI: CheckBadge + CheckDetail (crop, Now vs Proposed BarRender, Accept / Still wrong + note / Try again), polls 4 s.
+  Real run (scratch copy, O Holy Night m26: LH triplet-eighths misread) -> correct fix, lint flag cleared.
+  Tests: pytest 46 (review_queue + omr_fix), vitest 207; e2e scratchpad e2e_review_p3.py 13/13 + P2 e2e PASS;
+  screengrab/9664-p3-proposal.png, -accepted.png. Scratch lib: this session's scratchpad/lib (applied there, not real).
 - [ ] P4 launch + ship: hidden Windows launcher + shortcut "MidiTutor Review" (packaged win32 build, or .vbs launcher
   of the packaged exe with --review --library); e2e; real end to end on a SCRATCH copy of O Holy Night m27; screenshots;
   commit (marker #9664); memory miditutor-scan-review; app build to Pinocchio under idle guard (badge text).
@@ -74,4 +85,6 @@ Todd sits at Pinocchio on a stool with keyboard + mouse/trackball. Build: desk i
   Blocker on (a) -> report at P5 start; (c) script-only runner only via Orolo. Plan-back 35547 APPROVED (#9668, jarvis).
   Mark shows "checking…" until a proposal arrives.
 
-⚠️ NEXT: P3 proposals (scripts/review_queue.py + Accept/Reject UI in ReviewView marks list). Backup of review/ (Jarvis add 3): P4 decides (Pinocchio copy via sync in P5 + ?).
+⚠️ NEXT: P4 launch + ship (hidden launcher + "MidiTutor Review" shortcut, backup of review/, real end to end in the
+app on a scratch copy, memory miditutor-scan-review). Also P4: wire sync_pieces.sh after accept? (repaired scores reach
+Pinocchio on the next sync; decide in P4). Backup of review/ (Jarvis add 3): P4 decides (Pinocchio copy via sync in P5 + ?).

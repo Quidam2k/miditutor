@@ -78,6 +78,42 @@ export interface MarkState {
   rejections: string[];
 }
 
+/** A vision re-check of one mark, from scripts/review_queue.py (review/<slug>.proposals/<id>.json). */
+export interface Proposal {
+  id: string;
+  mark: string;
+  status: 'ready' | 'no_change' | 'failed';
+  reason: string | null;
+  explanation: string;
+  edits: unknown[];
+  measure: number;
+  staff: number | null;
+  /** The score the edits were checked against: Accept applies them only to this exact file. */
+  base_sha256: string;
+  /** Library-relative paths: the scan crop, and the whole proposed score (ready only). */
+  crop: string;
+  proposed: string | null;
+  created: number;
+  /** How many "still wrong" notes the check had seen. */
+  rejections_seen: number;
+}
+
+/** Where an open mark's re-check stands. */
+export type MarkCheck =
+  | { state: 'checking' }
+  | { state: 'waiting'; reason: string }
+  | { state: 'needed' }
+  | { state: 'done'; proposal: Proposal };
+
+/**
+ * An open mark's latest proposal still answers it when it saw every "still wrong"
+ * note and, if it is a fix, was made against the score as it is now.
+ */
+export function markCheck(mark: MarkState, latest: Proposal | undefined, currentSha: string): 'needed' | 'done' {
+  if (!latest || latest.rejections_seen !== mark.rejections.length) return 'needed';
+  return latest.status === 'ready' && latest.base_sha256 !== currentSha ? 'needed' : 'done';
+}
+
 export interface ReviewState {
   marks: MarkState[];
   /** System index -> when he confirmed it (only confirms that still stand). */

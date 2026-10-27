@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Layout, ReviewEvent, ReviewState, foldReview } from '../shared/review';
+import { Layout, MarkCheck, Proposal, ReviewEvent, ReviewState, foldReview, markCheck } from '../shared/review';
 import { scoreTitle, titleFromPath } from '../shared/pieceFiles';
 
 export interface ReviewConfig {
@@ -31,6 +31,12 @@ export function reviewConfig(argv: string[], appPath: string): ReviewConfig | nu
 }
 
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
+const ID = /^[A-Za-z0-9-]{1,64}$/;
+// review_queue.py exit codes that mean "not now": another check holds the lock, or Solace is short of memory.
+const QUEUE_BUSY = 3;
+const QUEUE_DEFERRED = 4;
+const QUEUE_STALE = 5;
+const RETRY_MS = 60_000;
 const EVENT_KINDS = new Set(['mark', 'confirm_system', 'accept', 'reject', 'withdraw']);
 const TRUST_SOURCE = 'todd-review';
 
@@ -54,11 +60,19 @@ export interface ReviewPiece {
   layout: Layout | null;
   events: ReviewEvent[];
   state: ReviewState;
+  /** Open mark id -> its vision re-check. */
+  checks: Record<string, MarkCheck>;
 }
 
 export class Review {
   // One queue for every piece: appends and applies share trust.json.
   private tail: Promise<unknown> = Promise.resolve();
+  // Vision re-checks run one at a time, only for marks he made (never over unmarked bars).
+  private checkQueue: { slug: string; mark: string }[] = [];
+  private checking: string | null = null;
+  /** `slug/mark` -> why its check is held back: busy or low memory (cleared on retry), or an error (until "Try again"). */
+  private held = new Map<string, string>();
+  private retry: NodeJS.Timeout | null = null;
 
   constructor(private readonly cfg: ReviewConfig) {}
 
@@ -119,24 +133,158 @@ export class Review {
     const sha = createHash('sha256').update(bytes).digest('hex');
     const layout = await this.readJson<Layout>(this.layoutPath(slug));
     const events = await this.readEvents(slug);
-    return {
-      slug,
-      title: scoreTitle(musicxml) ?? titleFromPath(slug),
-      musicxml,
-      sha,
-      layout,
-      events,
-      state: foldReview(events, layout, sha),
-    };
+    const state = foldReview(events, layout, sha);
+    const latest = await this.latestProposals(slug);
+    const checks: Record<string, MarkCheck> = {};
+    for (const mark of state.marks) {
+      if (mark.status !== 'open') continue;
+      const key = `${slug}/${mark.id}`;
+      const held = this.held.get(key);
+      const proposal = latest.get(mark.id);
+      if (mark.measure === null) checks[mark.id] = { state: 'waiting', reason: 'No bar was picked: withdraw it and circle the bar.' };
+      else if (held !== undefined) checks[mark.id] = { state: 'waiting', reason: held };
+      else if (this.isQueued(slug, mark.id)) checks[mark.id] = { state: 'checking' };
+      else if (proposal && markCheck(mark, proposal, sha) === 'done') checks[mark.id] = { state: 'done', proposal };
+      else checks[mark.id] = { state: 'needed' };
+    }
+    return { slug, title: scoreTitle(musicxml) ?? titleFromPath(slug), musicxml, sha, layout, events, state, checks };
   }
 
   /** (Re)build the piece's layout when it is missing or made from another version of the score. */
   async ensureLayout(slug: string): Promise<ReviewPiece> {
-    const piece = await this.piece(slug);
-    if (piece.layout?.version === 1 && piece.layout.score_sha256 === piece.sha &&
-        await this.cropsExist(piece.layout)) return piece;
-    await this.python('review_layout.py', ['--library', this.cfg.library, slug]);
+    let piece = await this.piece(slug);
+    if (!(piece.layout?.version === 1 && piece.layout.score_sha256 === piece.sha &&
+          await this.cropsExist(piece.layout))) {
+      await this.python('review_layout.py', ['--library', this.cfg.library, slug]);
+      piece = await this.piece(slug);
+    }
+    return this.queueChecks(piece);
+  }
+
+  private proposalsDir = (slug: string) => path.join(this.reviewDir(), `${slug}.proposals`);
+
+  /** Each mark's newest proposal. */
+  private async latestProposals(slug: string): Promise<Map<string, Proposal>> {
+    const dir = this.proposalsDir(slug);
+    const names = await fs.readdir(dir).catch(() => [] as string[]);
+    const latest = new Map<string, Proposal>();
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const p = await this.readJson<Proposal>(path.join(dir, name));
+      if (!p || typeof p.mark !== 'string') continue;
+      const prev = latest.get(p.mark);
+      if (!prev || p.created > prev.created) latest.set(p.mark, p);
+    }
+    return latest;
+  }
+
+  /** Queue a check for every open mark whose latest proposal no longer answers it. */
+  private queueChecks(piece: ReviewPiece): ReviewPiece {
+    for (const [mark, check] of Object.entries(piece.checks)) {
+      if (check.state !== 'needed') continue;
+      this.checkQueue.push({ slug: piece.slug, mark });
+      piece.checks[mark] = { state: 'checking' };
+    }
+    this.pump();
+    return piece;
+  }
+
+  /** "Try again" on a mark whose check failed, was held, or found nothing to change. */
+  async recheck(slug: string, mark: string): Promise<ReviewPiece> {
+    this.check(slug);
+    if (!ID.test(mark)) throw new Error(`bad mark id: ${mark}`);
+    const key = `${slug}/${mark}`;
+    this.held.delete(key);
+    if (!this.isQueued(slug, mark)) this.checkQueue.push({ slug, mark });
+    this.pump();
     return this.piece(slug);
+  }
+
+  private isQueued(slug: string, mark: string) {
+    return this.checking === `${slug}/${mark}` || this.checkQueue.some((q) => q.slug === slug && q.mark === mark);
+  }
+
+  private pump() {
+    if (this.checking || this.retry) return;
+    const next = this.checkQueue.shift();
+    if (!next) return;
+    const key = `${next.slug}/${next.mark}`;
+    this.checking = key;
+    this.held.delete(key);
+    void this.queueScript(['propose', '--library', this.cfg.library, next.slug, next.mark])
+      .then(({ code, result }) => {
+        if (code === QUEUE_BUSY || code === QUEUE_DEFERRED) {
+          // Not now: hold the whole queue and try again in a minute.
+          this.held.set(key, String(result.error ?? 'Waiting to check.'));
+          this.checkQueue.unshift(next);
+          this.retry = setTimeout(() => {
+            this.retry = null;
+            this.held.delete(key);
+            this.pump();
+          }, RETRY_MS);
+          this.retry.unref();
+        } else if (code !== 0) {
+          this.held.set(key, String(result.error ?? 'The check failed.'));
+        }
+      })
+      .finally(() => {
+        this.checking = null;
+        this.pump();
+      });
+  }
+
+  /** Apply a proposal he accepted, then log it as an accept event. Never automatic. */
+  async accept(slug: string, proposal: string): Promise<ReviewPiece> {
+    this.check(slug);
+    if (!ID.test(proposal)) throw new Error(`bad proposal id: ${proposal}`);
+    return this.serial(async () => {
+      const record = await this.readJson<Proposal>(path.join(this.proposalsDir(slug), `${proposal}.json`));
+      const piece = await this.piece(slug);
+      if (!record || !piece.state.marks.some((m) => m.id === record.mark && m.status === 'open')) {
+        throw new Error('That mark is no longer open.');
+      }
+      const { code, result } = await this.queueScript(['apply', '--library', this.cfg.library, slug, proposal]);
+      if (code === QUEUE_STALE) {
+        void this.ensureLayout(slug).catch((err) => console.warn(`[review] ${slug}: ${(err as Error).message}`));
+        throw new Error(`${String(result.error)} Checking it again.`);
+      }
+      if (code !== 0) throw new Error(String(result.error ?? 'The fix could not be applied.'));
+      const event = {
+        kind: 'accept', mark: result.mark, before: result.before, after: result.after, proposal,
+        id: randomUUID(), origin: 'solace', ts: Date.now(),
+      } as ReviewEvent;
+      await this.writeEvents(slug, [event]);
+      const next = await this.ensureLayout(slug);
+      await this.updateTrust(slug, next);
+      return next;
+    });
+  }
+
+  /** A proposal's scan crop (data URL) and proposed score, for showing beside the current bar. */
+  async proposalView(slug: string, proposal: string): Promise<{ crop: string; musicxml: string | null }> {
+    this.check(slug);
+    if (!ID.test(proposal)) throw new Error(`bad proposal id: ${proposal}`);
+    const base = path.join(this.proposalsDir(slug), proposal);
+    const png = await fs.readFile(`${base}.png`);
+    const musicxml = await fs.readFile(`${base}.musicxml`, 'utf8').catch(() => null);
+    return { crop: `data:image/png;base64,${png.toString('base64')}`, musicxml };
+  }
+
+  /** review_queue.py: exit code and its last stdout line (one JSON object). */
+  private queueScript(args: string[]): Promise<{ code: number; result: Record<string, unknown> }> {
+    return new Promise((resolve) => {
+      execFile(this.cfg.python, ['-I', path.join(this.cfg.scripts, 'review_queue.py'), ...args],
+        { windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: 10 * 60_000 },
+        (err, stdout, stderr) => {
+          let result: Record<string, unknown>;
+          try {
+            result = JSON.parse(stdout.trim().split('\n').pop() ?? '');
+          } catch {
+            result = { ok: false, error: stderr.trim().split('\n').pop() || err?.message || 'review_queue.py gave no answer' };
+          }
+          resolve({ code: err ? (typeof err.code === 'number' ? err.code : 1) : 0, result });
+        });
+    });
   }
 
   private async cropsExist(layout: Layout) {
@@ -172,7 +320,7 @@ export class Review {
       await this.writeEvents(slug, [event]);
       const next = await this.piece(slug);
       await this.updateTrust(slug, next);
-      return next;
+      return this.queueChecks(next);
     });
   }
 

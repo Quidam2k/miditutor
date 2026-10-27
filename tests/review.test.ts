@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Layout, LayoutSystem, ReviewEvent, cropToPage, foldReview, measureAtX, orderEvents, staffAtY, systemOfMeasure, systemRange } from '../src/shared/review';
+import { Layout, LayoutSystem, MarkState, Proposal, ReviewEvent, cropToPage, foldReview, markCheck, measureAtX, orderEvents, staffAtY, systemOfMeasure, systemRange } from '../src/shared/review';
 
 const system = (index: number, measures: [number, number] | null, over: Partial<LayoutSystem> = {}): LayoutSystem => ({
   index, page: '01.png', y0: 0, y1: 100, spacing: 20, staves: [], x_left: 100, x_right: 500,
@@ -164,5 +164,22 @@ describe('scan coordinates', () => {
     expect(staffAtY(s, 950)).toBe(1);
     expect(staffAtY(s, 1060)).toBe(1); // nearer the top staff's bottom line
     expect(staffAtY(system(1, null), 10)).toBeNull();
+  });
+});
+
+describe('markCheck', () => {
+  const mark = { id: 'm', rejections: [] as string[] } as MarkState;
+  const proposal = (over: Partial<Proposal> = {}) =>
+    ({ id: 'p', mark: 'm', status: 'ready', base_sha256: 'A', rejections_seen: 0, created: 1, ...over }) as Proposal;
+
+  it('needs a check until a proposal answers every "still wrong"', () => {
+    expect(markCheck(mark, undefined, 'A')).toBe('needed');
+    expect(markCheck(mark, proposal(), 'A')).toBe('done');
+    expect(markCheck({ ...mark, rejections: ['no, the bass'] }, proposal(), 'A')).toBe('needed');
+  });
+
+  it('a fix made against another version of the score is checked again; "no change" is not', () => {
+    expect(markCheck(mark, proposal(), 'B')).toBe('needed');
+    expect(markCheck(mark, proposal({ status: 'no_change' }), 'B')).toBe('done');
   });
 });
