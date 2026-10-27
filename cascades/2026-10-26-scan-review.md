@@ -95,6 +95,45 @@ Todd sits at Pinocchio on a stool with keyboard + mouse/trackball. Build: desk i
   Blocker on (a) -> report at P5 start; (c) script-only runner only via Orolo. Plan-back 35547 APPROVED (#9668, jarvis).
   Mark shows "checking…" until a proposal arrives.
 
+## P5 design (2026-10-26 18:35, recycled session)
+- (a) BLOCKED, reported event 35589: tutor tunnel is Solace->Pinocchio `ssh -L 47800` on demand; nothing on Solace
+  listens. Building (b) only. Pinocchio marks get checked only while the desk app is open (mirror says so).
+- ssh: Windows OpenSSH (System32, what the packaged app sees) works BY IP toddwalker@192.168.50.27, BatchMode;
+  hostname todds-mac-mini does NOT resolve (also breaks sync_pieces.sh/deploy default right now).
+- Pinocchio = same Review class, cfg.mirror (auto when ~/MidiTutor Pieces/review exists): list by layout.json; no
+  python/trust/backup; his actions -> review/outbox.jsonl (lines carry slug); accept -> accept_request event,
+  "Try again" -> recheck event; readEvents = events.jsonl + outbox (dedupe); outbox pruned of ids Solace has.
+- Desk: cfg.pinocchio (--review-pinocchio) -> pull() at start + every 2 min, single flight: ssh cat outbox, merge new
+  ids (origin pinocchio, allowed kinds only), ensureLayout (queues checks), trust, then requests (accept_request ->
+  accept(), failure -> request_failed event; recheck -> recheck()); first pull of a session re-scans all slugs.
+  push(slug) debounced after merge / check done / accept / desk append: scp proposals, crops, layout, events,
+  score, trust.json. Remote transport injectable (tests). Shared types gain accept_request/recheck/request_failed.
+- sync_pieces.sh also copies review/*.json(l), review/*.proposals, review-pages/.
+- #9763 (jarvis ruling): ship (b) only; mirror wording "Waiting for Solace. It's checked next time MidiTutor Review is
+  running there."; final report must say how many marks typically wait. Acked event 35590.
+- P5 CODE DONE (uncommitted, 18:30): review.ts (mirror, Remote/sshRemote, pull/carryOut/pushDirty, restart-safe
+  recheck), shared/review.ts kinds, main.ts wiring, sync_pieces.sh, install_review_desk.py --review-pinocchio=IP.
+  vitest 210/210 (+3 round-trip tests, mutation-checked). Real sshRemote push/outbox OK vs Pinocchio
+  ~/MidiTutor Review Test (scratch; delete after). REMAINING: package+install desk, real e2e in installed app
+  (scratch lib, MIDITUTOR_REVIEW_REMOTE_DIR=MidiTutor Review Test, outbox mark -> proposal pushed -> accept_request
+  -> applied), mirror UI e2e (installed exe, no review flags, MIDITUTOR_PIECES_DIR=local mirror copy), Codex review of
+  diff, commit, CI dispatch + idle-guarded deploy, real sync_pieces, complete 9664/9667/9668/9763.
+
+## P6 = Todd's first-use fixes (#9764 sugg #5075, info #9765 msg 50750, #9766 Karen). Plan-back 35593 (HIGH) +
+amend 35594; WAIT for [ORCH PROCEED]. Do after P5 commit, BEFORE the Pinocchio deploy (one deploy for both).
+(3) many marks per line: pending becomes a list, each circle its own pending mark + note; Enter saves all; Esc drops last.
+(4) circle keeps what he circled: draw his circle, no whole-bar amber fill (thin outline); mark gains `notes`
+  (score side: OSMD notes inside circle; scan side: circle x-span mapped onto same bar of rendered line); list shows
+  "Bar 26, LH: E3 G3 (beat 2)"; review_queue.py crop draws his circle + prompt names the notes. One bar per mark.
+(2) beams: scores have NO <beam> (o-holy-night 0/309 eighths); ReviewView.tsx:76 autoBeam:false -> true. Render only.
+(1) speed: review_layout.py writes lint-flagged bars per line as layout `suspects`; J/K next/prev suspect bar,
+  arrows = line, Space (or Enter with nothing pending) = confirm line + next line; refuses on a line with an open mark.
+Tests: vitest multi-pending/circle-notes/suspect nav; pytest suspects + circle prompt; installed-app e2e screenshots.
+APPROVED #9767 (jarvis+karen) with AMENDS: a circle spanning bar lines = ONE MARK PER BAR it covers, each with its
+own notes; on-screen key legend in Review view (J/K, arrows, C/Space, Enter, Esc); J/K strictly navigation (never
+confirm); C (and Space) confirm only the line on screen, then move on; no bulk confirm; a mark that would be dropped
+(outside any bar, or Esc) SAYS SO on screen; ANNOUNCE the restart in the room before the Pinocchio deploy closes the app.
+
 ⚠️ NEXT: P5 (AMEND #9666 above): review_layout 150-dpi crops already exist (review-pages/); sync_pieces.sh carries
 review-pages + review/*.json(l) + proposals; Pinocchio Review tab reads ~/MidiTutor Pieces/review, appends to outbox;
 review_queue.py pull (scp, merge by event id, run proposals, push back); desk app 2-min pull timer while open; Pinocchio

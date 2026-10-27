@@ -7,7 +7,7 @@ import JSZip from 'jszip';
 import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
 import { Recorder, outputSize } from './main/recorder';
-import { Review, reviewConfig } from './main/review';
+import { Review, mirrorConfig, reviewConfig, sshRemote } from './main/review';
 import {
   MUSICXML_EXTENSIONS,
   isPieceFileName,
@@ -257,10 +257,15 @@ const startTutorApi = () => {
     if (picked.canceled || !filePath) return null;
     return { title: titleFromPath(filePath), musicxml: await readScoreFile(filePath) };
   });
-  // Scan review (#9664): desk only, when started with --review-library=<dir>.
-  const reviewCfg = reviewConfig(process.argv, app.getAppPath());
-  const review = reviewCfg ? new Review(reviewCfg) : null;
-  ipcMain.handle('review:info', () => (review ? { library: review.library } : null));
+  // Scan review (#9664): the desk, when started with --review-library=<dir> (and
+  // --review-pinocchio=<ssh host> to take Pinocchio's marks); Pinocchio, once the
+  // desk has synced a review folder into his pieces folder (#9666).
+  const deskCfg = reviewConfig(process.argv, app.getAppPath());
+  const reviewCfg = deskCfg ?? mirrorConfig(piecesDir());
+  const review = reviewCfg
+    ? new Review(reviewCfg, deskCfg?.pinocchio ? sshRemote(deskCfg.pinocchio, deskCfg.library) : null)
+    : null;
+  ipcMain.handle('review:info', () => (review ? { library: review.library, mirror: review.mirror } : null));
   if (review) {
     ipcMain.handle('review:list', () => review.list());
     ipcMain.handle('review:piece', (_e, slug: string) => review.ensureLayout(slug));

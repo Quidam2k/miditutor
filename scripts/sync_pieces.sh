@@ -10,7 +10,7 @@ set -euo pipefail
 
 PINOCCHIO_HOST=${PINOCCHIO_HOST:-toddwalker@todds-mac-mini}
 LIBRARY=${LIBRARY:-/q/Personal/piano/library}
-DEST='MidiTutor Pieces'
+DEST=${PIECES_DEST:-MidiTutor Pieces}  # a scratch folder for tests
 
 shopt -s nullglob nocaseglob
 files=()
@@ -22,7 +22,15 @@ done
 # trust.json is copied alongside the scores so the picker can show each one's badge (#9644).
 if [[ -f "$LIBRARY/trust.json" ]]; then files+=("$LIBRARY/trust.json"); fi
 
-ssh "$PINOCCHIO_HOST" "mkdir -p \"\$HOME/$DEST\""
+ssh "$PINOCCHIO_HOST" "mkdir -p \"\$HOME/$DEST/review\""
 # scp speaks SFTP (OpenSSH 9+): the remote path is taken literally, no shell quoting.
 scp "${files[@]}" "${PINOCCHIO_HOST}:$DEST/"
+# Scan review (#9666): layouts, event logs, proposals and the system crops, so his
+# Review tab works on Pinocchio. Its review/outbox.jsonl is never overwritten
+# (the desk app pulls it); the desk's own pushes keep this current after that.
+review=("$LIBRARY"/review/*.layout.json "$LIBRARY"/review/*.events.jsonl "$LIBRARY"/review/*.proposals)
+if (( ${#review[@]} )); then
+  scp -r -q "${review[@]}" "${PINOCCHIO_HOST}:$DEST/review/"
+  [[ -d "$LIBRARY/review-pages" ]] && scp -r -q "$LIBRARY/review-pages" "${PINOCCHIO_HOST}:$DEST/"
+fi
 ssh "$PINOCCHIO_HOST" "ls -1 \"\$HOME/$DEST\""

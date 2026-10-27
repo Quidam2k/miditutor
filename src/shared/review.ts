@@ -48,6 +48,8 @@ interface EventBase {
   id: string;
   origin: Origin;
   ts: number;
+  /** Pinocchio's events: when the desk took them in, by the desk's clock. */
+  received?: number;
 }
 
 export type ReviewEvent = EventBase & (
@@ -60,6 +62,13 @@ export type ReviewEvent = EventBase & (
   | { kind: 'reject'; mark: string; note?: string }
   /** He withdrew the mark (it was fine after all). */
   | { kind: 'withdraw'; mark: string }
+  // Pinocchio can't run the checks or apply a fix: it asks Solace to (#9666).
+  /** Accept pressed on Pinocchio: Solace applies the proposal when it pulls. */
+  | { kind: 'accept_request'; mark: string; proposal: string }
+  /** "Try again" pressed on Pinocchio. */
+  | { kind: 'recheck'; mark: string }
+  /** Solace couldn't apply an accept_request; `error` says why. */
+  | { kind: 'request_failed'; mark: string; request: string; error: string }
 );
 
 export type MarkStatus = 'open' | 'applied' | 'withdrawn';

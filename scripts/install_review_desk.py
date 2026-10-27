@@ -21,6 +21,9 @@ DEST = Path(os.environ["LOCALAPPDATA"]) / "MidiTutor Review"
 EXE = DEST / "MidiTutor.exe"
 LIBRARY = r"Q:\Personal\piano\library"
 BACKUP = r"Q:\project-reports\miditutor\review-backup"
+# Pinocchio's copy: the app pulls his marks from there every 2 min while open (#9666).
+# By IP: the todds-mac-mini name does not resolve from Solace.
+PINOCCHIO = "toddwalker@192.168.50.27"
 NAME = "MidiTutor Review"
 
 
@@ -33,7 +36,8 @@ def ps(script: str, *args: str) -> str:
 
 def flags() -> str:
     return " ".join([f'--review-library="{LIBRARY}"', f'--review-python="{REPO / ".venv" / "Scripts" / "python.exe"}"',
-                     f'--review-scripts="{REPO / "scripts"}"', f'--review-backup="{BACKUP}"'])
+                     f'--review-scripts="{REPO / "scripts"}"', f'--review-backup="{BACKUP}"',
+                     f'--review-pinocchio={PINOCCHIO}'])
 
 
 def main() -> int:
