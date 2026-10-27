@@ -25,7 +25,7 @@ save "My mix" (easy or harder per section) that plays, follows and loops like an
 | P1 | versions.json + parse + listPieces group + picker collapse + Easy/Harder switch + sync | DONE (P1 commit; e2e 13/13, scratchpad e2e_versions_p1.py) |
 | P2 | DONE (e2e 6/6, scratchpad e2e_versions_p2.py). IN PLACE, originals kept as <file>.musicxml.orig (precedent o-holy-night); piano-only harder copies (drop vocal part), fix O m17 / Let Me Fall m56 extra bars, seed labels | DONE except Quidam (below) |
 | P3a | align_versions.py + src/shared/mix.ts splice (+ transpose) + tests | DONE (pytest 14, vitest 11+2; real O dry-run via pure fns: semis -2, diagonal 34 bars, 9 sections, cost 0-0.30). Real-library align run PENDING on idle gate |
-| P3b | My mix builder UI (side-by-side thumbnails), save IPC, mixes.json, capped trust, e2e, deploy + sync | CODE DONE (e2e 13/13 on scratch lib, Q:/project-reports/miditutor/9627-e2e_versions_p3.py; run with MIDITUTOR_PORT=47811 + CDP 9346 because two stale dev instances from P1/P2 hold 47800/9335 and the kill was denied). PENDING: real align run (gate), sync, CI dispatch + deploy |
+| P3b | My mix builder UI (side-by-side thumbnails), save IPC, mixes.json, capped trust, e2e, deploy + sync | CODE DONE (e2e 13/13 on scratch lib, Q:/project-reports/miditutor/9627-e2e_versions_p3.py; run with MIDITUTOR_PORT=47811 + CDP 9346 because two stale dev instances from P1/P2 hold 47800/9335 and the kill was denied). DEPLOYED to Pinocchio 21:05 (CI 40440991181 = d404a12; asar has the mix code; app relaunched with open -g). PENDING: real align run (gate) + sync |
 
 Files P1: src/shared/versions.ts, tests/versions.test.ts, src/main.ts (listPieces), src/renderer/components/tutor/useTutorBridge.ts,
 src/renderer/components/score/ScoreView.tsx, src/renderer/store/useSettingsStore.ts, scripts/sync_pieces.sh.
@@ -74,4 +74,8 @@ P3b
   loop over it. Then CI dispatch + deploy_pinocchio.sh, sync_pieces.sh, check on Pinocchio, leave the app as found.
 
 Notes P3b: renderer splices (DOMParser; xmldom is dev-only), main validates + writes; builder is a portal (toolbar was its fixed box); a splice restates only attributes that change (no redrawn 4/4).
-⚠️ NEXT: when gate open (idle>=600s, >=12GB): `python scripts/align_versions.py o` (writes group.align into library versions.json). Then P3b.
+⚠️ NEXT (only gated work left): when omr_second_engine gate opens (>=600 s idle, >=12 GB):
+  1. `python scripts/align_versions.py o` (expect semis -2, diagonal 34 bars, 9 sections; it writes group.align into library versions.json)
+  2. `PINOCCHIO_HOST=toddwalker@192.168.50.27 bash scripts/sync_pieces.sh` (copies versions.json; *-my-mix files are skipped)
+  3. Check: desk + Pinocchio O picker shows "Make my mix" (Pinocchio tutor API via ssh -N -L 47800:127.0.0.1:47800 ...). Then close #9627 (closes: #5060).
+  Also pending on the gate: review_layout.py --force o-musicnotes-arrangement let-me-fall-musicnotes-vocal-arrangement.
