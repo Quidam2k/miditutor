@@ -24,7 +24,7 @@ save "My mix" (easy or harder per section) that plays, follows and loops like an
 |---|------|--------|
 | P1 | versions.json + parse + listPieces group + picker collapse + Easy/Harder switch + sync | DONE (P1 commit; e2e 13/13, scratchpad e2e_versions_p1.py) |
 | P2 | DONE (e2e 6/6, scratchpad e2e_versions_p2.py). IN PLACE, originals kept as <file>.musicxml.orig (precedent o-holy-night); piano-only harder copies (drop vocal part), fix O m17 / Let Me Fall m56 extra bars, seed labels | DONE except Quidam (below) |
-| P3a | align_versions.py + src/shared/mix.ts splice (+ transpose) + tests | todo |
+| P3a | align_versions.py + src/shared/mix.ts splice (+ transpose) + tests | DONE (pytest 14, vitest 11+2; real O dry-run via pure fns: semis -2, diagonal 34 bars, 9 sections, cost 0-0.30). Real-library align run PENDING on idle gate |
 | P3b | My mix builder UI (side-by-side thumbnails), save IPC, mixes.json, capped trust, e2e, deploy + sync | todo |
 
 Files P1: src/shared/versions.ts, tests/versions.test.ts, src/main.ts (listPieces), src/renderer/components/tutor/useTutorBridge.ts,
@@ -54,9 +54,10 @@ P3a
 - scripts/align_versions.py <slug>: refuses unless the idle gate is open (omr_second_engine.gate_ok: >=600 s
   idle, >=12 GB) per #9770. For Easy vs each mixable Harder: per bar, melody = highest staff-1 pitch per onset,
   transposed into the easy key; DTW over bars (cost = normalized edit distance of the pitch-class sequences);
-  writes into versions.json group: `align: {<harder file>: [[easyBar, harderBar], ...]}` (the raw bar path, kept
-  so per-hand / note-level hybrids can reuse it, karen add 1) and `sections: [{easy:[a,b], harder:[c,d]}]`, cut
-  where the path is 1:1 diagonal, at 4-bar phrase boundaries (fallback: the easy file's systems).
+  writes into versions.json group (FINAL SHAPE, 20:00): `align: {<harder file>: {semis, bars: [[easyBar, harderBar], ...],
+  sections: [{easy:[a,b], harder:[c,d], cost}]}}` (bars = the raw DTW path, kept so per-hand / note-level hybrids can
+  reuse it, karen add 1). Bar cost = 1 - 2*LCS/(la+lb) on top-pitch pitch classes (embellishment-tolerant). Cuts only
+  at a diagonal step where (easyBar-1)%4==0.
   parseVersions must keep align/sections.
 - src/shared/mix.ts spliceMix(easyXml, harderXml, sections, choice[], semis): the easy part's measures for Easy
   sections, the harder part's (transposed) measures for Harder ones; the first bar of every segment gets the full
@@ -72,4 +73,4 @@ P3b
 - e2e (scratch lib, CDP 9335): build an O mix, save, "My mix" in the switch, loads, inject notes across a splice,
   loop over it. Then CI dispatch + deploy_pinocchio.sh, sync_pieces.sh, check on Pinocchio, leave the app as found.
 
-⚠️ NEXT: P3a.
+⚠️ NEXT: when gate open (idle>=600s, >=12GB): `python scripts/align_versions.py o` (writes group.align into library versions.json). Then P3b.
