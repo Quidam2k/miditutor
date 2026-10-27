@@ -1,8 +1,12 @@
-export type TrustStatus = 'checked' | 'issues' | 'unverified';
+// 'verified' is his own review (#9664, source todd-review): written by the desk
+// app's Review tab with the score's sha256, so a re-ingested score loses it.
+export type TrustStatus = 'checked' | 'issues' | 'unverified' | 'verified';
 
 export interface PieceTrust {
   status: TrustStatus;
   note: string;
+  /** sha256 of the score he verified ('verified' only). */
+  sha?: string;
 }
 
 export type TrustMap = Record<string, PieceTrust>;
@@ -15,9 +19,12 @@ export function parseTrust(json: unknown): TrustMap {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) continue;
-    const { status, note } = value as Record<string, unknown>;
-    if (status !== 'checked' && status !== 'issues' && status !== 'unverified') continue;
-    entries.push([file, { status, note: typeof note === 'string' ? note : '' }]);
+    const { status, note, score_sha256: sha } = value as Record<string, unknown>;
+    if (status !== 'checked' && status !== 'issues' && status !== 'unverified' && status !== 'verified') continue;
+    // A verified entry without the score's hash can't be checked against the file: not trusted.
+    if (status === 'verified' && typeof sha !== 'string') continue;
+    const text = typeof note === 'string' ? note : '';
+    entries.push([file, status === 'verified' ? { status, note: text, sha: sha as string } : { status, note: text }]);
   }
   return Object.fromEntries(entries);
 }
@@ -32,6 +39,7 @@ export function trustFor(map: TrustMap | undefined, file: string): PieceTrust | 
 /** Return the symbol for a piece's trust status. */
 export function trustMark(trust: PieceTrust | undefined): string {
   switch (trust?.status) {
+    case 'verified': return '\u2714';
     case 'checked': return '\u2713';
     case 'issues': return '\u26A0';
     default: return '?';
@@ -41,6 +49,7 @@ export function trustMark(trust: PieceTrust | undefined): string {
 /** Return the label for a piece's trust status. */
 export function trustBadge(trust: PieceTrust | undefined): string {
   switch (trust?.status) {
+    case 'verified': return trust.note.trim() ? 'Verified by you: ' + trust.note : 'Verified by you';
     case 'checked': return 'Checked against the page';
     case 'issues': return trust.note.trim() ? 'Known issues: ' + trust.note : 'Known issues';
     default: return 'Not yet checked';

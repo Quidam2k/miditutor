@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, OpenDialogOptions, session } from 'electron';
+import { createHash } from 'node:crypto';
 import { createWriteStream, WriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -6,6 +7,7 @@ import JSZip from 'jszip';
 import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
 import { Recorder, outputSize } from './main/recorder';
+import { Review, reviewConfig } from './main/review';
 import {
   MUSICXML_EXTENSIONS,
   isPieceFileName,
@@ -100,6 +102,9 @@ const readTrust = async (dir: string): Promise<TrustMap> => {
   }
 };
 
+const fileSha256 = async (filePath: string) =>
+  createHash('sha256').update(await fs.readFile(filePath)).digest('hex');
+
 const listPieces = async () => {
   const dir = piecesDir();
   const pieces = [];
@@ -111,7 +116,9 @@ const listPieces = async () => {
     for (const name of names) {
       try {
         const musicxml = await readScoreFile(path.join(dir, name));
-        const entry = trustFor(trust, name);
+        let entry = trustFor(trust, name);
+        // His "Verified by you" holds only for the exact file he reviewed (#9664).
+        if (entry?.status === 'verified' && entry.sha !== await fileSha256(path.join(dir, name))) entry = undefined;
         pieces.push({
           file: name,
           title: scoreTitle(musicxml) ?? titleFromPath(name),
@@ -250,6 +257,16 @@ const startTutorApi = () => {
     if (picked.canceled || !filePath) return null;
     return { title: titleFromPath(filePath), musicxml: await readScoreFile(filePath) };
   });
+  // Scan review (#9664): desk only, when started with --review-library=<dir>.
+  const reviewCfg = reviewConfig(process.argv, app.getAppPath());
+  const review = reviewCfg ? new Review(reviewCfg) : null;
+  ipcMain.handle('review:info', () => (review ? { library: review.library } : null));
+  if (review) {
+    ipcMain.handle('review:list', () => review.list());
+    ipcMain.handle('review:piece', (_e, slug: string) => review.ensureLayout(slug));
+    ipcMain.handle('review:crop', (_e, slug: string, rel: string) => review.crop(slug, rel));
+    ipcMain.handle('review:append', (_e, slug: string, event: Record<string, unknown>) => review.append(slug, event));
+  }
   const send = (cmd: RendererCommand) => mainWindow?.webContents.send('tutor:command', cmd);
   tutorApi = new TutorApi({
     port: Number(process.env.MIDITUTOR_PORT ?? 47800),

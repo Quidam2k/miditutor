@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   recordingStatus: () => ipcRenderer.invoke('recorder:status'),
   takePcm: (id: string, data: Uint8Array) => ipcRenderer.send('recorder:pcm', { id, data }),
   takePcmDone: (msg: unknown) => ipcRenderer.send('recorder:pcm-done', msg),
+  // Scan review (#9664): null from reviewInfo unless the desk app was started with a review library.
+  reviewInfo: () => ipcRenderer.invoke('review:info'),
+  reviewList: () => ipcRenderer.invoke('review:list'),
+  reviewPiece: (slug: string) => ipcRenderer.invoke('review:piece', slug),
+  reviewCrop: (slug: string, rel: string) => ipcRenderer.invoke('review:crop', slug, rel),
+  reviewAppend: (slug: string, event: unknown) => ipcRenderer.invoke('review:append', slug, event),
   onCommand: (cb: Listener) => {
     const handler = (_e: IpcRendererEvent, cmd: unknown) => cb(cmd);
     ipcRenderer.on('tutor:command', handler);

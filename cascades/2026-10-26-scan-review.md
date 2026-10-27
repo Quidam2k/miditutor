@@ -26,9 +26,20 @@ Decided: (A) DESK on Solace, inside the MidiTutor app (Review tab). Not TV, not 
   Q:/Pantheon/.venv-omnivoice python with -I, stub window.tutorBridge via add_init_script (see scratchpad e2e_homework.py).
 
 ## Phases
-- [ ] P1 data (main process + scripts): scripts/review_layout.py -> library/review/<slug>.layout.json
-  {systems:[{page, measures:[first,last], y0,y1}]}; IPC review:list (sorted), review:page (downscaled JPEG via
-  nativeImage), review:marks get/save, review:confirmSystem. Tests: pytest for layout on 2 real pieces.
+- [x] P1 DONE 2026-10-26 17:25 (commit pending /simplify). Files: scripts/review_layout.py (+tests/test_review_layout.py
+  14 incl. learning-first regression), src/shared/review.ts (fold, measureAtX, systemOfMeasure; tests/review.test.ts),
+  src/main/review.ts (Review: list/piece/ensureLayout/crop/append/updateTrust; tests/reviewMain.test.ts), trust.ts
+  'verified' (needs score_sha256; badge "Verified by you: <Mon D, YYYY>, all N lines", mark U+2714), main.ts listPieces
+  drops a verified badge whose sha != file (Pinocchio too), IPC review:info/list/piece/crop/append, preload review*.
+  Enabled only by --review-library=<dir> (+ --review-python, --review-scripts; env MIDITUTOR_REVIEW_*).
+  Layout = scan is authoritative for systems + barline x; barlines[] always holds both system ends (no edge field).
+  Detector: deskew, staves = 5 evenly spaced lines (strays skipped), extent = median per-line span (gap 25, border
+  columns masked), edge snap within 4 staff spaces, barline kept if gapfill>=.5 (connected pages) / isolated.
+  Library run (2m36s, 81 pieces): 54 exact / 17 partial / 10 none (0 systems: eine-kleine is a 10346-px tall page,
+  kum-ba-yah/minuet-d-minor/scotland/oak-ash/toreador/drunken-sailor/she-ll-be/bright-lights: not looked at yet).
+  All 4 learning-first exact: o-from-o, the-stormy-sea, sorcerers-apprentice, let-me-fall-from-quidam.
+  Crops (150 dpi JPEG) replace the planned nativeImage page IPC. Re-run after every accept (ensureLayout does it).
+  Rule: confirm only on mapped lines; verified needs match exact + layout sha == score sha.
 - [ ] P2 UI: ReviewView.tsx (4th top tab "Review", only when the review bridge exists): piece list with both sorts,
   system-at-a-time scan crop beside the OSMD render, SVG circle drawing on both sides -> measure, "this line matches",
   marks list with status checking…/proposal/applied/rejected.
@@ -53,7 +64,11 @@ Todd sits at Pinocchio on a stool with keyboard + mouse/trackball. Build: desk i
   Pinocchio app appends its events to ~/MidiTutor Pieces/review/outbox/*.jsonl (persisted until acked).
   Solace `review_queue.py pull` (scp only, no tunnel needed): fetch outbox -> merge -> run proposals (single flight,
   load tripwire) -> push proposals + merged events + repaired scores back (sync_pieces). App fs.watch's review/.
-  Trigger: a Pantheon scheduled task (like #319, owner jarvis) every 2 min, no-op on empty outbox -- Jarvis creates it.
+  Trigger (#9667, replaces the scheduled task -- NO Pantheon/Windows task, it would wake a persona 720x/day):
+  (b) the Solace desk app, while open, runs `review_queue.py pull` on a 2-min timer; (a) the Pinocchio app, while
+  its Review tab is open, pings Solace over the existing tutor tunnel/API ("outbox has N") and Solace pulls on it.
+  Blocker on (a) -> report at P5 start; (c) script-only runner only via Orolo. Plan-back 35547 APPROVED (#9668, jarvis).
   Mark shows "checking…" until a proposal arrives.
 
-⚠️ NEXT: P1. Start by reading ScoreView.tsx:180-260 and the omr-* page outputs for o-holy-night.
+⚠️ NEXT: P2 UI (ReviewView.tsx). Mapping for partial pieces: unmapped lines show the scan only; marks there go on the
+  rendered side (OSMD measure). Backup of review/ (Jarvis add 3): P4 decides (Pinocchio copy via sync in P5 + ?).

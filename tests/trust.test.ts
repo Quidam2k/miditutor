@@ -23,6 +23,19 @@ describe('parseTrust', () => {
   });
 });
 
+describe('parseTrust verified entries', () => {
+  it('keeps his review only with the score hash it was made against', () => {
+    const map = parseTrust({
+      'a.musicxml': { status: 'verified', note: 'Oct 26, all 10 lines', source: 'todd-review', score_sha256: 'abc' },
+      'b.musicxml': { status: 'verified', note: 'no hash', source: 'todd-review' },
+    });
+    expect(map).toEqual({ 'a.musicxml': { status: 'verified', note: 'Oct 26, all 10 lines', sha: 'abc' } });
+    expect(trustMark(map['a.musicxml'])).toBe('✔');
+    expect(trustBadge(map['a.musicxml'])).toBe('Verified by you: Oct 26, all 10 lines');
+    expect(trustBadge({ status: 'verified', note: '' })).toBe('Verified by you');
+  });
+});
+
 describe('trustFor', () => {
   const map = parseTrust({ 'a.musicxml': { status: 'unverified', note: '' } });
 
