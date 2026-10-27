@@ -4,6 +4,7 @@ import { useTutorStore } from '../../store/useTutorStore';
 import type { RendererCommand } from '../../../main/tutorApi';
 import type { RecordingStatus } from '../../../main/recorder';
 import type { PieceTrust } from '../../../shared/trust';
+import type { PieceGroupRef } from '../../../shared/versions';
 import type { Homework } from '../../engine/Homework';
 
 // Wires the renderer to the tutor API in the main process: every note that
@@ -16,7 +17,7 @@ interface TutorBridge {
   screen: (state: unknown) => void;
   device: (d: unknown) => void;
   openPiece: () => Promise<{ title: string; musicxml: string } | null>;
-  listPieces?: () => Promise<{ file: string; title: string; musicxml: string; trust?: PieceTrust }[]>;
+  listPieces?: () => Promise<{ file: string; title: string; musicxml: string; trust?: PieceTrust; group?: PieceGroupRef }[]>;
   getHomework?: () => Promise<Homework | null>;
   onCommand: (cb: (cmd: RendererCommand) => void) => () => void;
   toggleRecording?: () => Promise<RecordingStatus>;

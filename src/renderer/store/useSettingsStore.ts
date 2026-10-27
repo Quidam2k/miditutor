@@ -10,6 +10,8 @@ interface SettingsState {
   showNoteNames: boolean;
   /** Score-tab pieces pinned to the top of the list, by displayed title (#9610). */
   favoritePieces: string[];
+  /** Version group slug -> the file of the version he last switched to (#9627). */
+  pieceVersions: Record<string, string>;
   /** Interval drill: right answers today toward JP's 10 a day (local date, YYYY-MM-DD). */
   intervalGoal: { day: string; correct: number };
   /** Homework item id -> local day he last finished it on the keyboard (#5058). */
@@ -20,6 +22,7 @@ interface SettingsState {
   setAudioEnabled: (enabled: boolean) => void;
   setShowNoteNames: (show: boolean) => void;
   toggleFavoritePiece: (title: string) => void;
+  setPieceVersion: (slug: string, file: string) => void;
   countIntervalCorrect: () => void;
   markHomeworkPracticed: (id: string) => void;
 }
@@ -38,6 +41,7 @@ export const useSettingsStore = create<SettingsState>()(
       audioEnabled: false,
       showNoteNames: false,
       favoritePieces: [],
+      pieceVersions: {},
       intervalGoal: { day: '', correct: 0 },
       homeworkPracticed: {},
 
@@ -51,6 +55,7 @@ export const useSettingsStore = create<SettingsState>()(
             ? s.favoritePieces.filter((t) => t !== title)
             : [...s.favoritePieces, title],
         })),
+      setPieceVersion: (slug, file) => set((s) => ({ pieceVersions: { ...s.pieceVersions, [slug]: file } })),
       countIntervalCorrect: () =>
         set((s) => {
           const day = localDay();

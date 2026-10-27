@@ -17,6 +17,7 @@ import {
   titleFromPath,
 } from './shared/pieceFiles';
 import { TrustMap, parseTrust, trustFor } from './shared/trust';
+import { VersionMap, groupOf, parseVersions } from './shared/versions';
 
 if (started) {
   app.quit();
@@ -102,6 +103,17 @@ const readTrust = async (dir: string): Promise<TrustMap> => {
   }
 };
 
+// versions.json (#9627, copied by sync_pieces.sh) groups the files that are one song
+// (Easy / Harder / My mix). Missing or unreadable means every file stands alone.
+const readVersions = async (dir: string): Promise<VersionMap> => {
+  try {
+    return parseVersions(JSON.parse(await fs.readFile(path.join(dir, 'versions.json'), 'utf8')));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') console.warn('[pieces] versions.json unreadable:', (err as Error).message);
+    return {};
+  }
+};
+
 const fileSha256 = async (filePath: string) =>
   createHash('sha256').update(await fs.readFile(filePath)).digest('hex');
 
@@ -113,17 +125,20 @@ const listPieces = async () => {
     await fs.mkdir(dir, { recursive: true });
     const names = (await fs.readdir(dir)).filter(isPieceFileName).sort();
     const trust = await readTrust(dir);
+    const versions = await readVersions(dir);
     for (const name of names) {
       try {
         const musicxml = await readScoreFile(path.join(dir, name));
         let entry = trustFor(trust, name);
         // His "Verified by you" holds only for the exact file he reviewed (#9664).
         if (entry?.status === 'verified' && entry.sha !== await fileSha256(path.join(dir, name))) entry = undefined;
+        const group = groupOf(versions, name);
         pieces.push({
           file: name,
           title: scoreTitle(musicxml) ?? titleFromPath(name),
           musicxml,
           ...(entry ? { trust: entry } : {}),
+          ...(group ? { group } : {}),
         });
       } catch (err) {
         skipped.push(`${name}: ${(err as Error).message}`);

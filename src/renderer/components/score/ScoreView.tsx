@@ -14,6 +14,7 @@ import { ExpressionTracker, describeMark, parseExpression, type ExpressionFindin
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustBadge, trustMark } from '../../../shared/trust';
+import type { PieceGroupRef } from '../../../shared/versions';
 import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
 import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
@@ -43,6 +44,8 @@ interface Piece {
   targetBpm?: number;
   /** What trust.json says about this score (OMR audit); absent for built-in and pushed pieces. */
   trust?: PieceTrust;
+  /** Its place among the song's versions (versions.json); label is then the song's title. */
+  group?: PieceGroupRef;
 }
 
 // One order for the piece list (#9611): alphabetical by the shown title, ignoring
@@ -303,10 +306,20 @@ export function ScoreView() {
     const refresh = () =>
       list()
         .then((files) => {
-          const key = files.map((f) => `${f.file}:${f.musicxml.length}:${f.trust?.status}:${f.trust?.note}`).join('|');
+          const key = files
+            .map((f) => `${f.file}:${f.musicxml.length}:${f.trust?.status}:${f.trust?.note}:${f.group?.slug}:${f.group?.label}`)
+            .join('|');
           if (key === lastKey) return;
           lastKey = key;
-          setFolder(files.map((f) => ({ id: `file:${f.file}`, label: f.title, xml: f.musicxml, trust: f.trust })));
+          setFolder(
+            files.map((f) => ({
+              id: `file:${f.file}`,
+              label: f.group?.title ?? f.title,
+              xml: f.musicxml,
+              trust: f.trust,
+              group: f.group,
+            })),
+          );
         })
         .catch((err) => console.warn('[pieces] list failed:', err));
     refresh();
@@ -319,16 +332,33 @@ export function ScoreView() {
   const pushedLabels = new Set(pushed.map((p) => p.label));
   const favorites = useSettingsStore((s) => s.favoritePieces);
   const toggleFavorite = useSettingsStore((s) => s.toggleFavoritePiece);
+  const allPieces: Piece[] = [...PIECES, ...folder.filter((p) => !pushedLabels.has(p.label)), ...pushed];
+  // A song with versions (#9627) is listed once: the version on screen, else the one
+  // he last switched to, else its first (Easy).
+  const pieceVersions = useSettingsStore((s) => s.pieceVersions);
+  const setPieceVersion = useSettingsStore((s) => s.setPieceVersion);
+  const versionsOf = (slug: string) =>
+    allPieces
+      .filter((p): p is Piece & { group: PieceGroupRef } => p.group?.slug === slug)
+      .sort((a, b) => a.group.index - b.group.index);
+  const onScreen = allPieces.find((p) => p.id === pieceId);
+  const shownVersion = (slug: string) => {
+    if (onScreen?.group?.slug === slug) return onScreen.id;
+    const versions = versionsOf(slug);
+    return (versions.find((p) => p.id === `file:${pieceVersions[slug]}`) ?? versions[0]).id;
+  };
   // Favorites first (#9610), then everything else; both halves in title order.
-  const pieces: Piece[] = [...PIECES, ...folder.filter((p) => !pushedLabels.has(p.label)), ...pushed].sort(
-    (a, b) => Number(favorites.includes(b.label)) - Number(favorites.includes(a.label)) || byTitle(a, b),
-  );
+  const pieces: Piece[] = allPieces
+    .filter((p) => !p.group || p.id === shownVersion(p.group.slug))
+    .sort((a, b) => Number(favorites.includes(b.label)) - Number(favorites.includes(a.label)) || byTitle(a, b));
   const favoritePieces = pieces.filter((p) => favorites.includes(p.label));
   const otherPieces = pieces.filter((p) => !favorites.includes(p.label));
   useEffect(() => {
     if (selectPieceId) setPieceId(selectPieceId);
   }, [selectPieceId]);
-  const piece = pieces.find((p) => p.id === pieceId) ?? PIECES[0];
+  const piece = onScreen ?? PIECES[0];
+  const versions = piece.group ? versionsOf(piece.group.slug) : [];
+  const pieceName = piece.group ? `${piece.label} (${piece.group.label})` : piece.label;
   const fifths = useMemo(() => fifthsOf(piece.xml), [piece.xml]);
 
   // Name notes as the page spells them: the written notes at the cursor first, then
@@ -348,7 +378,7 @@ export function ScoreView() {
   const pieceLabels = pieces.map((p) => p.label).join('\n');
   useEffect(() => {
     reportScreen({
-      piece: piece.label,
+      piece: pieceName,
       pieces: pieceLabels.split('\n'),
       status,
       measure,
@@ -367,7 +397,7 @@ export function ScoreView() {
       expressionMarks: exprMarks.slice(0, 40),
       expression: exprFindings,
     });
-  }, [piece.label, pieceLabels, status, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings]);
+  }, [pieceName, pieceLabels, status, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -666,7 +696,7 @@ export function ScoreView() {
         restart();
         setStatus('ready');
         reportEvent('piece', {
-          piece: piece.label, steps: steps.length, bars: steps[steps.length - 1]?.measure ?? 0,
+          piece: pieceName, steps: steps.length, bars: steps[steps.length - 1]?.measure ?? 0,
           expressionMarks: exprMarksParsed.length,
         });
       })
@@ -896,6 +926,27 @@ export function ScoreView() {
         >
           {favorites.includes(piece.label) ? '★' : '☆'}
         </button>
+        {/* Easy / Harder / My mix of the same song (#9627); his choice is remembered per song. */}
+        {versions.length > 1 && (
+          <div role="group" aria-label="Version" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
+            {versions.map((v) => (
+              <button
+                key={v.id}
+                data-version={v.group.label}
+                aria-pressed={v.id === piece.id}
+                onClick={() => {
+                  setPieceId(v.id);
+                  setPieceVersion(v.group.slug, v.id.slice('file:'.length));
+                }}
+                className={`px-2 py-1 ${
+                  v.id === piece.id ? 'bg-sky-600 text-white' : 'bg-gray-900 text-gray-300 hover:bg-gray-800'
+                }`}
+              >
+                {v.group.label}
+              </button>
+            ))}
+          </div>
+        )}
         {/* Visible, not hover-only: what the OMR audit knows about this score (#9644). */}
         <span
           className={`text-xs ${

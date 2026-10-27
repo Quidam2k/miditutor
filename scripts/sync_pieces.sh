@@ -2,7 +2,8 @@
 # Copy Todd's finished scores to Pinocchio's Pieces folder (~/MidiTutor Pieces),
 # which the Score tab lists. Run from Solace. The scores are copyrighted: they live in
 # Q:/Personal/piano/library and are never committed. Only top-level *.musicxml/*.mxl
-# (plus trust.json, the OMR audit's per-score badges, #9644) are copied; the scanner's
+# (plus trust.json, the OMR audit's per-score badges, #9644, and versions.json, which
+# groups one song's Easy / Harder / My mix files, #9627) are copied; the scanner's
 # omr-*/ working folders, partial/ pages and
 # *.pre-annotate.musicxml backups are skipped.
 # Never call git/python3/cc on the Mac (no Xcode CLT: they pop an install dialog).
@@ -21,6 +22,7 @@ done
 (( ${#files[@]} )) || { echo "No scores in $LIBRARY." >&2; exit 1; }
 # trust.json is copied alongside the scores so the picker can show each one's badge (#9644).
 if [[ -f "$LIBRARY/trust.json" ]]; then files+=("$LIBRARY/trust.json"); fi
+if [[ -f "$LIBRARY/versions.json" ]]; then files+=("$LIBRARY/versions.json"); fi
 
 ssh "$PINOCCHIO_HOST" "mkdir -p \"\$HOME/$DEST/review\""
 # scp speaks SFTP (OpenSSH 9+): the remote path is taken literally, no shell quoting.
