@@ -153,3 +153,11 @@ Next worker, once Todd has installed loopMIDI and sent photos:
 2. Write/run a mido script (.venv) that plays chords + Minuet bars into the port; verify with tutor_wait_for_play / tutor_check / piano_next_chord(show=True) and a /screenshot. Pass -> claim (1), close #3566/#3567.
 3. Run bench/omr on Todd's real photos (keep them OUT of git — repo is public); report pitch / pitch+duration % per engine. If homr fails, try Audiveris (needs Docker running or an approved msiexec extract).
 4. Still open: tutor_list_pieces (needs piece persistence), Open piece dialog click-test, tests_py/test_piano_drill.py breaks pytest collection, FP-30X + on-box Mac test (#4046 remainder), tempo overlay (#1181 remainder).
+
+## Walking Todd through homework (#4098)
+Say what each item is *asking him to do*, not just its name. One plain sentence each:
+- **Scale / arpeggio (e.g. E minor):** play the scale up and down with a steady fingering, then the same notes as a broken chord (1-3-5, up and back), hands as JP specified. Goal: even and in the right key (E minor = one sharp, F#).
+- **Triads by colour:** memorize chords by their colour, i.e. by the sound and shape of major, minor, diminished and augmented, so you can name or play one on hearing or seeing it, not by spelling it out. The Practice voice drill covers this.
+- **A piece's chord patterns (e.g. Sorcerer's):** learn the chord shapes the left hand repeats, so a bar reads as "this chord again" and not as separate notes.
+Which drill in Practice covers an item: Homework mode lists JP's newest entry as drills.
+Loose ends 2026-10-27 (#9747, #5015): pytest collection fixed (script-style tests exit via `__main__` guard now). Open-piece dialog is a native file dialog, so no headless click-test; exercised by use.

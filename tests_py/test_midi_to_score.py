@@ -83,4 +83,10 @@ run = subprocess.run([sys.executable, "-c", probe], env=dict(env, MIDITUTOR_LOAD
 check("sweep: empty inbox skips music21", run.stdout.strip().endswith("False"))
 
 print("FAILS:", FAILS)
-sys.exit(1 if FAILS else 0)
+# #5015: pytest collects this file; the exit below only runs as a script.
+def test_script_checks():
+    assert not FAILS, FAILS
+
+
+if __name__ == "__main__":
+    sys.exit(1 if FAILS else 0)

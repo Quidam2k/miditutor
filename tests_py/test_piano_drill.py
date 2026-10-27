@@ -68,4 +68,10 @@ check("bad result refused", "error" in pd.record("triad:C", "great"))
 check("unknown id refused", "error" in pd.record("triad:H", "got"))
 
 print("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED")
-sys.exit(1 if FAILS else 0)
+# #5015: pytest collects this file; the exit below only runs as a script.
+def test_script_checks():
+    assert not FAILS, FAILS
+
+
+if __name__ == "__main__":
+    sys.exit(1 if FAILS else 0)
