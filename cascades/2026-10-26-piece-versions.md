@@ -22,11 +22,24 @@ save "My mix" (easy or harder per section) that plays, follows and loops like an
 ## Phases
 | # | What | Status |
 |---|------|--------|
-| P1 | versions.json + parse + listPieces group + picker collapse + Easy/Harder switch + sync | in progress |
-| P2 | piano-only harder copies (drop vocal part), fix O m17 / Let Me Fall m56 extra bars, seed labels | todo |
+| P1 | versions.json + parse + listPieces group + picker collapse + Easy/Harder switch + sync | DONE (P1 commit; e2e 13/13, scratchpad e2e_versions_p1.py) |
+| P2 | DONE (e2e 6/6, scratchpad e2e_versions_p2.py). IN PLACE, originals kept as <file>.musicxml.orig (precedent o-holy-night); piano-only harder copies (drop vocal part), fix O m17 / Let Me Fall m56 extra bars, seed labels | DONE except Quidam (below) |
 | P3 | align_versions.py (melody DTW) -> sections; "Make my mix" builder with side-by-side thumbnails; splice -> <slug>-my-mix.musicxml + recipe; capped trust | todo |
 
 Files P1: src/shared/versions.ts, tests/versions.test.ts, src/main.ts (listPieces), src/renderer/components/tutor/useTutorBridge.ts,
 src/renderer/components/score/ScoreView.tsx, src/renderer/store/useSettingsStore.ts, scripts/sync_pieces.sh.
 
-⚠️ NEXT: P1.
+P2 notes: O m17 carries <divisions>4</divisions>, LMF m56 carries key fifths=-5: both must move into the next bar.
+Trust notes' bar numbers above the dropped bar shift down by one. review_layout.py --force for the 3 slugs, but
+only when the idle gate is open (omr_second_engine.input_idle_s() >= 600 s, ram >= 12 GB); Todd was active 19:15.
+Script: scripts/piece_versions.py piano-only (Sonnet-drafted; Codex gate refused 17% vs 15%).
+
+P2 result: O harder 35->34 bars (m17 dropped, divisions carried), LMF harder piano-only 73 bars (was showing
+only 10: OSMD cuts a score to its shortest part, and the vocal part had 10). Trust note for O shifted (20->19, 25->24).
+QUIDAM HARDER NOT CHANGED: its piano part fails OSMD at bar 37 (overlapping voices, misread rhythm), so the vocal
+original is back in place (it shows the first 14 bars, as before tonight). The piano-only copy is kept in the
+scratchpad as quidam-piano-only-fails-bar37.musicxml. Follow-up: OMR repair of quidam-musicnotes, under the 9634 guard.
+PENDING (idle gate): review_layout.py --force o-musicnotes-arrangement let-me-fall-musicnotes-vocal-arrangement
+(their bar counts changed, so the Review tab's system->bar map is stale after the dropped bar).
+
+⚠️ NEXT: P3 (align_versions.py + My mix builder).
