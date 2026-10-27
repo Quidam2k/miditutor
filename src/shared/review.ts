@@ -178,3 +178,41 @@ export function measureAtX(system: LayoutSystem, x: number): number | null {
 export function systemOfMeasure(layout: Layout, measure: number): LayoutSystem | undefined {
   return layout.systems.find((s) => s.measures && measure >= s.measures[0] && measure <= s.measures[1]);
 }
+
+/**
+ * The score bars to show beside a system: its own when mapped; for an unmapped
+ * line, every bar between the mapped lines around it (the scan and the XML
+ * disagree there, so he picks the bar on the rendered side). Null when none.
+ */
+export function systemRange(layout: Layout, index: number): { from: number; to: number; mapped: boolean } | null {
+  const pos = layout.systems.findIndex((s) => s.index === index);
+  if (pos < 0) return null;
+  const own = layout.systems[pos].measures;
+  if (own) return { from: own[0], to: own[1], mapped: true };
+  const before = layout.systems.slice(0, pos).reverse().find((s) => s.measures)?.measures;
+  const after = layout.systems.slice(pos + 1).find((s) => s.measures)?.measures;
+  const from = before ? before[1] + 1 : 1;
+  const to = after ? after[0] - 1 : layout.xml.measures;
+  return from <= to ? { from, to, mapped: false } : null;
+}
+
+/** A point on a system's scan crop (crop px) in full-res page px. */
+export function cropToPage(layout: Layout, system: LayoutSystem, x: number, y: number): { x: number; y: number } {
+  return { x: x / layout.crop_scale, y: system.y0 + y / layout.crop_scale };
+}
+
+/** The staff (1 = top) whose lines are nearest page y, or null for a system without staves. */
+export function staffAtY(system: LayoutSystem, y: number): number | null {
+  let best: number | null = null;
+  let bestDist = Infinity;
+  system.staves.forEach((lines, i) => {
+    const top = Math.min(...lines);
+    const bottom = Math.max(...lines);
+    const dist = y < top ? top - y : y > bottom ? y - bottom : 0;
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = i + 1;
+    }
+  });
+  return best;
+}

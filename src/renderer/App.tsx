@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMidi } from './components/midi/useMidi';
 import { MidiStatus } from './components/midi/MidiStatus';
 import { MidiMonitor } from './components/midi/MidiMonitor';
@@ -7,14 +7,17 @@ import { ExerciseView } from './components/exercise/ExerciseView';
 import { ScoreView } from './components/score/ScoreView';
 import { useTutorBridge } from './components/tutor/useTutorBridge';
 import { RecordButton, PIANO_CREDIT } from './components/tutor/RecordButton';
+import { ReviewView } from './components/review/ReviewView';
 
-type View = 'practice' | 'monitor' | 'score';
+type View = 'practice' | 'monitor' | 'score' | 'review';
 
 const TABS: { id: View; label: string }[] = [
   { id: 'practice', label: 'Practice' },
   { id: 'monitor', label: 'MIDI Monitor' },
   { id: 'score', label: 'Score' },
 ];
+// Scan review (#9664): only on the desk, when main was started with a review library.
+const REVIEW_TAB = { id: 'review' as const, label: 'Review' };
 
 export function App() {
   useMidi();
@@ -22,6 +25,11 @@ export function App() {
   // Bumped on every click of Practice (or the title) so it always lands on the drill's start screen.
   const [practiceVisit, setPracticeVisit] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
+  const [reviewOn, setReviewOn] = useState(false);
+  useEffect(() => {
+    window.tutorBridge?.reviewInfo?.().then((info) => setReviewOn(info !== null), () => undefined);
+  }, []);
+  const tabs = reviewOn ? [...TABS, REVIEW_TAB] : TABS;
   // A persona pushing a task or piece brings the Score tab forward.
   useTutorBridge(useCallback(() => setView('score'), []));
 
@@ -49,7 +57,7 @@ export function App() {
             </button>
           </h1>
           <nav className="flex items-center gap-1">
-            {TABS.map((t) => (
+            {tabs.map((t) => (
               <button
                 key={t.id}
                 onClick={() => go(t.id)}
@@ -72,10 +80,12 @@ export function App() {
 
       {/* Main content */}
       <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center p-6 gap-6">
-        <div className="w-full max-w-3xl flex-1">
+        {/* Review puts a full-width scan line beside the score: it gets the wide column. */}
+        <div className={`w-full flex-1 ${view === 'review' ? 'max-w-7xl' : 'max-w-3xl'}`}>
           {view === 'practice' && <ExerciseView key={practiceVisit} />}
           {view === 'monitor' && <MidiMonitor />}
           {view === 'score' && <ScoreView />}
+          {view === 'review' && <ReviewView />}
         </div>
 
         {/* DEV-ONLY virtual keyboard: exercise the app without hardware/loopMIDI.

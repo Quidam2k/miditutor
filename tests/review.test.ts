@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Layout, LayoutSystem, ReviewEvent, foldReview, measureAtX, orderEvents, systemOfMeasure } from '../src/shared/review';
+import { Layout, LayoutSystem, ReviewEvent, cropToPage, foldReview, measureAtX, orderEvents, staffAtY, systemOfMeasure, systemRange } from '../src/shared/review';
 
 const system = (index: number, measures: [number, number] | null, over: Partial<LayoutSystem> = {}): LayoutSystem => ({
   index, page: '01.png', y0: 0, y1: 100, spacing: 20, staves: [], x_left: 100, x_right: 500,
@@ -125,5 +125,44 @@ describe('systemOfMeasure', () => {
   it('finds the line holding a bar', () => {
     expect(systemOfMeasure(two, 6)?.index).toBe(2);
     expect(systemOfMeasure(two, 9)).toBeUndefined();
+  });
+});
+
+describe('systemRange', () => {
+  const gappy = layout([system(1, [1, 4]), system(2, null), system(3, null), system(4, [13, 16])], { xml: { measures: 20, breaks: [], staves_per_system: 2 } });
+
+  it('a mapped line shows its own bars', () => {
+    expect(systemRange(gappy, 1)).toEqual({ from: 1, to: 4, mapped: true });
+  });
+
+  it('an unmapped line shows every bar between the mapped lines around it', () => {
+    expect(systemRange(gappy, 2)).toEqual({ from: 5, to: 12, mapped: false });
+    expect(systemRange(gappy, 3)).toEqual({ from: 5, to: 12, mapped: false });
+  });
+
+  it('runs to the ends of the score at the edges, and is null for an unknown line or an empty gap', () => {
+    const edges = layout([system(1, null), system(2, [3, 6]), system(3, null)], { xml: { measures: 9, breaks: [], staves_per_system: 2 } });
+    expect(systemRange(edges, 1)).toEqual({ from: 1, to: 2, mapped: false });
+    expect(systemRange(edges, 3)).toEqual({ from: 7, to: 9, mapped: false });
+    expect(systemRange(edges, 9)).toBeNull();
+    const tight = layout([system(1, [1, 4]), system(2, null), system(3, [5, 8])]);
+    expect(systemRange(tight, 2)).toBeNull();
+  });
+});
+
+describe('scan coordinates', () => {
+  const s = system(1, [1, 4], { y0: 800, staves: [[900, 925, 950, 975, 1000], [1150, 1175, 1200, 1225, 1250]] });
+
+  it('a crop point scales back to page px below the system top', () => {
+    expect(cropToPage(two, s, 150, 40)).toEqual({ x: 300, y: 880 });
+  });
+
+  it('a click maps to bar and staff', () => {
+    const p = cropToPage(two, s, 125, 200); // page (250, 1200)
+    expect(measureAtX(s, p.x)).toBe(2);
+    expect(staffAtY(s, p.y)).toBe(2);
+    expect(staffAtY(s, 950)).toBe(1);
+    expect(staffAtY(s, 1060)).toBe(1); // nearer the top staff's bottom line
+    expect(staffAtY(system(1, null), 10)).toBeNull();
   });
 });

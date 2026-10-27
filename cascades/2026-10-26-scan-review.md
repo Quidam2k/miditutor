@@ -40,9 +40,13 @@ Decided: (A) DESK on Solace, inside the MidiTutor app (Review tab). Not TV, not 
   All 4 learning-first exact: o-from-o, the-stormy-sea, sorcerers-apprentice, let-me-fall-from-quidam.
   Crops (150 dpi JPEG) replace the planned nativeImage page IPC. Re-run after every accept (ensureLayout does it).
   Rule: confirm only on mapped lines; verified needs match exact + layout sha == score sha.
-- [ ] P2 UI: ReviewView.tsx (4th top tab "Review", only when the review bridge exists): piece list with both sorts,
-  system-at-a-time scan crop beside the OSMD render, SVG circle drawing on both sides -> measure, "this line matches",
-  marks list with status checking…/proposal/applied/rejected.
+- [x] P2 DONE 2026-10-26 17:35: src/renderer/components/review/ReviewView.tsx (Sonnet draft, Codex gate refused; reviewed
+  every line), App.tsx 4th tab "Review" only when tutorBridge.reviewInfo() != null (main column max-w-7xl on that tab),
+  shared/review.ts systemRange (unmapped line -> bars between the mapped lines around it) / cropToPage / staffAtY (+tests).
+  OSMD: load once per piece sha, per line setOptions drawFrom/UpToMeasureNumber + stretchLastSystemLine, bar boxes from
+  MeasureList entries with ParentMusicSystem. Overlay svg viewBox = crop natural px (scan) / OSMD svg size (score).
+  e2e: scratchpad e2e_review.py (stub bridge serves real library data, folds with real shared/review.ts via Vite import),
+  17/17 PASS; screengrab/9664-p2-*.png. Open marks show "checking…" (P3 supplies proposals).
 - [ ] P3 proposals: scripts/review_queue.py (Codex if budget, else Sonnet; I review every line): crop bar ±1 from the
   page, headless `claude -p` Sonnet with crop + bar listing -> omr_fix edit list JSON; validate (dry run + re-lint, reject
   if fill worse); single-flight lock + load tripwire. Accept -> omr_fix apply, .orig first-only, review/<slug>.log,
@@ -70,5 +74,4 @@ Todd sits at Pinocchio on a stool with keyboard + mouse/trackball. Build: desk i
   Blocker on (a) -> report at P5 start; (c) script-only runner only via Orolo. Plan-back 35547 APPROVED (#9668, jarvis).
   Mark shows "checking…" until a proposal arrives.
 
-⚠️ NEXT: P2 UI (ReviewView.tsx). Mapping for partial pieces: unmapped lines show the scan only; marks there go on the
-  rendered side (OSMD measure). Backup of review/ (Jarvis add 3): P4 decides (Pinocchio copy via sync in P5 + ?).
+⚠️ NEXT: P3 proposals (scripts/review_queue.py + Accept/Reject UI in ReviewView marks list). Backup of review/ (Jarvis add 3): P4 decides (Pinocchio copy via sync in P5 + ?).

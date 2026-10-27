@@ -23,6 +23,8 @@ interface TutorBridge {
   recordingStatus?: () => Promise<RecordingStatus>;
   takePcm?: (id: string, data: Uint8Array) => void;
   takePcmDone?: (msg: { id: string; sampleRate?: number; channels?: number; error?: string }) => void;
+  /** Scan review (#9664): null unless the desk app was started with a review library. */
+  reviewInfo?: () => Promise<{ library: string } | null>;
 }
 
 declare global {
