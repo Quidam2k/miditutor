@@ -148,7 +148,9 @@ P6 PROGRESS (uncommitted, in tree), 2026-10-26 ~18:50:
   vitest 225 (6 runs green), pytest 48, tsc clean. Real library layouts have suspects (81 pieces). Packaged+installed.
   Installed-app e2e 22/22 PASS: scratchpad e2e_review_p6.py (copy Q:/project-reports/miditutor/9764-e2e_review_p6.py),
   screenshots screengrab/9764-p6-*.png. Codex gate refused (17%); Sonnet second read running/done.
-- TODO: act on the Sonnet read, re-package/install if code changed, commit (#9664 marker, --assignment 9767).
+- DONE 2026-10-26 ~19:05: Sonnet read fixed (double-save, held-key confirm, grace in beams, bad circle); 71a92cf
+  pushed; CI 40435150517 -> deployed to Pinocchio, sync_pieces run, app relaunched -g. 9662-9668, 9763-9767 closed;
+  #5071 + #5075 closed. CASCADE COMPLETE.
 - Then DEPLOY P5+P6: ANNOUNCE in the room first (orch_report to Jarvis that MidiTutor on Pinocchio will close for a
   restart) -> gh workflow run macos.yml --ref master, gh run watch, confirm headSha -> idle-guarded deploy_pinocchio.sh
   with PINOCCHIO_HOST=toddwalker@192.168.50.27 (name doesn't resolve) -> real sync_pieces.sh (same host) so the
