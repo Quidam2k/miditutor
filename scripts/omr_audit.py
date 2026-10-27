@@ -25,6 +25,9 @@ from annotate_scan import (
 # Pitch and rhythm are judged apart: a wrong note teaches him wrong; a timing fault misplaces right notes. #9625
 VERDICT_RULE = {
     "minimum_agreement": 0.70,
+    # A badge of "checked" needs near-total engine agreement on every page: on 2026-10-27 pieces
+    # confirmed right on the page scored 0.98-0.99, and Quidam (easy) at 0.76 had real errors. #9634
+    "checked_agreement": 0.95,
     "pitch_checks": frozenset({
         "octave_repeat", "leap", "range", "tie_unclosed", "tie_orphan", "numeric_words",
         "homr_unstable", "engine_octave", "engine_low", "bar_number_drift",
@@ -561,8 +564,9 @@ def piece_trust(lint_piece, pitch_bars, repair, compare_piece) -> dict:
     if (
         isinstance(compare_piece, dict)
         and compare_piece.get("piece_agreement", 0)
-        >= VERDICT_RULE["minimum_agreement"]
+        >= VERDICT_RULE["checked_agreement"]
         and "bar_count_mismatch" not in compare_piece
+        and not compare_piece.get("missing_pages")
     ):
         return {
             "status": "checked",

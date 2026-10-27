@@ -191,7 +191,7 @@ def test_piece_trust_repair_requires_fully_checked_and_no_remaining_note():
 
 
 def test_piece_trust_comparison_threshold_and_bar_count_mismatch():
-    for agreement in (0.70, 0.95):
+    for agreement in (0.95, 0.99):
         assert oa.piece_trust(
             {"flags": []}, set(), None, {"piece_agreement": agreement}
         ) == {
@@ -202,6 +202,8 @@ def test_piece_trust_comparison_threshold_and_bar_count_mismatch():
 
     for comparison in (
         {"piece_agreement": 0.699},
+        {"piece_agreement": 0.94},
+        {"piece_agreement": 1.0, "missing_pages": ["01"]},
         {
             "piece_agreement": 0.99,
             "bar_count_mismatch": {"library": 12, "homr": 13},
