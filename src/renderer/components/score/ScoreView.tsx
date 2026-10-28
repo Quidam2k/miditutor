@@ -23,6 +23,7 @@ import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
 import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
 import { MixBuilder } from './MixBuilder';
+import { OriginalScan, useScanLayout } from './OriginalScan';
 import { ChordSymbol, chordSymbol, playsChord } from './chordSymbols';
 import {
   WrittenNote,
@@ -483,6 +484,12 @@ export function ScoreView() {
     setMixing(false);
   };
   const pieceName = piece.group ? `${piece.label} (${piece.group.label})` : piece.label;
+  // #9988: the scanned original, for pieces with a scan layout (library slug = file stem).
+  const scanSlug = piece.id.startsWith('file:')
+    ? piece.id.slice(5).replace(/\.(musicxml|xml|mxl)$/i, '')
+    : /^[a-z0-9][a-z0-9-]*$/.test(piece.label) ? piece.label : null;
+  const scanLayout = useScanLayout(scanSlug);
+  const [showOriginal, setShowOriginal] = useState(false);
   const fifths = useMemo(() => fifthsOf(piece.xml), [piece.xml]);
 
   // Name notes as the page spells them: the written notes at the cursor first, then
@@ -1306,6 +1313,16 @@ export function ScoreView() {
         >
           {scoreLayout === 'scroll' ? 'Pages side by side' : 'Scroll'}
         </button>
+        {scanLayout && (
+          <button
+            data-testid="original-toggle"
+            onClick={() => setShowOriginal((v) => !v)}
+            title="Show the scanned page for the bar you are on"
+            className={`${btn} ${showOriginal ? 'ring-2 ring-indigo-400' : ''}`}
+          >
+            Original
+          </button>
+        )}
         <div role="group" aria-label="Hand" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
           {(['both', 'right', 'left'] as const).map((value) => (
             <button
@@ -1371,6 +1388,9 @@ export function ScoreView() {
         </div>
       </div>
 
+      {showOriginal && scanLayout && scanSlug && status === 'ready' && (
+        <OriginalScan slug={scanSlug} layout={scanLayout} bar={measure} />
+      )}
       {status === 'ready' && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-md bg-gray-900/60 px-3 py-2 text-sm">
           <span className="text-gray-400">
