@@ -6,3 +6,8 @@
   fill: #7c3aed;
   font-weight: bold;
 }
+
+/* Pages side by side (#5137): a thin edge so two white pages read as two sheets. */
+.score-pages > div {
+  box-shadow: 0 0 0 1px #d1d5db;
+}

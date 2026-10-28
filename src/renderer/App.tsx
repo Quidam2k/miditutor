@@ -8,6 +8,7 @@ import { ScoreView } from './components/score/ScoreView';
 import { useTutorBridge } from './components/tutor/useTutorBridge';
 import { RecordButton, PIANO_CREDIT } from './components/tutor/RecordButton';
 import { ReviewView } from './components/review/ReviewView';
+import { useSettingsStore } from './store/useSettingsStore';
 
 type View = 'practice' | 'monitor' | 'score' | 'review';
 
@@ -22,6 +23,7 @@ const REVIEW_TAB = { id: 'review' as const, label: 'Review' };
 export function App() {
   useMidi();
   const [view, setView] = useState<View>('practice');
+  const scoreLayout = useSettingsStore((s) => s.scoreLayout);
   // Bumped on every click of Practice (or the title) so it always lands on the drill's start screen.
   const [practiceVisit, setPracticeVisit] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
@@ -81,7 +83,12 @@ export function App() {
       {/* Main content */}
       <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center p-6 gap-6">
         {/* Review puts a full-width scan line beside the score: it gets the wide column. */}
-        <div className={`w-full flex-1 ${view === 'review' ? 'max-w-7xl' : 'max-w-3xl'}`}>
+        {/* Pages side by side (#5137) needs the whole screen width. */}
+        <div
+          className={`w-full flex-1 ${
+            view === 'review' ? 'max-w-7xl' : view === 'score' && scoreLayout === 'pages' ? 'max-w-none' : 'max-w-3xl'
+          }`}
+        >
           {view === 'practice' && <ExerciseView key={practiceVisit} />}
           {view === 'monitor' && <MidiMonitor />}
           {view === 'score' && <ScoreView />}

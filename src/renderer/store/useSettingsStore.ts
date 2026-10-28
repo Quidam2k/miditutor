@@ -8,6 +8,7 @@ interface SettingsState {
   exerciseType: ExerciseType;
   audioEnabled: boolean;
   showNoteNames: boolean;
+  scoreLayout: 'scroll' | 'pages';
   /** Score-tab pieces pinned to the top of the list, by displayed title (#9610). */
   favoritePieces: string[];
   /** Version group slug -> the file of the version he last switched to (#9627). */
@@ -21,6 +22,7 @@ interface SettingsState {
   setExerciseType: (type: ExerciseType) => void;
   setAudioEnabled: (enabled: boolean) => void;
   setShowNoteNames: (show: boolean) => void;
+  setScoreLayout: (layout: 'scroll' | 'pages') => void;
   toggleFavoritePiece: (title: string) => void;
   setPieceVersion: (slug: string, file: string) => void;
   countIntervalCorrect: () => void;
@@ -40,6 +42,7 @@ export const useSettingsStore = create<SettingsState>()(
       // He plays the notes himself; the tutor only sounds when he asks (#5059).
       audioEnabled: false,
       showNoteNames: false,
+      scoreLayout: 'scroll',
       favoritePieces: [],
       pieceVersions: {},
       intervalGoal: { day: '', correct: 0 },
@@ -49,6 +52,7 @@ export const useSettingsStore = create<SettingsState>()(
       setExerciseType: (type) => set({ exerciseType: type }),
       setAudioEnabled: (enabled) => set({ audioEnabled: enabled }),
       setShowNoteNames: (show) => set({ showNoteNames: show }),
+      setScoreLayout: (layout) => set({ scoreLayout: layout }),
       toggleFavoritePiece: (title) =>
         set((s) => ({
           favoritePieces: s.favoritePieces.includes(title)

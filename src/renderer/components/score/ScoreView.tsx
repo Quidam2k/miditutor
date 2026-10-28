@@ -83,6 +83,7 @@ interface OsmdBox {
 }
 interface OsmdMeasure {
   InitiallyActiveClef?: { ClefType: number };
+  ParentMusicSystem?: { Parent?: { PageNumber: number } };
   ParentStaffLine?: { PositionAndShape: { AbsolutePosition: { y: number } } };
   PositionAndShape?: OsmdBox;
 }
@@ -252,7 +253,28 @@ function paintFingerings(osmd: OpenSheetMusicDisplay, container: HTMLElement) {
   }
 }
 
-// Pixel box of every bar (all staves of one system), relative to the score's <svg>.
+// Screen height left for a page under the header, sticky toolbar and keyboard strip.
+const PAGE_RESERVE_PX = 320;
+
+// Pages side by side (#5137): each page is half the panel wide and as tall as the screen
+// allows, not A4, so two pages fill a TV instead of two small portrait sheets.
+// Zoom keeps about a printed page's worth of music on each.
+function fitPages(osmd: OpenSheetMusicDisplay, container: HTMLElement) {
+  const w = container.offsetWidth;
+  if (!w) return; // hidden behind the photo view: keep the last page size
+  osmd.setCustomPageFormat(w, Math.max(400, window.innerHeight - PAGE_RESERVE_PX));
+  osmd.Zoom = Math.max(0.5, Math.min(1, w / 1100));
+}
+
+// OSMD positions are relative to the bar's own page.
+function pageSvgOf(osmd: OpenSheetMusicDisplay, container: HTMLElement, measureIdx0: number) {
+  const staves = osmd.GraphicSheet.MeasureList[measureIdx0] as unknown as (OsmdMeasure | undefined)[] | undefined;
+  const page = staves?.find((m) => m !== undefined)?.ParentMusicSystem?.Parent?.PageNumber;
+  return (page ? container.querySelector<SVGSVGElement>('#osmdCanvasPage' + page + ' svg') : null)
+    ?? container.querySelector('svg');
+}
+
+// Pixel box of every bar (all staves of one system), relative to its page's <svg>.
 function barBoxes(osmd: OpenSheetMusicDisplay): Map<number, Band> {
   const boxes = new Map<number, Band>();
   const space = 10 * osmd.Zoom;
@@ -329,6 +351,8 @@ export function ScoreView() {
   const [bands, setBands] = useState<Band[]>([]);
   const [layoutTick, setLayoutTick] = useState(0);
   const loopRequest = useTutorStore((s) => s.loopRequest);
+  const scoreLayout = useSettingsStore((s) => s.scoreLayout);
+  const setScoreLayout = useSettingsStore((s) => s.setScoreLayout);
 
   // Built-in pieces, his Pieces folder on disk, then anything pushed this session.
   // The folder is re-read when the window regains focus, so a synced file shows up.
@@ -464,8 +488,10 @@ export function ScoreView() {
       const step = followerRef.current?.steps[stepIdx];
       const stepNotes = stepNotesRef.current[stepIdx] ?? [];
       const ringNotes = ringNotesRef.current[stepIdx] ?? [];
-      const svg = containerRef.current?.querySelector('svg');
-      if (!osmd || !layer || !step || !svg || stepNotes.length === 0) return null;
+      const container = containerRef.current;
+      if (!osmd || !layer || !step || !container || stepNotes.length === 0) return null;
+      const svg = pageSvgOf(osmd, container, step.measure - 1);
+      if (!svg) return null;
       try {
         const staves = osmd.Sheet.Staves.length;
         // Which staff: the one this pitch is written on here; else the staff of the
@@ -647,12 +673,14 @@ export function ScoreView() {
   // Bar under a click on the score, from OSMD's bar layout.
   const barAt = (clientX: number, clientY: number): number | null => {
     const osmd = osmdRef.current;
-    const svg = containerRef.current?.querySelector('svg');
-    if (!osmd || !svg) return null;
-    const r = svg.getBoundingClientRect();
-    const x = clientX - r.left;
-    const y = clientY - r.top;
+    const container = containerRef.current;
+    if (!osmd || !container) return null;
     for (const [bar, b] of barBoxes(osmd)) {
+      const svg = pageSvgOf(osmd, container, bar - 1);
+      if (!svg) continue;
+      const r = svg.getBoundingClientRect();
+      const x = clientX - r.left;
+      const y = clientY - r.top;
       if (x >= b.x && x <= b.x + b.w && y >= b.y - 10 && y <= b.y + b.h + 10) return bar;
     }
     return null;
@@ -673,19 +701,24 @@ export function ScoreView() {
   // Shade the loop (or the start bar while picking). Recomputed after any re-layout.
   useEffect(() => {
     const osmd = osmdRef.current;
-    const svg = containerRef.current?.querySelector('svg');
+    const container = containerRef.current;
     const layer = layerRef.current;
     const range = loopBars ?? (pickStart !== null ? { first: pickStart, last: pickStart } : null);
-    if (!osmd || !svg || !layer || !range || status !== 'ready') {
+    if (!osmd || !container || !layer || !range || status !== 'ready') {
       setBands([]);
       return;
     }
     try {
-      const dx = svg.getBoundingClientRect().left - layer.getBoundingClientRect().left;
-      const dy = svg.getBoundingClientRect().top - layer.getBoundingClientRect().top;
+      const layerRect = layer.getBoundingClientRect();
       const out: Band[] = [];
       for (const [bar, b] of barBoxes(osmd)) {
-        if (bar >= range.first && bar <= range.last) out.push({ ...b, x: b.x + dx, y: b.y + dy });
+        if (bar < range.first || bar > range.last) continue;
+        const svg = pageSvgOf(osmd, container, bar - 1);
+        if (!svg) continue;
+        const svgRect = svg.getBoundingClientRect();
+        const dx = svgRect.left - layerRect.left;
+        const dy = svgRect.top - layerRect.top;
+        out.push({ ...b, x: b.x + dx, y: b.y + dy });
       }
       setBands(out);
     } catch (err) {
@@ -753,10 +786,12 @@ export function ScoreView() {
       // Break lines where the printed page does (#5056), so the bar number at the start
       // of each line matches the boxed number on his page.
       newSystemFromXML: true,
+      ...(scoreLayout === 'pages' ? { pageFormat: 'A4_P', pageBackgroundColor: '#FFFFFF' } : {}),
     });
     const render = osmd.render.bind(osmd);
     // autoResize calls this.render(), so the instance override covers re-layouts too.
     osmd.render = () => {
+      if (scoreLayout === 'pages') fitPages(osmd, container);
       render();
       paintFingerings(osmd, container);
     };
@@ -802,7 +837,7 @@ export function ScoreView() {
       exprRef.current = null;
     };
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
-  }, [piece.id, piece.xml, restart, buildFollower]);
+  }, [piece.id, piece.xml, scoreLayout, restart, buildFollower]);
 
   // --- live MIDI → follower ---
   useEffect(() => {
@@ -1090,6 +1125,14 @@ export function ScoreView() {
             ))}
           </div>
         )}
+        <button
+          data-testid="layout-toggle"
+          onClick={() => setScoreLayout(scoreLayout === 'scroll' ? 'pages' : 'scroll')}
+          title="Switch between two pages side by side and one long scrolling page"
+          className={btn}
+        >
+          {scoreLayout === 'scroll' ? 'Pages side by side' : 'Scroll'}
+        </button>
         <div role="group" aria-label="Hand" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
           {(['both', 'right', 'left'] as const).map((value) => (
             <button
@@ -1219,7 +1262,20 @@ export function ScoreView() {
           <img src={piece.photo} alt={`Photo of ${piece.label}`} className="mx-auto max-h-[70vh] w-auto max-w-full" />
         )}
         <div ref={layerRef} className={showPhoto ? 'hidden' : 'relative'}>
-          <div ref={containerRef} />
+          {/* OSMD makes each page as wide as this container, so it is half the panel and
+              the second column of pages overflows into the other half on purpose. */}
+          <div
+            ref={containerRef}
+            className={scoreLayout === 'pages' ? 'score-pages' : undefined}
+            style={scoreLayout === 'pages' ? {
+              width: 'calc((100% - 1.5rem) / 2)',
+              display: 'grid',
+              gridTemplateColumns: 'repeat(2, 100%)',
+              columnGap: '1.5rem',
+              rowGap: '1.5rem',
+              alignItems: 'start',
+            } : undefined}
+          />
           <PlayedOverlay marks={marks} bands={bands} />
         </div>
       </div>
