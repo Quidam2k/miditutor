@@ -99,6 +99,7 @@ interface OsmdVoiceEntry {
   ParentSourceStaffEntry?: { ChordContainers?: OsmdChordContainer[] };
 }
 interface OsmdStaffEntry {
+  FingeringEntries?: { SVGNode?: Node }[];
   graphicalChordContainers?: { GetChordSymbolContainer: unknown; GraphicalLabel?: { SVGNode?: Node } }[];
 }
 
@@ -160,7 +161,7 @@ function keepCursorHeight(container: HTMLElement): MutationObserver {
 // played note can be placed on the staff it is written on.
 // Also the chord symbol in force at each step: one printed at a step lasts until
 // the next one.
-function extractSteps(osmd: OpenSheetMusicDisplay): {
+function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'left'): {
   steps: ScoreStep[];
   notes: OsmdNote[][];
   ringing: OsmdNote[][];
@@ -172,14 +173,18 @@ function extractSteps(osmd: OpenSheetMusicDisplay): {
   const chords: (StepChord | null)[] = [];
   let chord: StepChord | null = null;
   let active: { note: OsmdNote; end: number }[] = [];
+  const selectedStaff = hand === 'both' || osmd.Sheet.Staves.length < 2 ? null : hand === 'right' ? 0 : 1;
   const cursor = osmd.cursor;
   cursor.reset();
   for (let guard = 0; guard < 20000 && !cursor.iterator.EndReached; guard++) {
     const all = cursor.NotesUnderCursor() as unknown as OsmdNote[];
-    const under = all.filter(isStruck);
+    const struck = all.filter(isStruck);
+    const under = struck.filter((n) => selectedStaff === null || staffOf(n) === selectedStaff);
+    const other = struck.filter((n) => selectedStaff !== null && staffOf(n) !== selectedStaff);
     const beat = cursor.iterator.currentTimeStamp.RealValue * 4;
     active = active.filter((a) => a.end > beat + 1e-6);
-    const ring = [...active.map((a) => a.note), ...all.filter((n) => !n.isRest() && !isStruck(n))];
+    // The other hand is optional, so playing its written notes is not wrong.
+    const ring = [...active.map((a) => a.note), ...all.filter((n) => !n.isRest() && !isStruck(n)), ...other];
     steps.push({
       notes: under.map(toMidi),
       beat,
@@ -219,6 +224,30 @@ function paintChord(osmd: OpenSheetMusicDisplay, container: OsmdChordContainer, 
           }
         }
       }
+    }
+  }
+}
+
+// Keep fingerings distinct from measure numbers at a glance.
+function paintFingerings(osmd: OpenSheetMusicDisplay, container: HTMLElement) {
+  const list = osmd.GraphicSheet.MeasureList as unknown as ({ staffEntries?: OsmdStaffEntry[] } | undefined)[][];
+  for (const staves of list) {
+    for (const m of staves) {
+      for (const se of m?.staffEntries ?? []) {
+        for (const label of se.FingeringEntries ?? []) {
+          const node = label.SVGNode;
+          if (!(node instanceof SVGElement)) continue;
+          for (const el of [node, ...node.querySelectorAll('*')] as SVGElement[]) {
+            el.style.fill = '#7c3aed';
+            el.style.fontWeight = 'bold';
+          }
+        }
+      }
+    }
+  }
+  for (const node of container.querySelectorAll<SVGElement>('.measure-number')) {
+    for (const el of [node, ...node.querySelectorAll('*')] as SVGElement[]) {
+      el.style.fill = '#9ca3af';
     }
   }
 }
@@ -279,6 +308,9 @@ export function ScoreView() {
   // 'photo': a pushed piece with no readable score yet, only its photo to show.
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'photo'>('loading');
   const [view, setView] = useState<'score' | 'photo'>('score');
+  const [hand, setHand] = useState<'both' | 'right' | 'left'>('both');
+  const handRef = useRef(hand);
+  const [staffCount, setStaffCount] = useState(0);
   const [openError, setOpenError] = useState('');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [following, setFollowing] = useState(true);
@@ -568,6 +600,20 @@ export function ScoreView() {
     syncUi();
   }, [moveCursorTo, syncUi, trackChord]);
 
+  const buildFollower = useCallback((osmd: OpenSheetMusicDisplay) => {
+    const { steps, notes, ringing, chords } = extractSteps(osmd, handRef.current);
+    stepNotesRef.current = notes;
+    ringNotesRef.current = ringing;
+    stepChordsRef.current = chords;
+    trackChord(null, []);
+    chordLitRef.current = noChord();
+    followerRef.current = new ScoreFollower(steps);
+    const exprMarksParsed = parseExpression(piece.xml);
+    exprRef.current = new ExpressionTracker(exprMarksParsed, steps);
+    setExprMarks(exprMarksParsed.map(describeMark));
+    return { steps, exprMarksParsed };
+  }, [piece.xml, trackChord]);
+
   // --- loop range (#5004) ---
   const applyLoop = useCallback(
     (bars: { first: number; last: number } | null) => {
@@ -669,6 +715,18 @@ export function ScoreView() {
     return () => window.removeEventListener('keydown', onKey);
   }, [picking, loopBars, applyLoop]);
 
+  // Keep the latest hand for loading without reloading OSMD on a hand switch.
+  useEffect(() => {
+    handRef.current = hand;
+    if (status !== 'ready' || !osmdRef.current) return;
+    // Steps keep their cursor positions, so a loop he set still covers the same bars.
+    const range = followerRef.current?.range ?? null;
+    buildFollower(osmdRef.current);
+    if (range) followerRef.current?.setRange(range.first, range.last);
+    restart();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hand]);
+
   // --- load + render the selected piece ---
   useEffect(() => {
     // The photo view is the default when there is no score to show.
@@ -678,6 +736,7 @@ export function ScoreView() {
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    setStaffCount(0);
     if (!piece.xml) {
       setStatus('photo');
       return;
@@ -695,6 +754,12 @@ export function ScoreView() {
       // of each line matches the boxed number on his page.
       newSystemFromXML: true,
     });
+    const render = osmd.render.bind(osmd);
+    // autoResize calls this.render(), so the instance override covers re-layouts too.
+    osmd.render = () => {
+      render();
+      paintFingerings(osmd, container);
+    };
     osmdRef.current = osmd;
     const cursorObs = keepCursorHeight(container);
 
@@ -704,15 +769,8 @@ export function ScoreView() {
         if (disposed) return;
         osmd.render();
         osmd.cursor.show();
-        const { steps, notes, ringing, chords } = extractSteps(osmd);
-        stepNotesRef.current = notes;
-        ringNotesRef.current = ringing;
-        stepChordsRef.current = chords;
-        chordLitRef.current = noChord();
-        followerRef.current = new ScoreFollower(steps);
-        const exprMarksParsed = parseExpression(piece.xml);
-        exprRef.current = new ExpressionTracker(exprMarksParsed, steps);
-        setExprMarks(exprMarksParsed.map(describeMark));
+        setStaffCount(osmd.Sheet.Staves.length);
+        const { steps, exprMarksParsed } = buildFollower(osmd);
         setLoopBars(null);
         setPicking('off');
         setPickStart(null);
@@ -744,7 +802,7 @@ export function ScoreView() {
       exprRef.current = null;
     };
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
-  }, [piece.id, piece.xml, restart]);
+  }, [piece.id, piece.xml, restart, buildFollower]);
 
   // --- live MIDI → follower ---
   useEffect(() => {
@@ -1032,6 +1090,26 @@ export function ScoreView() {
             ))}
           </div>
         )}
+        <div role="group" aria-label="Hand" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
+          {(['both', 'right', 'left'] as const).map((value) => (
+            <button
+              key={value}
+              data-testid={`hand-${value}`}
+              aria-pressed={hand === value}
+              disabled={staffCount < 2}
+              onClick={() => {
+                if (hand === value) return;
+                setHand(value);
+                reportEvent('hand', { hand: value });
+              }}
+              className={`px-2 py-1 ${
+                hand === value ? 'bg-sky-600 text-white' : 'bg-gray-900 text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              {value === 'both' ? 'Both' : value === 'right' ? 'Right' : 'Left'}
+            </button>
+          ))}
+        </div>
         <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300">
           <input type="checkbox" checked={following} onChange={(e) => setFollowing(e.target.checked)} />
           Follow my playing
