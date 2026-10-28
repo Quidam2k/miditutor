@@ -141,7 +141,9 @@ def tutor_status() -> dict:
     screen right now (piece, bar, what he must play next, wrong-note count,
     current chord task). screen.expressionMarks lists the dynamics/tempo marks
     the piece carries; screen.expression is this pass's expression telemetry.
-    `recording` is the take recorder: state, startedAt, lastPath, lastError."""
+    `recording` is the take recorder: state, startedAt, lastPath, lastError.
+    `invite` is "Bring in the tutor" (#5154): {active, since, endsAt}; it ends
+    10 min after `lastNoteAt` (ms epoch of his last note-on) or on his second press."""
     return _tutor(tutor_client.state)
 
 
@@ -154,6 +156,7 @@ def tutor_recent(seconds: float = 30, limit: int = 50) -> dict:
     for coaching, never a wrong note), and `pedal`: each time he lifted the sustain
     pedal before the next note, leaving a gap (#9976). A line from a page read or a scan says so
     with its confidence: treat it as "the page seems to say", not a fact.
+    `feed` also carries invite-on / invite-off (reason button|idle) / invite-error.
     source 'inject' = a test, not him."""
     return _tutor(tutor_client.recent, seconds=seconds, limit=limit)
 

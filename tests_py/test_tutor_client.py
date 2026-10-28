@@ -173,6 +173,22 @@ def test_recent_lists_pedal_gaps(monkeypatch):
     assert [n["name"] for n in result["notes"]] == ["F4"]
 
 
+
+# #5154: "Bring in the tutor" start/end/failure land in the feed.
+def test_recent_lists_invite_events(monkeypatch):
+    now_ms = int(time.time() * 1000)
+    events = [
+        {"seq": 1, "kind": "invite-on", "reason": "button", "timestamp": now_ms},
+        {"seq": 2, "kind": "invite-off", "reason": "idle", "timestamp": now_ms},
+        {"seq": 3, "kind": "invite-error", "action": "on", "error": "timed out", "timestamp": now_ms},
+    ]
+    replies = {"/events": {"events": events}, "/gestures": {"gestures": []}}
+    monkeypatch.setattr(tutor_client, "request", lambda method, path, *a, **k: replies[path.split("?")[0]])
+    result = tutor_client.recent(seconds=5)
+    assert [(e["kind"], e.get("reason")) for e in result["feed"]] == [
+        ("invite-on", "button"), ("invite-off", "idle"), ("invite-error", None)]
+    assert result["notes"] == []
+
 def test_wait_for_play_timeout(app):
     assert tutor_client.wait_for_play(timeout_s=1, after=0) == {"timedOut": True}
     url = urlsplit(app["seen"][-1]["path"])

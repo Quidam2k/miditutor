@@ -3,6 +3,7 @@ import { useMidiStore } from '../../store/useMidiStore';
 import { useTutorStore } from '../../store/useTutorStore';
 import type { RendererCommand } from '../../../main/tutorApi';
 import type { RecordingStatus } from '../../../main/recorder';
+import type { InviteState } from '../../../main/invite';
 import type { PieceTrust } from '../../../shared/trust';
 import type { PieceGroupRef } from '../../../shared/versions';
 import type { MixChoice } from '../../../shared/mix';
@@ -26,6 +27,8 @@ interface TutorBridge {
   onCommand: (cb: (cmd: RendererCommand) => void) => () => void;
   toggleRecording?: () => Promise<RecordingStatus>;
   recordingStatus?: () => Promise<RecordingStatus>;
+  inviteStatus?: () => Promise<{ state: InviteState; error?: string }>;
+  inviteToggle?: () => Promise<{ state: InviteState; error?: string }>;
   takePcm?: (id: string, data: Uint8Array) => void;
   takePcmDone?: (msg: { id: string; sampleRate?: number; channels?: number; error?: string }) => void;
   /** Scan review (#9664): null unless the desk app was started with a review library. */

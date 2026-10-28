@@ -7,6 +7,7 @@ import JSZip from 'jszip';
 import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
 import { Recorder, outputSize } from './main/recorder';
+import { InviteTimer, postLive } from './main/invite';
 import { Review, mirrorConfig, reviewConfig, sshRemote } from './main/review';
 import {
   MUSICXML_EXTENSIONS,
@@ -272,6 +273,63 @@ const stopTake = () => {
   recorder.stop().catch((err) => console.warn('[recorder] take failed:', (err as Error).message));
 };
 
+// "Bring in the tutor" (#5154): his button asks Pantheon (on Solace) to open the tutor link
+// and put Jarvis + Karen on him; it ends 10 min after his last note, or on a second press.
+// Pantheon also polls /state and tears down on its own. The address and Solace's
+// self-signed cert (pinned) are files deploy writes into userData; env overrides for tests.
+const readSetting = async (name: string, env: string | undefined): Promise<string> => {
+  if (env) return env;
+  try {
+    return (await fs.readFile(path.join(app.getPath('userData'), name), 'utf8')).trim();
+  } catch {
+    return '';
+  }
+};
+const pantheonUrl = async () =>
+  (await readSetting('pantheon-url', process.env.MIDITUTOR_PANTHEON_URL)) || 'https://192.168.50.139:7861';
+const pantheonCert = async () => {
+  const file = process.env.MIDITUTOR_PANTHEON_CERT;
+  if (file) return fs.readFile(file, 'utf8').catch(() => null);
+  return (await readSetting('pantheon-cert.pem', undefined)) || null;
+};
+
+let apiToken = '';
+const invite = new InviteTimer({
+  idleMs: Number(process.env.MIDITUTOR_INVITE_IDLE_MS ?? 10 * 60_000),
+  onIdle: () => {
+    endInvite('idle');
+    mainWindow?.webContents.send('tutor:command', { type: 'invite', state: invite.state() });
+  },
+});
+
+// Off locally whatever Pantheon says: its poll sees invite.active false and tears down.
+const endInvite = (reason: 'button' | 'idle' | 'quit') => {
+  invite.stop();
+  tutorApi?.onEvent({ kind: 'invite-off', timestamp: Date.now(), reason });
+  void tellPantheon('off');
+};
+
+const tellPantheon = async (action: 'on' | 'off') => {
+  const result = await postLive(action, { url: await pantheonUrl(), token: apiToken, certPem: await pantheonCert() });
+  if (!result.ok) {
+    console.warn(`[invite] Pantheon ${action} failed:`, result.error);
+    tutorApi?.onEvent({ kind: 'invite-error', timestamp: Date.now(), action, error: result.error });
+  }
+  return result;
+};
+
+const toggleInvite = async () => {
+  if (invite.state().active) {
+    endInvite('button');
+    return { state: invite.state() };
+  }
+  const result = await tellPantheon('on');
+  if (!result.ok) return { state: invite.state(), error: "Couldn't reach Pantheon" };
+  invite.start();
+  tutorApi?.onEvent({ kind: 'invite-on', timestamp: Date.now(), reason: 'button' });
+  return { state: invite.state() };
+};
+
 const startTutorApi = () => {
   recorder = makeRecorder();
   ipcMain.handle('recorder:status', () => recorder.status());
@@ -290,6 +348,8 @@ const startTutorApi = () => {
     if (msg.error || !msg.sampleRate || !msg.channels) settleAudio(msg.id, new Error(msg.error ?? 'bad audio'));
     else settleAudio(msg.id, null, { sampleRate: msg.sampleRate, channels: msg.channels });
   });
+  ipcMain.handle('invite:status', () => ({ state: invite.state() }));
+  ipcMain.handle('invite:toggle', toggleInvite);
   ipcMain.handle('pieces:list', listPieces);
   ipcMain.handle('pieces:saveMix', (_e, slug: string, mix) => saveMix(slug, mix));
   ipcMain.handle('pieces:writeScore', (_e, slug: string, musicxml: string) => writeScore(slug, musicxml));
@@ -335,9 +395,10 @@ const startTutorApi = () => {
     ipcMain.handle('review:proposal', (_e, slug: string, proposal: string) => review.proposalView(slug, proposal));
   }
   const send = (cmd: RendererCommand) => mainWindow?.webContents.send('tutor:command', cmd);
+  apiToken = loadOrCreateToken(app.getPath('userData'));
   tutorApi = new TutorApi({
     port: Number(process.env.MIDITUTOR_PORT ?? 47800),
-    token: loadOrCreateToken(app.getPath('userData')),
+    token: apiToken,
     logDir: path.join(app.getPath('userData'), 'logs'),
     allowInject: !app.isPackaged || process.env.MIDITUTOR_ALLOW_INJECT === '1',
     sendToRenderer: send,
@@ -348,10 +409,12 @@ const startTutorApi = () => {
       return (await mainWindow.webContents.capturePage()).toPNG();
     },
     recorder: { status: () => recorder.status(), start: startTake, stop: () => recorder.stop() },
+    invite,
   });
   ipcMain.on('tutor:note', (_e, ev) => {
     tutorApi?.onNote(ev);
     recorder.noteEvent(ev);
+    if (ev?.kind === 'noteon') invite.noteOn();
   });
   ipcMain.on('tutor:event', (_e, ev) => {
     tutorApi?.onEvent(ev);
@@ -432,6 +495,8 @@ app.on('ready', async () => {
 });
 
 app.on('will-quit', () => {
+  // Quitting mid-invite ends it; Pantheon would notice anyway when /state stops answering.
+  if (invite.state().active) endInvite('quit');
   tutorApi?.stop();
 });
 

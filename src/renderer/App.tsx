@@ -7,6 +7,7 @@ import { ExerciseView } from './components/exercise/ExerciseView';
 import { ScoreView } from './components/score/ScoreView';
 import { useTutorBridge } from './components/tutor/useTutorBridge';
 import { RecordButton, PIANO_CREDIT } from './components/tutor/RecordButton';
+import { TutorButton } from './components/tutor/TutorButton';
 import { ReviewView } from './components/review/ReviewView';
 import { useSettingsStore } from './store/useSettingsStore';
 
@@ -75,6 +76,7 @@ export function App() {
           </nav>
         </div>
         <div className="flex items-center gap-4">
+          <TutorButton />
           <RecordButton />
           <MidiStatus />
         </div>

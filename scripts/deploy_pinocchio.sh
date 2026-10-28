@@ -10,6 +10,8 @@ Install the latest successful master macOS build and verify a hidden launch.
 Environment:
   PINOCCHIO_HOST  SSH destination (default: toddwalker@todds-mac-mini)
   RUN_ID         GitHub Actions run ID (default: latest successful macos.yml)
+  PANTHEON_CERT  Solace's WebUI cert, pinned by "Bring in the tutor" (default: Q:/Pantheon/certs/cert.pem)
+  PANTHEON_URL   written to the app's pantheon-url when set (the app defaults to https://192.168.50.139:7861)
 USAGE
 }
 verify=true
@@ -31,6 +33,18 @@ shopt -s nullglob globstar
 zips=("$tmpdir"/**/*.zip)
 (( ${#zips[@]} == 1 )) || { echo "Expected exactly one .zip artifact." >&2; exit 1; }
 scp "${zips[0]}" "${PINOCCHIO_HOST}:miditutor-deploy.zip"
+
+# "Bring in the tutor" (#5154): the app pins Solace's self-signed WebUI cert (public, not a secret).
+PANTHEON_CERT=${PANTHEON_CERT:-/q/Pantheon/certs/cert.pem}
+support='Library/Application Support/MidiTutor'
+if [[ -s "$PANTHEON_CERT" ]]; then
+  ssh "$PINOCCHIO_HOST" "mkdir -p \"\$HOME/$support\" && cat > \"\$HOME/$support/pantheon-cert.pem\"" < "$PANTHEON_CERT"
+else
+  echo "WARNING: no Pantheon cert at $PANTHEON_CERT; Bring in the tutor will say it can't reach Pantheon." >&2
+fi
+if [[ -n "${PANTHEON_URL:-}" ]]; then
+  printf '%s\n' "$PANTHEON_URL" | ssh "$PINOCCHIO_HOST" "cat > \"\$HOME/$support/pantheon-url\""
+fi
 
 ssh "$PINOCCHIO_HOST" 'bash -s' <<'REMOTE'
 set -euo pipefail

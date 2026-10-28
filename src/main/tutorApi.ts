@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { GestureTracker, checkChord, type Gesture } from '../shared/music';
 import type { RecordingStatus, TakeEvent } from './recorder';
+import type { InviteState } from './invite';
 
 export type TaskResult = {
   verdict: 'correct' | 'wrong' | 'incomplete';
@@ -35,7 +36,8 @@ export type RendererCommand =
   | { type: 'loop'; firstBar: number; lastBar: number }
   | { type: 'clear-loop' }
   | { type: 'recording'; status: RecordingStatus }
-  | { type: 'render-take'; id: string; events: TakeEvent[]; durationMs: number };
+  | { type: 'render-take'; id: string; events: TakeEvent[]; durationMs: number }
+  | { type: 'invite'; state: InviteState; error?: string };
 
 type NoteEvent = {
   kind: 'noteon' | 'noteoff';
@@ -113,6 +115,8 @@ export class TutorApi {
     logDir?: string;
     /** Take recorder (#9574): POST /record and `recording` in /state. */
     recorder?: { status(): unknown; start(): unknown; stop(): Promise<string> };
+    /** "Bring in the tutor" (#5154): `invite` and `lastNoteAt` in /state, which Pantheon polls. */
+    invite?: { state(): InviteState; readonly lastNoteAt: number | null };
   }) {
     this.now = opts.now ?? Date.now;
   }
@@ -324,7 +328,8 @@ export class TutorApi {
       send({ ok: true, rendererConnected: this.rendererConnected, device: this.device,
         screen: this.screen, task: this.task,
         lastGestureId: this.lastGestureId, eventSeq: this.eventSeq,
-        injectEnabled: this.opts.allowInject, recording: this.opts.recorder?.status() ?? null });
+        injectEnabled: this.opts.allowInject, recording: this.opts.recorder?.status() ?? null,
+        invite: this.opts.invite?.state() ?? null, lastNoteAt: this.opts.invite?.lastNoteAt ?? null });
     } else if (route === 'GET /events' || route === 'GET /gestures') {
       const since = this.number(url, 'since', 0);
       const limit = this.number(url, 'limit', 200, 2000, 1);

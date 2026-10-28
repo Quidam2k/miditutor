@@ -35,6 +35,9 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   reviewAccept: (slug: string, proposal: string) => ipcRenderer.invoke('review:accept', slug, proposal),
   reviewRecheck: (slug: string, mark: string) => ipcRenderer.invoke('review:recheck', slug, mark),
   reviewProposal: (slug: string, proposal: string) => ipcRenderer.invoke('review:proposal', slug, proposal),
+  // "Bring in the tutor" (#5154): { state, error? }.
+  inviteStatus: () => ipcRenderer.invoke('invite:status'),
+  inviteToggle: () => ipcRenderer.invoke('invite:toggle'),
   onCommand: (cb: Listener) => {
     const handler = (_e: IpcRendererEvent, cmd: unknown) => cb(cmd);
     ipcRenderer.on('tutor:command', handler);

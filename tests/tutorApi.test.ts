@@ -67,6 +67,8 @@ describe('TutorApi', () => {
       eventSeq: 0,
       injectEnabled: true,
       recording: null,
+      invite: null,
+      lastNoteAt: null,
     });
   });
 
