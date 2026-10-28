@@ -3,7 +3,10 @@ import {
   accidentalMark,
   clefForMidi,
   diatonicIndex,
+  drawnNote,
   keyAlters,
+  ottavaHint,
+  ottavaShift,
   spellPlayed,
   staffOffsetSteps,
   writtenMidi,
@@ -262,5 +265,26 @@ describe('writtenName(spellPlayed(...)) for feedback text', () => {
   });
   it('calls a D natural played for a written D-flat "D5"', () => {
     expect(name(74, -4, [db5])).toBe('D5');
+  });
+});
+
+// #9986: Sorcerer's Apprentice bar 3, the Ab under 8va is written Ab5 and sounds Ab6.
+describe('ottava lines', () => {
+  it('maps OSMD OctaveEnum to the sounding shift', () => {
+    expect([0, 1, 2, 3, 4, undefined].map(ottavaShift)).toEqual([12, -12, 24, -24, 0, 0]);
+  });
+  it('draws a sounding Ab6 under 8va at Ab5', () => {
+    const ab6: WrittenNote = { letter: 'A', alter: -1, octave: 6 };
+    expect(drawnNote(ab6, 12)).toEqual({ letter: 'A', alter: -1, octave: 5 });
+    expect(drawnNote(ab6, 0)).toEqual(ab6);
+    // The mark for his C6 sits on the written C5, not two ledger lines up.
+    expect(staffOffsetSteps(drawnNote({ letter: 'C', alter: 0, octave: 6 }, 12), 'treble')).toBe(
+      staffOffsetSteps({ letter: 'C', alter: 0, octave: 5 }, 'treble'),
+    );
+  });
+  it('explains the line only when there is one', () => {
+    expect(ottavaHint(12)).toBe('8va: an octave above where it is written');
+    expect(ottavaHint(-12)).toContain('8vb');
+    expect(ottavaHint(0)).toBe('');
   });
 });

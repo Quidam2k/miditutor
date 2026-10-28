@@ -20,7 +20,8 @@ export type FollowResult =
   | { kind: 'advance'; from: number; to: number }
   | { kind: 'complete'; from: number }
   | { kind: 'loop'; from: number; to: number; lap: number }
-  | { kind: 'wrong'; index: number; played: number; expected: number[] }
+  // remaining = the expected notes not yet played at this step (#9986: name only those).
+  | { kind: 'wrong'; index: number; played: number; expected: number[]; remaining: number[] }
   | { kind: 'ignored' };
 
 export class ScoreFollower {
@@ -35,6 +36,9 @@ export class ScoreFollower {
   private beatOffset = 0;
   // Notes carried into the step he just left; a late re-strike of one is not wrong.
   private prevCarried = new Set<number>();
+  // #9993: the chord he just finished. He replays a whole chord after a miss, so a
+  // note of it landing just after the advance is not wrong, until he plays on.
+  private prevStruck = new Set<number>();
 
   constructor(steps: ScoreStep[]) {
     this.steps = steps.map((step) => ({
@@ -107,24 +111,27 @@ export class ScoreFollower {
     }
 
     if (!expected.includes(midi)) {
-      if (this.prevCarried.has(midi) || this.steps[this.currentIndex].ringing?.includes(midi)) {
+      if (
+        this.prevCarried.has(midi) ||
+        this.prevStruck.has(midi) ||
+        this.steps[this.currentIndex].ringing?.includes(midi)
+      ) {
         return { kind: 'ignored' };
       }
       return {
         kind: 'wrong',
         index: this.currentIndex,
         played: midi,
-        expected: [...expected]
+        expected: [...expected],
+        remaining: this.remainingAt(expected)
       };
     }
 
     this.satisfiedNotes.add(midi);
+    this.prevStruck.clear();
 
     if (this.satisfiedNotes.size < expected.length) {
-      const remaining = expected
-        .filter((note) => !this.satisfiedNotes.has(note))
-        .sort((a, b) => a - b);
-      return { kind: 'partial', index: this.currentIndex, remaining };
+      return { kind: 'partial', index: this.currentIndex, remaining: this.remainingAt(expected) };
     }
 
     // The key that just finished this step is not carried: a repeated written note
@@ -138,6 +145,7 @@ export class ScoreFollower {
     for (let guard = 0; guard <= this.steps.length; guard++) {
       const done = this.currentIndex;
       this.completeStep(done, timeMs);
+      for (const note of this.steps[done].notes) this.prevStruck.add(note);
       // Never carry across a lap wrap: the note just struck would cover its own step.
       if (this.moveOn(done)) {
         lapped = true;
@@ -164,6 +172,7 @@ export class ScoreFollower {
     this.currentIndex = this.findNextPlayable(start);
     this.satisfiedNotes.clear();
     this.prevCarried.clear();
+    this.prevStruck.clear();
     this.completions = [];
     this.beatOffset = 0;
   }
@@ -228,6 +237,10 @@ export class ScoreFollower {
       }
     }
     return this.satisfiedNotes.size;
+  }
+
+  private remainingAt(expected: number[]): number[] {
+    return expected.filter((note) => !this.satisfiedNotes.has(note)).sort((a, b) => a - b);
   }
 
   private findNextPlayable(start: number): number {

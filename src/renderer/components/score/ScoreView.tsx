@@ -27,6 +27,9 @@ import {
   WrittenNote,
   accidentalMark,
   clefForMidi,
+  drawnNote,
+  ottavaHint,
+  ottavaShift,
   spellPlayed,
   staffOffsetSteps,
   writtenName,
@@ -126,6 +129,21 @@ function writtenOf(n: OsmdNote): WrittenNote | null {
 }
 
 const staffOf = (n: OsmdNote) => n.ParentStaff?.idInMusicSheet ?? 0;
+
+// Under an 8va line the notehead is drawn an octave below the pitch (#9986).
+const shiftOf = (osmd: OpenSheetMusicDisplay, n: OsmdNote) =>
+  ottavaShift((osmd.EngravingRules.GNote(n as never) as unknown as { octaveShift?: number } | undefined)?.octaveShift);
+
+// The ottava hint for the first of `midis` written under an ottava line at this step.
+function hintFor(osmd: OpenSheetMusicDisplay | null, stepNotes: OsmdNote[], midis: number[]): string {
+  if (!osmd) return '';
+  for (const n of stepNotes) {
+    if (!midis.includes(toMidi(n))) continue;
+    const hint = ottavaHint(shiftOf(osmd, n));
+    if (hint) return hint;
+  }
+  return '';
+}
 
 // First key signature in the file. Mid-piece key changes are not tracked (v1).
 const fifthsOf = (xml: string) => Number(/<fifths>\s*(-?\d+)\s*<\/fifths>/.exec(xml)?.[1] ?? 0);
@@ -300,7 +318,7 @@ function barBoxes(osmd: OpenSheetMusicDisplay): Map<number, Band> {
 
 type Feedback =
   | { kind: 'idle' }
-  | { kind: 'wrong'; played: number; expected: number[] }
+  | { kind: 'wrong'; played: number; expected: number[]; remaining: number[]; hint: string }
   | { kind: 'complete' };
 
 export function ScoreView() {
@@ -347,6 +365,9 @@ export function ScoreView() {
   const showKeyboard = useSettingsStore((s) => s.showKeyboard);
   const setShowKeyboard = useSettingsStore((s) => s.setShowKeyboard);
   const [remaining, setRemaining] = useState<number[]>([]);
+  const [playHint, setPlayHint] = useState('');
+  // Every key of the step stays lit on the strip, credited or not (#9993).
+  const [stepKeys, setStepKeys] = useState<number[]>([]);
   const [measure, setMeasure] = useState(1);
   const [feedback, setFeedback] = useState<Feedback>({ kind: 'idle' });
   const [wrongCount, setWrongCount] = useState(0);
@@ -475,7 +496,13 @@ export function ScoreView() {
       wrongCount,
       feedback:
         feedback.kind === 'wrong'
-          ? { kind: 'wrong', played: noteName(feedback.played), expected: feedback.expected.map(noteName) }
+          ? {
+              kind: 'wrong',
+              played: noteName(feedback.played),
+              expected: feedback.expected.map(noteName),
+              remaining: feedback.remaining.map(noteName),
+              hint: feedback.hint,
+            }
           : feedback,
       paceBpm: pace,
       loop: loopBars ? { firstBar: loopBars.first, lastBar: loopBars.last, lap, lastLapBpm: lapBpm } : null,
@@ -518,6 +545,8 @@ export function ScoreView() {
         const measureClef = gm?.InitiallyActiveClef?.ClefType === 1 ? 'bass' : 'treble';
 
         const onStaff = candidates.filter((n) => staffOf(n) === staffIdx);
+        // Under an 8va the heads sit an octave below the pitch: place the mark there too.
+        const shift = shiftOf(osmd, exact ?? onStaff[0] ?? stepNotes[0]);
         const headOf = (n: OsmdNote) => {
           const g = osmd.EngravingRules.GNote(n as never) as unknown as OsmdGraphicalNote | undefined;
           const el = g?.getSVGGElement?.();
@@ -531,8 +560,13 @@ export function ScoreView() {
         const headRect = head.getBoundingClientRect();
         const space = 10 * osmd.Zoom; // OSMD: 1 unit = one staff space = 10px at zoom 1
 
-        const written = onStaff.map(writtenOf).filter((w): w is WrittenNote => w !== null);
-        const spelled = spellPlayed(midi, fifths, written);
+        const written = onStaff
+          .map((n) => {
+            const w = writtenOf(n);
+            return w && drawnNote(w, shiftOf(osmd, n));
+          })
+          .filter((w): w is WrittenNote => w !== null);
+        const spelled = spellPlayed(midi - shift, fifths, written);
         const steps = staffOffsetSteps(spelled, measureClef);
         const y = svgRect.top - layerRect.top + (topUnits + steps / 2) * space;
         const ledgers: number[] = [];
@@ -607,7 +641,10 @@ export function ScoreView() {
   const syncUi = useCallback(() => {
     const f = followerRef.current;
     if (!f) return;
-    setRemaining(f.expected.filter((m) => !f.satisfied.has(m)));
+    const left = f.expected.filter((m) => !f.satisfied.has(m));
+    setRemaining(left);
+    setStepKeys(f.expected);
+    setPlayHint(hintFor(osmdRef.current, stepNotesRef.current[f.index] ?? [], left));
     const step = f.steps[Math.min(f.index, f.steps.length - 1)];
     setMeasure(step?.measure ?? 1);
     setPace(f.paceBpm);
@@ -1002,7 +1039,13 @@ export function ScoreView() {
           break;
         case 'wrong': {
           setWrongCount((c) => c + 1);
-          setFeedback({ kind: 'wrong', played: result.played, expected: result.expected });
+          setFeedback({
+            kind: 'wrong',
+            played: result.played,
+            expected: result.expected,
+            remaining: result.remaining,
+            hint: hintFor(osmdRef.current, stepNotesRef.current[idx] ?? [], result.remaining),
+          });
           // Only his note goes red (drawn above); the panel ring flashes.
           setWrongFlash(true);
           window.clearTimeout(flashTimerRef.current);
@@ -1289,6 +1332,7 @@ export function ScoreView() {
             <span className="font-mono font-semibold text-indigo-300">
               {finished ? '—' : remaining.length ? namesOf(remaining) : '—'}
             </span>
+            {!finished && playHint && <span className="text-indigo-200/80"> ({playHint})</span>}
           </span>
           <span className="text-gray-400">
             Wrong notes: <span className="font-mono text-gray-200">{wrongCount}</span>
@@ -1307,7 +1351,10 @@ export function ScoreView() {
           <span className="min-w-[14rem] font-medium" data-testid="feedback">
             {feedback.kind === 'wrong' && (
               <span className="text-red-400">
-                ✗ {noteName(feedback.played)} — expected {namesOf(feedback.expected)}
+                ✗ {noteName(feedback.played)} — expected {namesOf(feedback.remaining)}
+                {feedback.remaining.length < feedback.expected.length &&
+                  ` (${namesOf(feedback.expected.filter((m) => !feedback.remaining.includes(m)))} done)`}
+                {feedback.hint && ` · ${feedback.hint}`}
               </span>
             )}
             {feedback.kind === 'complete' && (
@@ -1370,7 +1417,7 @@ export function ScoreView() {
       </div>
       {showKeyboard && (
         <div className="sticky bottom-0 z-20 -mx-2 rounded-t-md bg-gray-950/95 px-2 py-1" data-testid="keyboard-strip">
-          <PianoKeyboard88 heightRatio={20} green={new Set(watching ? watchNotes : remaining)} red={wrongKeys} held={held} />
+          <PianoKeyboard88 heightRatio={20} green={new Set(watching ? watchNotes : stepKeys)} red={wrongKeys} held={held} />
         </div>
       )}
     </div>

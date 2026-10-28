@@ -174,3 +174,29 @@ const ALTER_SIGN: Record<number, string> = { [-2]: 'bb', [-1]: 'b', 0: '', 1: '#
 export function writtenName(n: WrittenNote): string {
   return `${n.letter}${ALTER_SIGN[n.alter] ?? ''}${n.octave}`;
 }
+
+// #9986: an 8va / 8vb / 15ma / 15mb line. MusicXML pitches (and OSMD's) are what
+// sounds; the notehead is drawn this many semitones lower (higher for 8vb).
+// OSMD's OctaveEnum on a graphical note: VA8 = 0, VB8 = 1, MA15 = 2, MB15 = 3, NONE = 4.
+const OTTAVA_SHIFT: Record<number, number> = { 0: 12, 1: -12, 2: 24, 3: -24 };
+
+/** Semitones from where a note is drawn to where it sounds; 0 outside an ottava line. */
+export function ottavaShift(octaveEnum: number | undefined): number {
+  return octaveEnum === undefined ? 0 : (OTTAVA_SHIFT[octaveEnum] ?? 0);
+}
+
+/** The note as drawn under an ottava line, for placing a mark next to its notehead. */
+export function drawnNote(n: WrittenNote, shift: number): WrittenNote {
+  return { ...n, octave: n.octave - shift / 12 };
+}
+
+/** What to tell him when the note he needs sits under an ottava line, else ''. */
+export function ottavaHint(shift: number): string {
+  switch (shift) {
+    case 12: return '8va: an octave above where it is written';
+    case -12: return '8vb: an octave below where it is written';
+    case 24: return '15ma: two octaves above where it is written';
+    case -24: return '15mb: two octaves below where it is written';
+    default: return '';
+  }
+}

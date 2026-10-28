@@ -47,7 +47,8 @@ describe('ScoreFollower without a range', () => {
       kind: 'wrong',
       index: 0,
       played: 61,
-      expected: [67, 60, 64]
+      expected: [67, 60, 64],
+      remaining: [64, 67]
     });
     expect([...follower.satisfied]).toEqual([60]);
     expect(follower.noteOn(67, 300)).toEqual({
@@ -443,5 +444,34 @@ describe('ScoreFollower carry-over and ringing notes (#9480, #9481)', () => {
     follower.noteOn(72, 5);
     expect(follower.noteOn(65, 600)).toEqual({ kind: 'ignored' });
     expect(follower.noteOn(70, 650)).toMatchObject({ kind: 'wrong', played: 70 });
+  });
+
+  // #9986: Sorcerer's Apprentice bar 3, the 8va step Ab6 + C6. He played the C6, then
+  // a wrong note; the message must ask only for the Ab6, not "Ab6 + C6" again.
+  it('names only the notes still needed in a wrong-note result', () => {
+    const follower = new ScoreFollower(makeSteps([[92, 84], [86]]));
+    expect(follower.noteOn(84, 0)).toEqual({ kind: 'partial', index: 0, remaining: [92] });
+    expect(follower.noteOn(80, 100)).toEqual({
+      kind: 'wrong',
+      index: 0,
+      played: 80,
+      expected: [92, 84],
+      remaining: [92]
+    });
+    expect(follower.noteOn(84, 200)).toEqual({ kind: 'ignored' });
+    expect(follower.noteOn(92, 300)).toEqual({ kind: 'advance', from: 0, to: 1 });
+  });
+
+  // #9993: after a miss he looks at the strip and replays the whole chord, in any order.
+  it('advances on a full-chord replay after partial + wrong with no extra wrong notes', () => {
+    for (const order of [[84, 92], [92, 84]]) {
+      const follower = new ScoreFollower(makeSteps([[92, 84], [86], [88]]));
+      const results = [84, 80, ...order].map((n, i) => follower.noteOn(n, i * 100).kind);
+      expect(results.filter((k) => k === 'wrong')).toHaveLength(1); // only the 80
+      expect(follower.index).toBe(1);
+      expect(follower.noteOn(86, 900)).toEqual({ kind: 'advance', from: 1, to: 2 });
+      // Once he has played on, a stray note from that chord is wrong again.
+      expect(follower.noteOn(84, 1000)).toMatchObject({ kind: 'wrong', played: 84 });
+    }
   });
 });
