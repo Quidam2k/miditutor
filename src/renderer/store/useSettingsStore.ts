@@ -8,6 +8,7 @@ interface SettingsState {
   exerciseType: ExerciseType;
   audioEnabled: boolean;
   showNoteNames: boolean;
+  showKeyboard: boolean;
   scoreLayout: 'scroll' | 'pages';
   /** Score-tab pieces pinned to the top of the list, by displayed title (#9610). */
   favoritePieces: string[];
@@ -21,6 +22,7 @@ interface SettingsState {
   setClef: (clef: Clef) => void;
   setExerciseType: (type: ExerciseType) => void;
   setAudioEnabled: (enabled: boolean) => void;
+  setShowKeyboard: (show: boolean) => void;
   setShowNoteNames: (show: boolean) => void;
   setScoreLayout: (layout: 'scroll' | 'pages') => void;
   toggleFavoritePiece: (title: string) => void;
@@ -39,6 +41,7 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       clef: 'treble',
       exerciseType: 'note-identification',
+      showKeyboard: true,
       // He plays the notes himself; the tutor only sounds when he asks (#5059).
       audioEnabled: false,
       showNoteNames: false,
@@ -49,6 +52,7 @@ export const useSettingsStore = create<SettingsState>()(
       homeworkPracticed: {},
 
       setClef: (clef) => set({ clef }),
+      setShowKeyboard: (show) => set({ showKeyboard: show }),
       setExerciseType: (type) => set({ exerciseType: type }),
       setAudioEnabled: (enabled) => set({ audioEnabled: enabled }),
       setShowNoteNames: (show) => set({ showNoteNames: show }),

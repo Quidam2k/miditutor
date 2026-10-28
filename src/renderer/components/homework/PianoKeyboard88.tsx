@@ -5,6 +5,7 @@ interface Props {
   green?: ReadonlySet<number>;
   red?: ReadonlySet<number>;
   held?: ReadonlySet<number>;
+  heightRatio?: number;
   /** Lowest MIDI note drawn (default 21 = A0). */
   low?: number;
   /** Highest MIDI note drawn (default 108 = C8). */
@@ -37,9 +38,9 @@ function layout(low: number, high: number): { keys: KeyGeom[]; width: number } {
 }
 
 /** Display-only 88-key piano that scales to its container; keys light red / green / held. */
-export function PianoKeyboard88({ green, red, held, low = 21, high = 108 }: Props) {
+export function PianoKeyboard88({ green, red, held, low = 21, high = 108, heightRatio = 7 }: Props) {
   const { keys, width } = useMemo(() => layout(low, high), [low, high]);
-  const height = Math.round(width / 7);
+  const height = Math.round(width / heightRatio);
   const blackH = height * 0.62;
 
   const fill = (k: KeyGeom): string => {

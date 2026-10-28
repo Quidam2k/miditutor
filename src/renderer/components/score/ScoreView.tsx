@@ -8,6 +8,8 @@ import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import expressionXml from '../../assets/expression-test.musicxml?raw';
+import { initAudio, playChord } from '../../audio/AudioEngine';
+import { PianoKeyboard88 } from '../homework/PianoKeyboard88';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
@@ -322,6 +324,9 @@ export function ScoreView() {
   const [exprFindings, setExprFindings] = useState<string[]>([]);
   const cursorIndexRef = useRef(0);
   const flashTimerRef = useRef<number | undefined>(undefined);
+  const watchTimerRef = useRef<number | undefined>(undefined);
+  const watchRunRef = useRef(0);
+  const watchBpmRef = useRef<number | null>(null);
   const layerRef = useRef<HTMLDivElement>(null);
   const markIdRef = useRef(0);
   const [marks, setMarks] = useState<PlayedMark[]>([]);
@@ -336,6 +341,11 @@ export function ScoreView() {
   const [openError, setOpenError] = useState('');
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [following, setFollowing] = useState(true);
+  const [watching, setWatching] = useState(false);
+  const [watchNotes, setWatchNotes] = useState<number[]>([]);
+  const held = useMidiStore((s) => s.held);
+  const showKeyboard = useSettingsStore((s) => s.showKeyboard);
+  const setShowKeyboard = useSettingsStore((s) => s.setShowKeyboard);
   const [remaining, setRemaining] = useState<number[]>([]);
   const [measure, setMeasure] = useState(1);
   const [feedback, setFeedback] = useState<Feedback>({ kind: 'idle' });
@@ -604,6 +614,13 @@ export function ScoreView() {
   }, []);
 
   const restart = useCallback(() => {
+    watchRunRef.current++;
+    window.clearTimeout(watchTimerRef.current);
+    setWatching(false);
+    setWatchNotes([]);
+    const bpm = watchBpmRef.current;
+    watchBpmRef.current = null;
+    if (bpm !== null) reportEvent('watch', { on: false, bpm });
     const osmd = osmdRef.current;
     const f = followerRef.current;
     if (!osmd || !f) return;
@@ -639,6 +656,62 @@ export function ScoreView() {
     setExprMarks(exprMarksParsed.map(describeMark));
     return { steps, exprMarksParsed };
   }, [piece.xml, trackChord]);
+
+  const toggleWatch = async () => {
+    if (watching) {
+      restart();
+      return;
+    }
+    const f = followerRef.current;
+    if (!f?.steps.length || status !== 'ready') return;
+    const run = ++watchRunRef.current;
+    try {
+      await initAudio();
+    } catch (err) {
+      console.warn('[watch] audio initialization failed:', err);
+      return;
+    }
+    // Audio may finish opening after he leaves this piece or restarts.
+    if (run !== watchRunRef.current || followerRef.current !== f) return;
+    const range = f.range;
+    const first = range?.first ?? cursorIndexRef.current;
+    const last = range?.last ?? f.steps.length - 1;
+    if (!f.steps[first]) return;
+    const bpm = piece.targetBpm ?? 80;
+    watchBpmRef.current = bpm;
+    setWatching(true);
+    reportEvent('watch', { on: true, bpm });
+
+    const playStep = (i: number) => {
+      if (run !== watchRunRef.current) return;
+      const step = f.steps[i];
+      const nextBeat = i < last ? f.steps[i + 1].beat : step.beat + 1;
+      const durationSeconds = (nextBeat - step.beat) * 60 / bpm;
+      moveCursorTo(i);
+      setMeasure(step.measure);
+      setWatchNotes(step.notes);
+      if (step.notes.length) playChord(step.notes, durationSeconds);
+      watchTimerRef.current = window.setTimeout(() => {
+        if (i < last) playStep(i + 1);
+        else if (range) playStep(first);
+        else restart();
+      }, durationSeconds * 1000);
+    };
+    playStep(first);
+  };
+
+  useEffect(() => {
+    setWatching(false);
+    setWatchNotes([]);
+    return () => {
+      // Invalidate an audio start still waiting for the browser, too.
+      watchRunRef.current++;
+      window.clearTimeout(watchTimerRef.current);
+      const bpm = watchBpmRef.current;
+      watchBpmRef.current = null;
+      if (bpm !== null) reportEvent('watch', { on: false, bpm });
+    };
+  }, [piece.id, piece.xml]);
 
   // --- loop range (#5004) ---
   const applyLoop = useCallback(
@@ -841,8 +914,9 @@ export function ScoreView() {
 
   // --- live MIDI → follower ---
   useEffect(() => {
-    if (!following) return;
+    if (!following || watching) return;
     return useMidiStore.subscribe((state, prev) => {
+      if (watchBpmRef.current !== null) return;
       const ev = state.lastNoteOn;
       if (!ev || ev === prev.lastNoteOn) return;
       const f = followerRef.current;
@@ -940,7 +1014,7 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, status, moveCursorTo, syncUi, placePlayed, noteName, trackChord, reportExpression]);
+  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, noteName, trackChord, reportExpression]);
 
   // Key releases, for the length of a fermata on the last note. A wrong note shows
   // only while its key is down (#9630), so the score doesn't fill up with red.
@@ -986,6 +1060,13 @@ export function ScoreView() {
     syncUi();
   };
 
+  // Red on the strip while a wrong key is down. The latest wrong note counts even when
+  // the overlay could not place a mark for it on the staff.
+  const wrongKeys = new Set(
+    [...marks.flatMap((m) => (m.wrong && m.midi !== undefined ? [m.midi] : [])), ...(feedback.kind === 'wrong' ? [feedback.played] : [])].filter(
+      (k) => held.has(k),
+    ),
+  );
   const finished = feedback.kind === 'complete';
   const btn =
     'rounded-md px-3 py-1 text-sm font-medium disabled:opacity-40 bg-gray-800 text-gray-200 hover:bg-gray-700';
@@ -1157,28 +1238,36 @@ export function ScoreView() {
           <input type="checkbox" checked={following} onChange={(e) => setFollowing(e.target.checked)} />
           Follow my playing
         </label>
+        <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300">
+          <input type="checkbox" checked={showKeyboard} onChange={(e) => setShowKeyboard(e.target.checked)} />
+          Keyboard
+        </label>
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => {
               setPicking(picking === 'off' ? 'start' : 'off');
               setPickStart(null);
             }}
-            disabled={status !== 'ready'}
+            disabled={status !== 'ready' || watching}
             className={`${btn} ${loopBtn}`}
             data-testid="loop-bars"
           >
             {picking === 'start' ? 'Click first bar…' : picking === 'end' ? 'Click last bar…' : 'Loop bars'}
           </button>
           {loopBars && (
-            <button onClick={() => applyLoop(null)} className={btn} data-testid="clear-loop">
+            <button onClick={() => applyLoop(null)} disabled={watching} className={btn} data-testid="clear-loop">
               Clear loop
             </button>
           )}
-          <button onClick={() => manualMove(-1)} disabled={status !== 'ready'} className={btn}>
+          {/* While it plays for him, the timer owns the cursor. */}
+          <button onClick={() => manualMove(-1)} disabled={status !== 'ready' || watching} className={btn}>
             ◀ Prev
           </button>
-          <button onClick={() => manualMove(1)} disabled={status !== 'ready' || finished} className={btn}>
+          <button onClick={() => manualMove(1)} disabled={status !== 'ready' || finished || watching} className={btn}>
             Next ▶
+          </button>
+          <button onClick={toggleWatch} disabled={status !== 'ready'} className={btn} data-testid="watch">
+            {watching ? '■ Stop' : '▶ Play it for me'}
           </button>
           <button
             onClick={restart}
@@ -1279,6 +1368,11 @@ export function ScoreView() {
           <PlayedOverlay marks={marks} bands={bands} />
         </div>
       </div>
+      {showKeyboard && (
+        <div className="sticky bottom-0 z-20 -mx-2 rounded-t-md bg-gray-950/95 px-2 py-1" data-testid="keyboard-strip">
+          <PianoKeyboard88 heightRatio={20} green={new Set(watching ? watchNotes : remaining)} red={wrongKeys} held={held} />
+        </div>
+      )}
     </div>
   );
 }

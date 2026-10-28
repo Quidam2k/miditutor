@@ -39,7 +39,7 @@ export function playNote(midiNumber: number, duration = '8n'): void {
 /**
  * Play multiple notes simultaneously (chord)
  */
-export function playChord(midiNumbers: number[], duration = '4n'): void {
+export function playChord(midiNumbers: number[], duration: string | number = '4n'): void {
   if (!synth || !initialized) return;
   const notes = midiNumbers.map(midiToToneNote);
   synth.triggerAttackRelease(notes, duration);
