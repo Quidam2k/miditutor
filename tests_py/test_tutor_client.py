@@ -259,3 +259,27 @@ def test_load_piece_reports_bad_input_without_pushing(app, tmp_path):
     assert "Unsupported file type" in server.tutor_load_piece(str(text))["error"]
     assert "No file at" in server.tutor_load_piece(str(tmp_path / "missing.mxl"))["error"]
     assert all(entry["path"] != "/piece" for entry in app["seen"])
+
+
+# #9996: with no MIDITUTOR_URL, Pinocchio's tunnel wins when it listens, else the local app.
+def test_base_url_prefers_the_pinocchio_tunnel(monkeypatch):
+    monkeypatch.delenv("MIDITUTOR_URL", raising=False)
+    monkeypatch.setattr(tutor_client, "_listening", lambda url: True)
+    assert tutor_client._base_url() == tutor_client.TUNNEL_URL
+    monkeypatch.setattr(tutor_client, "_listening", lambda url: False)
+    assert tutor_client._base_url() == tutor_client.LOCAL_URL
+    monkeypatch.setenv("MIDITUTOR_URL", "http://127.0.0.1:1234/")
+    assert tutor_client._base_url() == "http://127.0.0.1:1234"
+
+
+def test_listening_sees_a_bound_port():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen()
+    port = sock.getsockname()[1]
+    try:
+        assert tutor_client._listening(f"http://127.0.0.1:{port}")
+    finally:
+        sock.close()
+    assert not tutor_client._listening(f"http://127.0.0.1:{port}")
+

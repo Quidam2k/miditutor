@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -30,12 +31,38 @@ def _token_path() -> Path:
     return Path.home() / ".config" / "MidiTutor" / "api-token"
 
 
+# #9996: Pinocchio's tutor reaches Solace through the supervisor's adhoc tunnel service
+# `pinocchio-tutor-tunnel` on its own port, so it never takes 47800 from a desk copy of
+# the app (#9926: a copy that finds 47800 taken exits). Its token is the box's.
+LOCAL_URL = "http://127.0.0.1:47800"
+TUNNEL_URL = "http://127.0.0.1:47810"
+TUNNEL_TOKEN_FILE = Path.home() / ".config" / "miditutor" / "api-token"
+
+
+def _listening(url: str) -> bool:
+    host, port = url.rsplit("/", 1)[-1].split(":")
+    try:
+        with socket.create_connection((host, int(port)), timeout=0.5):
+            return True
+    except OSError:
+        return False
+
+
+def _base_url() -> str:
+    """MIDITUTOR_URL if set; else Pinocchio's tunnel when it is up (that is where he
+    plays); else an app on this machine."""
+    configured = os.environ.get("MIDITUTOR_URL")
+    if configured:
+        return configured.rstrip("/")
+    return TUNNEL_URL if _listening(TUNNEL_URL) else LOCAL_URL
+
+
 def request(
     method: str, path: str, body: dict | None = None, timeout: float = 10, raw: bool = False
 ) -> dict | bytes:
     """Call the local API; server errors come back as error/status dictionaries.
     raw=True returns the response body as bytes (e.g. /screenshot)."""
-    base_url = os.environ.get("MIDITUTOR_URL", "http://127.0.0.1:47800").rstrip("/")
+    base_url = _base_url()
     unavailable = (
         f"MidiTutor app isn't reachable at {base_url}. "
         "Is it open on the music box (and the SSH tunnel up)?"
@@ -43,6 +70,8 @@ def request(
     token = os.environ.get("MIDITUTOR_TOKEN", "").strip()
     if not token:
         token_path = _token_path()
+        if base_url == TUNNEL_URL and not os.environ.get("MIDITUTOR_TOKEN_FILE"):
+            token_path = TUNNEL_TOKEN_FILE
         try:
             token = token_path.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError):
