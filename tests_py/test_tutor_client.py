@@ -132,6 +132,7 @@ def test_recent_filters_old_notes_and_gestures(app):
         "notes": [{"name": "D#4", "kind": "on", "t": app["now_ms"]}],
         "feed": [],
         "expression": [],
+        "pedal": [],
         "gestures": [{"id": 2, "names": ["F4", "A4", "C5"], "chord": "F major"}],
     }
     assert [entry["path"] for entry in app["seen"]] == [
@@ -155,6 +156,21 @@ def test_recent_lists_expression_lines(monkeypatch):
     # Telemetry only: it is not a note and not in the follower feed.
     assert [n["name"] for n in result["notes"]] == ["C5"]
     assert result["feed"] == []
+
+
+# #9976: pedal lifted before the next note shows up as plain lines for the personas.
+def test_recent_lists_pedal_gaps(monkeypatch):
+    now_ms = int(time.time() * 1000)
+    line = "bar 12: pedal came up 0.4 s before F4; change it after you play the note"
+    events = [
+        {"seq": 1, "kind": "pedal-gap", "text": line, "bar": 12, "step": 30, "gapMs": 400, "next": "F4", "timestamp": now_ms},
+        {"seq": 2, "kind": "noteon", "note": 65, "velocity": 60, "source": "midi", "timestamp": now_ms},
+    ]
+    replies = {"/events": {"events": events}, "/gestures": {"gestures": []}}
+    monkeypatch.setattr(tutor_client, "request", lambda method, path, *a, **k: replies[path.split("?")[0]])
+    result = tutor_client.recent(seconds=5)
+    assert result["pedal"] == [line]
+    assert [n["name"] for n in result["notes"]] == ["F4"]
 
 
 def test_wait_for_play_timeout(app):

@@ -13,6 +13,7 @@ import { PianoKeyboard88 } from '../homework/PianoKeyboard88';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
+import { PedalCoach } from '../../engine/PedalCoach';
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustBadge, trustMark } from '../../../shared/trust';
@@ -187,11 +188,15 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
   notes: OsmdNote[][];
   ringing: OsmdNote[][];
   chords: (StepChord | null)[];
+  restBefore: boolean[];
 } {
   const steps: ScoreStep[] = [];
   const notes: OsmdNote[][] = [];
   const ringing: OsmdNote[][] = [];
   const chords: (StepChord | null)[] = [];
+  // #9976: the page is silent just before this step (a rest), so lifting the pedal is right.
+  const restBefore: boolean[] = [];
+  let soundEnd = 0; // where the last written sound so far ends, in beats
   let chord: StepChord | null = null;
   let active: { note: OsmdNote; end: number }[] = [];
   const selectedStaff = hand === 'both' || osmd.Sheet.Staves.length < 2 ? null : hand === 'right' ? 0 : 1;
@@ -204,6 +209,7 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
     const other = struck.filter((n) => selectedStaff !== null && staffOf(n) !== selectedStaff);
     const beat = cursor.iterator.currentTimeStamp.RealValue * 4;
     active = active.filter((a) => a.end > beat + 1e-6);
+    restBefore.push(steps.length > 0 && soundEnd < beat - 1e-6);
     // The other hand is optional, so playing its written notes is not wrong.
     const ring = [...active.map((a) => a.note), ...all.filter((n) => !n.isRest() && !isStruck(n)), ...other];
     steps.push({
@@ -222,12 +228,15 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
     }
     chords.push(chord);
     for (const n of all) {
-      if (!n.isRest() && n.Length) active.push({ note: n, end: beat + n.Length.RealValue * 4 });
+      if (!n.isRest() && n.Length) {
+        active.push({ note: n, end: beat + n.Length.RealValue * 4 });
+        soundEnd = Math.max(soundEnd, beat + n.Length.RealValue * 4);
+      }
     }
     cursor.next();
   }
   cursor.reset();
-  return { steps, notes, ringing, chords };
+  return { steps, notes, ringing, chords, restBefore };
 }
 
 // Colour a chord symbol's text (green = he is playing that chord), or reset it.
@@ -328,6 +337,11 @@ export function ScoreView() {
   const stepNotesRef = useRef<OsmdNote[][]>([]);
   const ringNotesRef = useRef<OsmdNote[][]>([]);
   const stepChordsRef = useRef<(StepChord | null)[]>([]);
+  const stepRestRef = useRef<boolean[]>([]);
+  // #9976: notices the pedal lifted before the next note (a gap in the sound).
+  const pedalCoachRef = useRef(new PedalCoach());
+  const [pedalTip, setPedalTip] = useState('');
+  const pedalTipTimerRef = useRef<number | undefined>(undefined);
   // The chord symbol in force where he is playing, the keys struck under it, and
   // whether they now cover it (then the symbol is green).
   const chordLitRef = useRef(noChord());
@@ -681,7 +695,9 @@ export function ScoreView() {
   }, [moveCursorTo, syncUi, trackChord]);
 
   const buildFollower = useCallback((osmd: OpenSheetMusicDisplay) => {
-    const { steps, notes, ringing, chords } = extractSteps(osmd, handRef.current);
+    const { steps, notes, ringing, chords, restBefore } = extractSteps(osmd, handRef.current);
+    stepRestRef.current = restBefore;
+    pedalCoachRef.current.reset();
     stepNotesRef.current = notes;
     ringNotesRef.current = ringing;
     stepChordsRef.current = chords;
@@ -949,6 +965,17 @@ export function ScoreView() {
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
   }, [piece.id, piece.xml, scoreLayout, restart, buildFollower]);
 
+  // #9976: pedal lifts, with what was ringing only on the pedal just before.
+  useEffect(
+    () =>
+      useMidiStore.subscribe((state, prev) => {
+        if (state.pedal === prev.pedal) return;
+        pedalCoachRef.current.pedal(state.pedal, Date.now(), state.held, prev.pedalRinging);
+      }),
+    [],
+  );
+  useEffect(() => () => window.clearTimeout(pedalTipTimerRef.current), []);
+
   // --- live MIDI → follower ---
   useEffect(() => {
     if (!following || watching) return;
@@ -978,6 +1005,19 @@ export function ScoreView() {
       const sounding = new Set([...held, ...(pedal ? pedalRinging : [])]);
       sounding.delete(ev.note);
       trackChord(stepChordsRef.current[idx] ?? null, [ev.note, ...sounding], step?.measure);
+      const gap = pedalCoachRef.current.noteOn(ev.note, ev.timestamp, {
+        bar: step?.measure ?? 0,
+        step: idx,
+        restBefore: stepRestRef.current[idx] ?? false,
+      });
+      if (gap) {
+        const secs = (gap.gapMs / 1000).toFixed(1);
+        const text = `bar ${gap.bar}: pedal came up ${secs} s before ${playedName}; change it after you play the note`;
+        setPedalTip(`Pedal came up ${secs} s before ${playedName}: lift it after you play the next note`);
+        window.clearTimeout(pedalTipTimerRef.current);
+        pedalTipTimerRef.current = window.setTimeout(() => setPedalTip(''), 6000);
+        reportEvent('pedal-gap', { bar: gap.bar, step: gap.step, gapMs: gap.gapMs, next: playedName, text });
+      }
       const result = f.noteOn(ev.note, ev.timestamp, keysDown);
       if (result.kind !== 'ignored') {
         const mark = placePlayed(idx, ev.note, result.kind === 'wrong');
@@ -1025,6 +1065,8 @@ export function ScoreView() {
           setFeedback({ kind: 'idle' });
           break;
         case 'loop': {
+          // Lifting before jumping back to the loop's start is not a pedalling slip.
+          pedalCoachRef.current.reset();
           // One lap done: its average tempo, then a clean page for the next lap.
           const range = f.range;
           const start = lapStartRef.current;
@@ -1102,6 +1144,7 @@ export function ScoreView() {
     if (!f) return;
     const target = Math.max(0, Math.min(f.steps.length - 1, cursorIndexRef.current + delta));
     f.seek(target);
+    pedalCoachRef.current.reset();
     // A jump starts a new pass: spans he skipped must not be judged.
     exprRef.current?.reset();
     moveCursorTo(Math.min(f.index, f.steps.length - 1));
@@ -1370,6 +1413,11 @@ export function ScoreView() {
               </span>
             )}
           </span>
+          {pedalTip && (
+            <span className="font-medium text-amber-300" data-testid="pedal-tip">
+              {pedalTip}
+            </span>
+          )}
         </div>
       )}
       </div>

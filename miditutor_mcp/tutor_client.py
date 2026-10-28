@@ -154,6 +154,8 @@ def recent(seconds: float | None = None, limit: int = 50) -> dict:
     # Expression telemetry (#9569): one hedged line per marked passage he finished,
     # e.g. "bars 5-8: marked f; played about mp (...)". Never a wrong-note verdict.
     expression = [e["text"] for e in events if e.get("kind") == "expression" and e.get("text")]
+    # #9976: pedal lifted before the next note (a gap in the sound), one line each.
+    pedal = [e["text"] for e in events if e.get("kind") == "pedal-gap" and e.get("text")]
     return {
         "notes": [
             {
@@ -165,6 +167,7 @@ def recent(seconds: float | None = None, limit: int = 50) -> dict:
         ],
         "feed": feed,
         "expression": expression,
+        "pedal": pedal,
         "gestures": compact_gestures,
     }
 

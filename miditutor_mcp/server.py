@@ -151,7 +151,8 @@ def tutor_recent(seconds: float = 30, limit: int = 50) -> dict:
     names like F#4), gestures (notes struck together, with the chord name
     when they form one, e.g. "E minor"), and `expression`: how he played the
     marked dynamics / cresc. / rit. / fermatas, one line per passage (telemetry
-    for coaching, never a wrong note). A line from a page read or a scan says so
+    for coaching, never a wrong note), and `pedal`: each time he lifted the sustain
+    pedal before the next note, leaving a gap (#9976). A line from a page read or a scan says so
     with its confidence: treat it as "the page seems to say", not a fact.
     source 'inject' = a test, not him."""
     return _tutor(tutor_client.recent, seconds=seconds, limit=limit)
