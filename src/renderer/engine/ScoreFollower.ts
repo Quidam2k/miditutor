@@ -1,8 +1,10 @@
 // Milestone 2: pure score-following matcher. The Score view extracts one ScoreStep per
 // OSMD cursor position; this decides when the cursor may advance. No DOM / OSMD here.
 // #5004: an optional loop range wraps back to its first step instead of finishing.
-// #9480: notes still sounding (key held, or let ring under the sustain pedal) that the
-// next step asks for again are carried over, so he need not re-strike them.
+// #9480/#9999: a key held from the step he just finished that the next step asks for
+// again is carried over, so he need not re-strike it, but only if it is STILL held
+// when he strikes his next note. A chord's normal release then never skips a written
+// repeat (Sorcerer's Apprentice bar 29, C5 C5 C5).
 
 // #9994: after a wrong note, the step needs all its notes struck together, each within
 // this long of the one before (GestureTracker's chord window), with no wrong key between.
@@ -43,6 +45,8 @@ export class ScoreFollower {
   // #9993: the chord he just finished. He replays a whole chord after a miss, so a
   // note of it landing just after the advance is not wrong, until he plays on.
   private prevStruck = new Set<number>();
+  // #9999: notes of the current step that may carry, decided at his next strike.
+  private pendingCarry = new Set<number>();
   // #9994: set by a wrong note on this step; credit then counts only a clean chord.
   private missed = false;
   private lastHitMs = -Infinity;
@@ -101,7 +105,37 @@ export class ScoreFollower {
    * One key struck. `sounding` = notes still ringing right now (keys held down, plus
    * keys released while the sustain pedal is down), excluding this one.
    */
+  /**
+   * #9999: settle carry-overs before judging a strike. `held` = keys down right now,
+   * excluding the one being struck. A step made only of still-held notes completes
+   * here. Returns how the cursor moved, or null if it did not.
+   */
+  settle(timeMs: number, held: ReadonlySet<number>): FollowResult | null {
+    const from = this.currentIndex;
+    let lapped = false;
+    for (let guard = 0; guard <= this.steps.length && this.pendingCarry.size > 0 && !this.finished; guard++) {
+      for (const note of this.pendingCarry) {
+        if (!held.has(note)) continue;
+        this.satisfiedNotes.add(note);
+        this.prevCarried.add(note);
+      }
+      this.pendingCarry.clear();
+      if (this.satisfiedNotes.size < this.steps[this.currentIndex].notes.length) break;
+      if (this.finishStep(timeMs, held)) {
+        lapped = true;
+        break;
+      }
+    }
+    if (this.currentIndex === from && !lapped) return null;
+    if (this.finished) return { kind: 'complete', from };
+    if (lapped) return { kind: 'loop', from, to: this.currentIndex, lap: this.currentLap };
+    return { kind: 'advance', from, to: this.currentIndex };
+  }
+
   noteOn(midi: number, timeMs: number, sounding: ReadonlySet<number> = new Set()): FollowResult {
+    const held = new Set(sounding);
+    held.delete(midi);
+    this.settle(timeMs, held);
     if (this.finished) {
       return { kind: 'ignored' };
     }
@@ -149,26 +183,9 @@ export class ScoreFollower {
     }
 
     // The key that just finished this step is not carried: a repeated written note
-    // (Auld Lang Syne's F4 F4) must be struck again (#9630).
-    const ringing = new Set(sounding);
-    ringing.delete(midi);
+    // (Auld Lang Syne's F4 F4) must be struck again (#9630). `held` already lacks it.
     const from = this.currentIndex;
-    let lapped = false;
-    this.prevCarried.clear();
-    // Advance; a step fully covered by carried-over notes completes on its own.
-    for (let guard = 0; guard <= this.steps.length; guard++) {
-      const done = this.currentIndex;
-      this.completeStep(done, timeMs);
-      for (const note of this.steps[done].notes) this.prevStruck.add(note);
-      // Never carry across a lap wrap: the note just struck would cover its own step.
-      if (this.moveOn(done)) {
-        lapped = true;
-        break;
-      }
-      if (this.finished) break;
-      const carried = this.carryOver(done, ringing);
-      if (carried < this.steps[this.currentIndex].notes.length) break;
-    }
+    const lapped = this.finishStep(timeMs, held);
 
     if (this.finished) {
       return { kind: 'complete', from };
@@ -187,6 +204,7 @@ export class ScoreFollower {
     this.satisfiedNotes.clear();
     this.prevCarried.clear();
     this.prevStruck.clear();
+    this.pendingCarry.clear();
     this.missed = false;
     this.completions = [];
     this.beatOffset = 0;
@@ -227,6 +245,7 @@ export class ScoreFollower {
   /** Step past `done`; wraps inside a loop range. Returns true on a wrap. */
   private moveOn(done: number): boolean {
     this.satisfiedNotes.clear();
+    this.pendingCarry.clear();
     this.missed = false;
     this.currentIndex = this.findNextPlayable(done + 1);
     const range = this.loopRange;
@@ -243,16 +262,24 @@ export class ScoreFollower {
     return true;
   }
 
-  /** Pre-satisfy notes of the new step that `done` also asked for and still ring. */
-  private carryOver(done: number, ringing: ReadonlySet<number>): number {
-    const before = this.steps[done].notes;
-    for (const note of this.steps[this.currentIndex].notes) {
-      if (ringing.has(note) && before.includes(note)) {
-        this.satisfiedNotes.add(note);
-        this.prevCarried.add(note);
+  /**
+   * Complete the current step and move on; returns true on a lap wrap. Notes the new
+   * step shares with it that are held now may carry, checked at the next strike.
+   */
+  private finishStep(timeMs: number, held: ReadonlySet<number>): boolean {
+    const done = this.currentIndex;
+    this.completeStep(done, timeMs);
+    this.prevCarried.clear();
+    for (const note of this.steps[done].notes) this.prevStruck.add(note);
+    // Never carry across a lap wrap: the note just struck would cover its own step.
+    if (this.moveOn(done)) return true;
+    if (!this.finished) {
+      const before = this.steps[done].notes;
+      for (const note of this.steps[this.currentIndex].notes) {
+        if (held.has(note) && before.includes(note)) this.pendingCarry.add(note);
       }
     }
-    return this.satisfiedNotes.size;
+    return false;
   }
 
   /** Back to only what is carried over (held keys); struck credit is dropped. */

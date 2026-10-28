@@ -402,13 +402,20 @@ describe('ScoreFollower loop ranges', () => {
 });
 
 describe('ScoreFollower carry-over and ringing notes (#9480, #9481)', () => {
-  it('carries a note still sounding under the pedal into the next step', () => {
+  // #9999: the carry is decided at his next strike, not when the chord completes.
+  it('carries a key still held at his next strike into the next step', () => {
     const follower = new ScoreFollower(makeSteps([[53, 60], [53, 64], [65]]));
     follower.noteOn(53, 0);
-    // F3 is still ringing (pedal) when C4 completes the step; step 2 only needs E4.
     expect(follower.noteOn(60, 10, new Set([53]))).toEqual({ kind: 'advance', from: 0, to: 1 });
-    expect(follower.satisfied.has(53)).toBe(true);
-    expect(follower.noteOn(64, 600)).toEqual({ kind: 'advance', from: 1, to: 2 });
+    // F3 still held when he plays E4: step 2 needs only the E4.
+    expect(follower.noteOn(64, 600, new Set([53]))).toEqual({ kind: 'advance', from: 1, to: 2 });
+  });
+
+  it('does not carry a key let go before his next strike', () => {
+    const follower = new ScoreFollower(makeSteps([[53, 60], [53, 64], [65]]));
+    follower.noteOn(53, 0);
+    follower.noteOn(60, 10, new Set([53]));
+    expect(follower.noteOn(64, 600)).toEqual({ kind: 'partial', index: 1, remaining: [53] });
   });
 
   it('still asks for a re-strike when the note is not sounding', () => {
@@ -418,14 +425,28 @@ describe('ScoreFollower carry-over and ringing notes (#9480, #9481)', () => {
     expect(follower.noteOn(64, 600)).toEqual({ kind: 'partial', index: 1, remaining: [53] });
   });
 
-  it('does not call a late re-strike of a carried note wrong', () => {
+  it('passes a step made only of a held note when he plays on', () => {
     const follower = new ScoreFollower(makeSteps([[53, 60], [53], [62]]));
     follower.noteOn(53, 0);
     follower.noteOn(60, 10, new Set([53]));
-    // Step 1 was covered by the ringing F3, so the cursor is at step 2.
-    expect(follower.index).toBe(2);
-    expect(follower.noteOn(53, 300)).toEqual({ kind: 'ignored' });
-    expect(follower.noteOn(62, 600)).toEqual({ kind: 'complete', from: 2 });
+    expect(follower.index).toBe(1);
+    // Still holding F3: step 1 is covered, and D4 lands on step 2.
+    expect(follower.settle(600, new Set([53]))).toEqual({ kind: 'advance', from: 1, to: 2 });
+    expect(follower.noteOn(62, 600, new Set([53]))).toEqual({ kind: 'complete', from: 2 });
+  });
+
+  // #9999 (Todd 12:38, feed-1240.json): bar 29 right hand C5 C5 C5. The chord E3+C5+G#3
+  // completed while C5 was down; the cursor jumped two steps and his next C5 went to bar 30.
+  it('asks for each written repeat after a chord (bar 29 C5 C5 C5)', () => {
+    const follower = new ScoreFollower(makeSteps([[72, 56, 52], [72], [72, 60], [72, 65, 56]]));
+    follower.noteOn(52, 0);
+    follower.noteOn(72, 12, new Set([52]));
+    expect(follower.noteOn(56, 16, new Set([52, 72]))).toEqual({ kind: 'advance', from: 0, to: 1 });
+    // He let go (~200 ms), then plays the next C5: one step per strike.
+    expect(follower.noteOn(72, 1000)).toEqual({ kind: 'advance', from: 1, to: 2 });
+    expect(follower.noteOn(60, 2000)).toEqual({ kind: 'partial', index: 2, remaining: [72] });
+    expect(follower.noteOn(72, 2010, new Set([60]))).toEqual({ kind: 'advance', from: 2, to: 3 });
+    expect(follower.index).toBe(3);
   });
 
   // #9630: Auld Lang Syne bar 2, F4 then F4+C4; he played only C4 and the cursor moved on.
@@ -454,14 +475,14 @@ describe('ScoreFollower carry-over and ringing notes (#9480, #9481)', () => {
     const follower = new ScoreFollower(makeSteps([[53, 60], [53, 64], [62]]));
     follower.noteOn(53, 0);
     follower.noteOn(60, 10, new Set([53]));
-    expect(follower.noteOn(65, 300)).toEqual({
+    expect(follower.noteOn(65, 300, new Set([53]))).toEqual({
       kind: 'wrong',
       index: 1,
       played: 65,
       expected: [53, 64],
       remaining: [64]
     });
-    expect(follower.noteOn(64, 600)).toEqual({ kind: 'advance', from: 1, to: 2 });
+    expect(follower.noteOn(64, 600, new Set([53]))).toEqual({ kind: 'advance', from: 1, to: 2 });
   });
 
   // #9994 (Todd 12:36): after a miss, only a clean chord with every note advances.

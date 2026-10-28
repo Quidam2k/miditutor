@@ -962,17 +962,23 @@ export function ScoreView() {
       const task = useTutorStore.getState().task;
       if (task && task.result?.verdict !== 'correct') return;
 
+      const { held, pedal, pedalRinging } = useMidiStore.getState();
+      // #9999: keys still held from the last step carry over only if still down now;
+      // settle that first, so this note is judged against the step it lands in.
+      const keysDown = new Set(held);
+      keysDown.delete(ev.note);
+      const settled = f.settle(ev.timestamp, keysDown);
+      if (settled?.kind === 'advance' || settled?.kind === 'loop') moveCursorTo(settled.to);
       const idx = f.index;
       const step = f.steps[idx];
       // Spell against the step he played into, before the cursor moves on.
       const playedName = noteName(ev.note);
       const expectedNames = f.expected.map(noteName);
       // Still ringing: keys held down, plus keys let go under the sustain pedal (#9480).
-      const { held, pedal, pedalRinging } = useMidiStore.getState();
       const sounding = new Set([...held, ...(pedal ? pedalRinging : [])]);
       sounding.delete(ev.note);
       trackChord(stepChordsRef.current[idx] ?? null, [ev.note, ...sounding], step?.measure);
-      const result = f.noteOn(ev.note, ev.timestamp, sounding);
+      const result = f.noteOn(ev.note, ev.timestamp, keysDown);
       if (result.kind !== 'ignored') {
         const mark = placePlayed(idx, ev.note, result.kind === 'wrong');
         if (mark) setMarks((m) => [...m, mark]);
