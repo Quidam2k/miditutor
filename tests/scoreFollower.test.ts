@@ -48,15 +48,17 @@ describe('ScoreFollower without a range', () => {
       index: 0,
       played: 61,
       expected: [67, 60, 64],
-      remaining: [64, 67]
+      remaining: [60, 64, 67]
     });
-    expect([...follower.satisfied]).toEqual([60]);
+    // #9994: the miss drops the C4's credit; the whole chord is needed again.
+    expect([...follower.satisfied]).toEqual([]);
     expect(follower.noteOn(67, 300)).toEqual({
       kind: 'partial',
       index: 0,
-      remaining: [64]
+      remaining: [60, 64]
     });
-    expect(follower.noteOn(64, 400)).toEqual({
+    expect(follower.noteOn(64, 350)).toEqual({ kind: 'partial', index: 0, remaining: [60] });
+    expect(follower.noteOn(60, 400)).toEqual({
       kind: 'advance',
       from: 0,
       to: 1
@@ -446,20 +448,59 @@ describe('ScoreFollower carry-over and ringing notes (#9480, #9481)', () => {
     expect(follower.noteOn(70, 650)).toMatchObject({ kind: 'wrong', played: 70 });
   });
 
-  // #9986: Sorcerer's Apprentice bar 3, the 8va step Ab6 + C6. He played the C6, then
-  // a wrong note; the message must ask only for the Ab6, not "Ab6 + C6" again.
+  // #9986: a wrong-note result names the notes still needed. Held (carried) keys
+  // stay credited through a miss (#9994 resets only what was struck).
   it('names only the notes still needed in a wrong-note result', () => {
-    const follower = new ScoreFollower(makeSteps([[92, 84], [86]]));
-    expect(follower.noteOn(84, 0)).toEqual({ kind: 'partial', index: 0, remaining: [92] });
-    expect(follower.noteOn(80, 100)).toEqual({
+    const follower = new ScoreFollower(makeSteps([[53, 60], [53, 64], [62]]));
+    follower.noteOn(53, 0);
+    follower.noteOn(60, 10, new Set([53]));
+    expect(follower.noteOn(65, 300)).toEqual({
       kind: 'wrong',
-      index: 0,
-      played: 80,
-      expected: [92, 84],
-      remaining: [92]
+      index: 1,
+      played: 65,
+      expected: [53, 64],
+      remaining: [64]
     });
-    expect(follower.noteOn(84, 200)).toEqual({ kind: 'ignored' });
-    expect(follower.noteOn(92, 300)).toEqual({ kind: 'advance', from: 0, to: 1 });
+    expect(follower.noteOn(64, 600)).toEqual({ kind: 'advance', from: 1, to: 2 });
+  });
+
+  // #9994 (Todd 12:36): after a miss, only a clean chord with every note advances.
+  describe('after a wrong note the whole chord is needed again', () => {
+    const chord = () => new ScoreFollower(makeSteps([[60, 64, 67], [72]]));
+    it('does not advance on the remaining notes alone', () => {
+      const f = chord();
+      f.noteOn(60, 0);
+      expect(f.noteOn(61, 500).kind).toBe('wrong');
+      expect(f.noteOn(64, 1000).kind).toBe('partial');
+      expect(f.noteOn(67, 1010)).toEqual({ kind: 'partial', index: 0, remaining: [60] });
+      expect(f.index).toBe(0);
+    });
+    it('advances on all three together', () => {
+      const f = chord();
+      f.noteOn(60, 0);
+      f.noteOn(61, 500);
+      f.noteOn(64, 1000);
+      f.noteOn(67, 1010);
+      // Too late to join that attempt: a fresh chord, all three within the window.
+      expect(f.noteOn(60, 2000).kind).toBe('partial');
+      expect(f.noteOn(64, 2030).kind).toBe('partial');
+      expect(f.noteOn(67, 2060)).toEqual({ kind: 'advance', from: 0, to: 1 });
+    });
+    it('does not advance on a full chord with an extra wrong key in it', () => {
+      const f = chord();
+      f.noteOn(61, 0);
+      f.noteOn(60, 1000);
+      f.noteOn(64, 1020);
+      expect(f.noteOn(65, 1040).kind).toBe('wrong');
+      expect(f.noteOn(67, 1060).kind).toBe('partial');
+      expect(f.index).toBe(0);
+    });
+    it('keeps the old piecemeal behaviour before any miss', () => {
+      const f = chord();
+      f.noteOn(60, 0);
+      f.noteOn(64, 5000);
+      expect(f.noteOn(67, 9000)).toEqual({ kind: 'advance', from: 0, to: 1 });
+    });
   });
 
   // #9993: after a miss he looks at the strip and replays the whole chord, in any order.

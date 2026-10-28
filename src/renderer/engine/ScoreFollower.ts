@@ -4,6 +4,10 @@
 // #9480: notes still sounding (key held, or let ring under the sustain pedal) that the
 // next step asks for again are carried over, so he need not re-strike them.
 
+// #9994: after a wrong note, the step needs all its notes struck together, each within
+// this long of the one before (GestureTracker's chord window), with no wrong key between.
+export const CHORD_WINDOW_MS = 120;
+
 export interface ScoreStep {
   /** MIDI notes newly struck at this cursor position. */
   notes: number[];
@@ -39,6 +43,9 @@ export class ScoreFollower {
   // #9993: the chord he just finished. He replays a whole chord after a miss, so a
   // note of it landing just after the advance is not wrong, until he plays on.
   private prevStruck = new Set<number>();
+  // #9994: set by a wrong note on this step; credit then counts only a clean chord.
+  private missed = false;
+  private lastHitMs = -Infinity;
 
   constructor(steps: ScoreStep[]) {
     this.steps = steps.map((step) => ({
@@ -106,6 +113,9 @@ export class ScoreFollower {
 
     const expected = this.steps[this.currentIndex].notes;
 
+    // After a miss, a note too long after the last one starts a new attempt.
+    if (this.missed && timeMs - this.lastHitMs > CHORD_WINDOW_MS) this.restartAttempt();
+
     if (this.satisfiedNotes.has(midi)) {
       return { kind: 'ignored' };
     }
@@ -118,6 +128,9 @@ export class ScoreFollower {
       ) {
         return { kind: 'ignored' };
       }
+      // A miss resets the step: piecemeal credit from before it no longer counts.
+      this.missed = true;
+      this.restartAttempt();
       return {
         kind: 'wrong',
         index: this.currentIndex,
@@ -129,6 +142,7 @@ export class ScoreFollower {
 
     this.satisfiedNotes.add(midi);
     this.prevStruck.clear();
+    this.lastHitMs = timeMs;
 
     if (this.satisfiedNotes.size < expected.length) {
       return { kind: 'partial', index: this.currentIndex, remaining: this.remainingAt(expected) };
@@ -173,6 +187,7 @@ export class ScoreFollower {
     this.satisfiedNotes.clear();
     this.prevCarried.clear();
     this.prevStruck.clear();
+    this.missed = false;
     this.completions = [];
     this.beatOffset = 0;
   }
@@ -212,6 +227,7 @@ export class ScoreFollower {
   /** Step past `done`; wraps inside a loop range. Returns true on a wrap. */
   private moveOn(done: number): boolean {
     this.satisfiedNotes.clear();
+    this.missed = false;
     this.currentIndex = this.findNextPlayable(done + 1);
     const range = this.loopRange;
     if (!range || (!this.finished && this.currentIndex <= range.last)) {
@@ -237,6 +253,11 @@ export class ScoreFollower {
       }
     }
     return this.satisfiedNotes.size;
+  }
+
+  /** Back to only what is carried over (held keys); struck credit is dropped. */
+  private restartAttempt(): void {
+    this.satisfiedNotes = new Set(this.steps[this.currentIndex].notes.filter((n) => this.prevCarried.has(n)));
   }
 
   private remainingAt(expected: number[]): number[] {

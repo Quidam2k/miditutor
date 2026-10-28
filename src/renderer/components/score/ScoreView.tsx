@@ -1351,9 +1351,10 @@ export function ScoreView() {
           <span className="min-w-[14rem] font-medium" data-testid="feedback">
             {feedback.kind === 'wrong' && (
               <span className="text-red-400">
-                ✗ {noteName(feedback.played)} — expected {namesOf(feedback.remaining)}
+                ✗ {noteName(feedback.played)} — play {namesOf(feedback.remaining)}
+                {feedback.remaining.length > 1 && ' together'}
                 {feedback.remaining.length < feedback.expected.length &&
-                  ` (${namesOf(feedback.expected.filter((m) => !feedback.remaining.includes(m)))} done)`}
+                  ` (${namesOf(feedback.expected.filter((m) => !feedback.remaining.includes(m)))} held)`}
                 {feedback.hint && ` · ${feedback.hint}`}
               </span>
             )}
