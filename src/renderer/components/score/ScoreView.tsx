@@ -24,6 +24,7 @@ import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
 import { MixBuilder } from './MixBuilder';
 import { OriginalScan, useScanLayout } from './OriginalScan';
+import { setFingering, type Digit, type FingerTarget } from '../../../shared/fingering';
 import { ChordSymbol, chordSymbol, playsChord } from './chordSymbols';
 import {
   WrittenNote,
@@ -79,6 +80,8 @@ interface OsmdNote {
   NoteTie?: { StartNote?: unknown } | null;
   Pitch?: { FundamentalNote: number; Octave: number; AccidentalHalfTones: number };
   ParentStaff?: { idInMusicSheet: number };
+  /** Its voice entry; Timestamp is from the start of its measure (whole notes). */
+  ParentVoiceEntry?: { Timestamp?: { RealValue: number } };
   Length?: { RealValue: number };
 }
 interface OsmdBox {
@@ -343,6 +346,10 @@ export function ScoreView() {
   const pedalCoachRef = useRef(new PedalCoach());
   const [pedalTip, setPedalTip] = useState('');
   const pedalTipTimerRef = useRef<number | undefined>(undefined);
+  // #9988 tap-to-finger: the note he tapped, the message after, where to resume.
+  const [fingerPick, setFingerPick] = useState<{ x: number; y: number; target: FingerTarget; name: string } | null>(null);
+  const [fingerMsg, setFingerMsg] = useState('');
+  const resumeStepRef = useRef<number | null>(null);
   // The chord symbol in force where he is playing, the keys struck under it, and
   // whether they now cover it (then the symbol is green).
   const chordLitRef = useRef(noChord());
@@ -466,7 +473,10 @@ export function ScoreView() {
   useEffect(() => {
     if (selectPieceId) setPieceId(selectPieceId);
   }, [selectPieceId]);
-  const piece = onScreen ?? PIECES[0];
+  // #9988: his fingering edits this session, by piece id (the file is saved too).
+  const [xmlEdits, setXmlEdits] = useState<Record<string, string>>({});
+  const listed = onScreen ?? PIECES[0];
+  const piece = xmlEdits[listed.id] ? { ...listed, xml: xmlEdits[listed.id] } : listed;
   const versions = piece.group ? versionsOf(piece.group.slug) : [];
   // My mix (#9627): the builder needs both source scores loaded.
   const [mixing, setMixing] = useState(false);
@@ -943,6 +953,14 @@ export function ScoreView() {
         setPicking('off');
         setPickStart(null);
         restart();
+        // After his fingering edit re-renders the score, put him back where he was.
+        const resume = resumeStepRef.current;
+        resumeStepRef.current = null;
+        if (resume !== null && followerRef.current) {
+          followerRef.current.seek(resume);
+          moveCursorTo(Math.min(followerRef.current.index, followerRef.current.steps.length - 1));
+          syncUi();
+        }
         setStatus('ready');
         reportEvent('piece', {
           piece: pieceName, steps: steps.length, bars: steps[steps.length - 1]?.measure ?? 0,
@@ -1146,6 +1164,53 @@ export function ScoreView() {
   }, []);
 
   // --- manual cursor controls (re-sync the follower to wherever the cursor lands) ---
+  // #9988: tap a notehead to give it a finger number.
+  const onScoreTap = (ev: React.MouseEvent) => {
+    const osmd = osmdRef.current;
+    const f = followerRef.current;
+    if (!osmd || !f || watching || !(ev.target instanceof Element)) return;
+    for (let i = 0; i < f.steps.length; i++) {
+      for (const n of stepNotesRef.current[i] ?? []) {
+        const g = osmd.EngravingRules.GNote(n as never) as unknown as OsmdGraphicalNote | undefined;
+        if (!g?.getSVGGElement?.()?.contains(ev.target)) continue;
+        const onset = (n.ParentVoiceEntry?.Timestamp?.RealValue ?? NaN) * 4;
+        if (!Number.isFinite(onset)) return;
+        const target = { measure: f.steps[i].measure, staff: staffOf(n) + 1, onset, midi: toMidi(n) };
+        setFingerMsg('');
+        setFingerPick({ x: ev.clientX, y: ev.clientY, target, name: noteName(target.midi) });
+        return;
+      }
+    }
+  };
+
+  const applyFinger = (digit: Digit | null) => {
+    const pick = fingerPick;
+    setFingerPick(null);
+    if (!pick) return;
+    const result = setFingering(piece.xml, pick.target, digit);
+    if (!result.ok) {
+      setFingerMsg(`Couldn't change that note's finger: ${result.reason}`);
+      return;
+    }
+    resumeStepRef.current = cursorIndexRef.current;
+    setXmlEdits((e) => ({ ...e, [piece.id]: result.xml }));
+    const what = digit ? `Finger ${digit} on ${pick.name}` : `Finger removed from ${pick.name}`;
+    reportEvent('fingering', { ...pick.target, digit, name: pick.name });
+    const bridge = window.tutorBridge;
+    if (!scanSlug || !bridge?.writeScore) {
+      setFingerMsg(`${what} (this session only: the piece has no file to save to).`);
+      return;
+    }
+    const slug = scanSlug;
+    void bridge
+      .writeScore(slug, result.xml)
+      .then(() => (scanLayout && bridge.reviewAppend ? bridge.reviewAppend(slug, { kind: 'fingering', ...pick.target, digit }) : null))
+      .then((sent) => setFingerMsg(sent
+        ? `${what}: saved; the library copy updates next time Review runs on the desk.`
+        : `${what}: saved here (no scan review for this piece, so a re-sync from the desk will undo it).`))
+      .catch((err: unknown) => setFingerMsg(`${what}, but saving failed: ${err instanceof Error ? err.message : String(err)}`));
+  };
+
   const manualMove = (delta: number) => {
     const f = followerRef.current;
     if (!f) return;
@@ -1433,6 +1498,11 @@ export function ScoreView() {
               </span>
             )}
           </span>
+          {fingerMsg && (
+            <span className="text-purple-300" data-testid="finger-msg">
+              {fingerMsg}
+            </span>
+          )}
           {pedalTip && (
             <span className="font-medium text-amber-300" data-testid="pedal-tip">
               {pedalTip}
@@ -1477,6 +1547,7 @@ export function ScoreView() {
               the second column of pages overflows into the other half on purpose. */}
           <div
             ref={containerRef}
+            onClick={onScoreTap}
             className={scoreLayout === 'pages' ? 'score-pages' : undefined}
             style={scoreLayout === 'pages' ? {
               width: 'calc((100% - 1.5rem) / 2)',
@@ -1490,6 +1561,22 @@ export function ScoreView() {
           <PlayedOverlay marks={marks} bands={bands} />
         </div>
       </div>
+      {fingerPick && (
+        <div
+          className="fixed z-50 flex items-center gap-1 rounded-md border border-gray-700 bg-gray-900 p-1 shadow-lg"
+          style={{ left: fingerPick.x + 8, top: fingerPick.y + 8 }}
+          data-testid="finger-picker"
+        >
+          <span className="px-1 text-xs text-gray-400">{fingerPick.name}: finger</span>
+          {(['1', '2', '3', '4', '5'] as const).map((d) => (
+            <button key={d} onClick={() => applyFinger(d)} className="rounded bg-purple-700 px-2 py-1 text-sm font-bold text-white hover:bg-purple-600">
+              {d}
+            </button>
+          ))}
+          <button onClick={() => applyFinger(null)} title="Remove its finger number" className="rounded bg-gray-700 px-2 py-1 text-sm text-gray-200">×</button>
+          <button onClick={() => setFingerPick(null)} className="rounded px-2 py-1 text-sm text-gray-400">Cancel</button>
+        </div>
+      )}
       {showKeyboard && (
         <div className="sticky bottom-0 z-20 -mx-2 rounded-t-md bg-gray-950/95 px-2 py-1" data-testid="keyboard-strip">
           <PianoKeyboard88 heightRatio={20} green={new Set(watching ? watchNotes : stepKeys)} red={wrongKeys} held={held} />

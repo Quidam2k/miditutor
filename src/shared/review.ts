@@ -70,6 +70,10 @@ export type ReviewEvent = EventBase & (
   | { kind: 'accept_request'; mark: string; proposal: string }
   /** "Try again" pressed on Pinocchio. */
   | { kind: 'recheck'; mark: string }
+  /** #9988: he tapped a note and picked a finger (null = remove), on either box. */
+  | { kind: 'fingering'; measure: number; staff: number; onset: number; midi: number; digit: string | null }
+  /** Solace wrote that fingering into the library score: it went from `before` to `after`. */
+  | { kind: 'fingered'; request: string; before: string; after: string }
   /** Solace couldn't apply an accept_request; `error` says why. */
   | { kind: 'request_failed'; mark: string; request: string; error: string }
 );
@@ -188,6 +192,11 @@ export function foldReview(events: ReviewEvent[], layout: Layout | null, current
         }
         break;
       }
+      case 'fingered':
+        // His own edit: the score changed, but his confirmed lines still stand.
+        pin(e.before);
+        lineage = e.after;
+        break;
       case 'reject': {
         const mark = marks.get(e.mark);
         if (mark && mark.status === 'open') mark.rejections.push(e.note ?? '');

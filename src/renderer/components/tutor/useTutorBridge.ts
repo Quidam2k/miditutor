@@ -19,6 +19,8 @@ interface TutorBridge {
   device: (d: unknown) => void;
   openPiece: () => Promise<{ title: string; musicxml: string } | null>;
   listPieces?: () => Promise<{ file: string; title: string; musicxml: string; trust?: PieceTrust; group?: PieceGroupRef }[]>;
+  writeScore?: (slug: string, musicxml: string) => Promise<void>;
+  reviewAppend?: (slug: string, event: Record<string, unknown>) => Promise<unknown>;
   saveMix?: (slug: string, mix: { harder: string; choice: MixChoice[]; musicxml: string; trust: PieceTrust }) => Promise<{ file: string }>;
   getHomework?: () => Promise<Homework | null>;
   onCommand: (cb: (cmd: RendererCommand) => void) => () => void;

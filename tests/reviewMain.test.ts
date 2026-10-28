@@ -313,3 +313,56 @@ describe.runIf(existsSync(PYTHON))('Pinocchio round trip', () => {
     expect(failed).toMatchObject({ mark, error: expect.stringMatching(/changed since this was checked/) });
   });
 });
+
+// #9988: a fingering tapped on Pinocchio is written into the library score by the desk
+// (scripts/set_fingering.py) and pushed back; his confirmed lines stand.
+describe.runIf(existsSync(PYTHON))('fingering from Pinocchio', () => {
+  const NOTE = (step: string, octave: number) =>
+    `<note><pitch><step>${step}</step><octave>${octave}</octave></pitch><duration>1</duration><staff>1</staff></note>`;
+  const FINGER_SCORE = '<?xml version="1.0"?><score-partwise><part-list><score-part id="P1"><part-name>P</part-name></score-part></part-list>' +
+    `<part id="P1"><measure number="1"><attributes><divisions>1</divisions></attributes>${NOTE('C', 4)}${NOTE('E', 4)}</measure></part></score-partwise>\n`;
+  let pin: string;
+
+  it('is applied on the desk, logged as fingered, pushed back, and keeps confirmed lines', async () => {
+    const fsha = createHash('sha256').update(FINGER_SCORE).digest('hex');
+    await writeFile(path.join(lib, 'tiny.musicxml'), FINGER_SCORE);
+    await writeFile(path.join(lib, 'review', 'tiny.layout.json'), JSON.stringify(layout({ score_sha256: fsha })));
+    pin = await mkdtemp(path.join(os.tmpdir(), 'pin-'));
+    for (const rel of ['tiny.musicxml', 'trust.json', 'review', 'review-pages']) {
+      await cp(path.join(lib, rel), path.join(pin, rel), { recursive: true });
+    }
+    const outbox = path.join(pin, 'review', 'outbox.jsonl');
+    const remote: Remote = {
+      outbox: () => readFile(outbox, 'utf8').catch(() => ''),
+      push: async (rels) => {
+        for (const rel of rels) await cp(path.join(lib, rel), path.join(pin, rel), { recursive: true });
+      },
+    };
+    const mirror = new Review({ library: pin, python: '', scripts: '', mirror: true });
+    // The real fingering scripts beside the same stand-ins the round trip above uses.
+    const scripts = path.join(lib, 'scripts');
+    await mkdir(scripts);
+    await writeFile(path.join(scripts, 'review_queue.py'), FAKE_QUEUE);
+    await writeFile(path.join(scripts, 'review_layout.py'), FAKE_LAYOUT);
+    await writeFile(path.join(lib, 'mode.txt'), 'ok');
+    for (const f of ['set_fingering.py', 'annotate_scan.py']) await cp(path.resolve('scripts', f), path.join(scripts, f));
+    const desk = new Review({ library: lib, python: PYTHON, scripts }, remote);
+    try {
+      await mirror.append('tiny', { kind: 'confirm_system', system: 1 });
+      await mirror.append('tiny', { kind: 'fingering', measure: 1, staff: 1, onset: 1, midi: 64, digit: '3' });
+      await expect(mirror.append('tiny', { kind: 'fingering', measure: 1, staff: 1, onset: 1, midi: 64, digit: '9' }))
+        .rejects.toThrow('bad fingering');
+      await desk.pull();
+      const xml = await readFile(path.join(lib, 'tiny.musicxml'), 'utf8');
+      expect(xml).toMatch(/<step>E<\/step>.*<fingering>3<\/fingering>/s);
+      expect(xml.match(/<fingering>/g)).toHaveLength(1);
+      const piece = await desk.piece('tiny');
+      expect(piece.events.filter((e) => e.kind === 'fingered')).toHaveLength(1);
+      expect(piece.state.confirmed[1]).toBeDefined();
+      await desk.pushDirty();
+      expect(await readFile(path.join(pin, 'tiny.musicxml'), 'utf8')).toBe(xml);
+    } finally {
+      await rm(pin, { recursive: true, force: true });
+    }
+  });
+});

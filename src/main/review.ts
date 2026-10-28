@@ -13,7 +13,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { Layout, MarkCheck, MarkState, Proposal, ReviewEvent, ReviewState, foldReview, markCheck } from '../shared/review';
+import { Layout, MarkCheck, MarkState, Proposal, ReviewEvent, ReviewState, foldReview, markCheck, orderEvents } from '../shared/review';
 import { scoreTitle, titleFromPath } from '../shared/pieceFiles';
 
 export interface ReviewConfig {
@@ -95,9 +95,9 @@ const RETRY_MS = 60_000;
 const BACKUP_DELAY_MS = 60_000;
 const PULL_MS = 2 * 60_000;
 const PUSH_DELAY_MS = 3_000;
-const EVENT_KINDS = new Set(['mark', 'confirm_system', 'accept', 'reject', 'withdraw', 'accept_request', 'recheck', 'request_failed']);
+const EVENT_KINDS = new Set(['mark', 'confirm_system', 'accept', 'reject', 'withdraw', 'accept_request', 'recheck', 'request_failed', 'fingering', 'fingered']);
 /** What he can add with append() (accept and the Pinocchio requests have their own paths). */
-const USER_KINDS = new Set(['mark', 'confirm_system', 'reject', 'withdraw']);
+const USER_KINDS = new Set(['mark', 'confirm_system', 'reject', 'withdraw', 'fingering']);
 /** What the desk takes from Pinocchio's outbox. */
 const PINOCCHIO_KINDS = new Set([...USER_KINDS, 'accept_request', 'recheck']);
 const TRUST_SOURCE = 'todd-review';
@@ -394,6 +394,13 @@ export class Review {
       if (typeof slug !== 'string' || !SLUG.test(slug) || !ids.every((i) => typeof i === 'string' && ID.test(i)) ||
           typeof event.kind !== 'string' || !PINOCCHIO_KINDS.has(event.kind) || typeof event.ts !== 'number') continue;
       if (!existsSync(this.scorePath(slug))) continue;
+      if (event.kind === 'fingering') {
+        try {
+          checkFingering(event);
+        } catch {
+          continue;
+        }
+      }
       // `received` is the desk's clock: "Try again" is answered by a check that ran after it (the Mac's clock may differ).
       incoming.set(slug, [...(incoming.get(slug) ?? []), { ...event, origin: 'pinocchio', received: Date.now() } as ReviewEvent]);
     }
@@ -439,6 +446,13 @@ export class Review {
     const piece = await this.piece(slug);
     const latest = await this.latestProposals(slug);
     const failed = new Set(piece.events.flatMap((e) => (e.kind === 'request_failed' ? [e.request] : [])));
+    // #9988: his fingerings from Pinocchio, in order, each once.
+    const done = new Set(piece.events.flatMap((e) => (e.kind === 'fingered' ? [e.request] : [])));
+    for (const e of orderEvents(piece.events)) {
+      if (e.kind !== 'fingering' || done.has(e.id) || failed.has(e.id) || this.attempted.has(e.id)) continue;
+      this.attempted.add(e.id);
+      await this.applyFingering(slug, e);
+    }
     for (const e of orderedRequests(piece.events)) {
       if (this.attempted.has(e.id) || failed.has(e.id)) continue;
       this.attempted.add(e.id);
@@ -454,6 +468,29 @@ export class Review {
         }])));
       }
     }
+  }
+
+  /**
+   * #9988: write one of his fingerings into the library score (scripts/set_fingering.py).
+   * Logged as `fingered` with the score's sha before and after, so his confirmed lines
+   * stand; a failure is logged as request_failed. The caller holds no lock.
+   */
+  private applyFingering(slug: string, e: Extract<ReviewEvent, { kind: 'fingering' }>): Promise<ReviewPiece> {
+    return this.serial(async () => {
+      const before = (await this.piece(slug)).sha;
+      const args = [this.scorePath(slug), e.measure, e.staff, e.onset, e.midi, e.digit ?? 'none'].map(String);
+      try {
+        await this.python('set_fingering.py', args);
+        const after = createHash('sha256').update(await fs.readFile(this.scorePath(slug))).digest('hex');
+        await this.writeEvents(slug, [{ kind: 'fingered', request: e.id, before, after, id: randomUUID(), origin: 'solace', ts: Date.now() }]);
+      } catch (err) {
+        await this.writeEvents(slug, [{
+          kind: 'request_failed', mark: '', request: e.id, error: (err as Error).message,
+          id: randomUUID(), origin: 'solace', ts: Date.now(),
+        }]);
+      }
+      return this.piece(slug);
+    });
   }
 
   /** Pinocchio's copy of this piece is behind (an event, a proposal): push it soon. */
@@ -557,6 +594,7 @@ export class Review {
       const piece = await this.piece(slug);
       const origin = this.mirror ? 'pinocchio' : 'solace';
       const event = { ...input, id: randomUUID(), origin, ts: Date.now() } as ReviewEvent;
+      if (event.kind === 'fingering') checkFingering(input);
       if (event.kind === 'confirm_system') {
         if (!piece.layout?.systems.some((s) => s.index === event.system && s.measures)) {
           throw new Error(`line ${event.system} can't be confirmed: the scan and the score don't line up there`);
@@ -566,6 +604,7 @@ export class Review {
       await this.writeEvents(slug, [event]);
       const next = await this.piece(slug);
       if (this.mirror) return next;
+      if (event.kind === 'fingering') return this.applyFingering(slug, event);
       await this.updateTrust(slug, next);
       return this.queueChecks(next);
     });
@@ -708,6 +747,15 @@ export class Review {
         { windowsHide: true, maxBuffer: 16 * 1024 * 1024 },
         (err, stdout, stderr) => (err ? reject(new Error(`${script}: ${stderr.trim() || err.message}`)) : resolve(stdout)));
     });
+  }
+}
+
+/** #9988: a fingering event's fields, before it reaches the log or the python script. */
+function checkFingering(e: Record<string, unknown>) {
+  const int = (v: unknown) => Number.isInteger(v) && (v as number) >= 0;
+  if (!int(e.measure) || !int(e.staff) || !int(e.midi) || typeof e.onset !== 'number' || !Number.isFinite(e.onset) ||
+      e.onset < 0 || !(e.digit === null || (typeof e.digit === 'string' && /^[1-5]$/.test(e.digit)))) {
+    throw new Error('bad fingering');
   }
 }
 

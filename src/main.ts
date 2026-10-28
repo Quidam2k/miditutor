@@ -126,6 +126,15 @@ const readMixes = async (dir: string): Promise<Record<string, SavedMix>> => {
 };
 
 // The renderer splices the mix (it has the DOM); main checks it belongs to an aligned song and writes it.
+// #9988: his fingering edit, written back over a score already in the pieces folder.
+const writeScore = async (slug: string, musicxml: string) => {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error('bad piece name');
+  const file = path.join(piecesDir(), `${slug}.musicxml`);
+  await fs.access(file);
+  if (!isScoreXml(musicxml)) throw new Error('not a MusicXML score');
+  await fs.writeFile(file, musicxml, 'utf8');
+};
+
 const saveMix = async (slug: string, mix: { harder: string; choice: unknown; musicxml: string; trust: unknown }) => {
   const dir = piecesDir();
   // Same view as the picker: no mix from a hidden or no_mix Harder version (#9794).
@@ -283,6 +292,7 @@ const startTutorApi = () => {
   });
   ipcMain.handle('pieces:list', listPieces);
   ipcMain.handle('pieces:saveMix', (_e, slug: string, mix) => saveMix(slug, mix));
+  ipcMain.handle('pieces:writeScore', (_e, slug: string, musicxml: string) => writeScore(slug, musicxml));
   // JP's newest lesson entry, written by scripts/homework_sync.py; null until the first sync (#5058).
   ipcMain.handle('homework:get', async () => {
     try {

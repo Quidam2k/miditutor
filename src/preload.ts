@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   listPieces: () => ipcRenderer.invoke('pieces:list'),
   // My mix (#9627): write <slug>-my-mix.musicxml + mixes.json; resolves { file }.
   saveMix: (slug: string, mix: unknown) => ipcRenderer.invoke('pieces:saveMix', slug, mix),
+  // #9988: overwrite <slug>.musicxml in the pieces folder (his fingering edit).
+  writeScore: (slug: string, musicxml: string) => ipcRenderer.invoke('pieces:writeScore', slug, musicxml),
   // ~/MidiTutor Pieces/homework.json (JP's newest lesson entry), or null.
   getHomework: () => ipcRenderer.invoke('homework:get'),
   // Take recorder (#9574): toggle, current status, and the piano audio rendered after Stop.
