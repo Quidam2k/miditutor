@@ -5,6 +5,8 @@ interface Props {
   green?: ReadonlySet<number>;
   red?: ReadonlySet<number>;
   held?: ReadonlySet<number>;
+  /** Text drawn on a key, e.g. the finger number for a lit key (#5153). */
+  labels?: ReadonlyMap<number, string>;
   heightRatio?: number;
   /** Lowest MIDI note drawn (default 21 = A0). */
   low?: number;
@@ -38,7 +40,7 @@ function layout(low: number, high: number): { keys: KeyGeom[]; width: number } {
 }
 
 /** Display-only 88-key piano that scales to its container; keys light red / green / held. */
-export function PianoKeyboard88({ green, red, held, low = 21, high = 108, heightRatio = 7 }: Props) {
+export function PianoKeyboard88({ green, red, held, labels, low = 21, high = 108, heightRatio = 7 }: Props) {
   const { keys, width } = useMemo(() => layout(low, high), [low, high]);
   const height = Math.round(width / heightRatio);
   const blackH = height * 0.62;
@@ -59,7 +61,21 @@ export function PianoKeyboard88({ green, red, held, low = 21, high = 108, height
       {keys.filter((k) => !k.white).map((k) => (
         <rect key={k.midi} x={k.x} y={0} width={BLACK_W} height={blackH} fill={fill(k)} stroke={OUTLINE} strokeWidth={0.4} />
       ))}
-      {middleC && <circle cx={middleC.x + WHITE_W / 2} cy={height - WHITE_W * 0.9} r={WHITE_W * 0.2} fill="#9ca3af" />}
+      {/* A finger number on middle C takes the dot's place. */}
+      {middleC && !labels?.has(60) && <circle cx={middleC.x + WHITE_W / 2} cy={height - WHITE_W * 0.9} r={WHITE_W * 0.2} fill="#9ca3af" />}
+      {labels && keys.filter((k) => labels.has(k.midi)).map((k) => (
+        <text
+          key={`label-${k.midi}`}
+          x={k.x + (k.white ? WHITE_W : BLACK_W) / 2}
+          y={k.white ? height - WHITE_W * 0.35 : blackH - BLACK_W * 0.3}
+          textAnchor="middle"
+          fontSize={k.white ? WHITE_W * 0.8 : BLACK_W * 0.9}
+          fontWeight="bold"
+          fill={k.white ? '#111827' : '#ffffff'}
+        >
+          {labels.get(k.midi)}
+        </text>
+      ))}
     </svg>
   );
 }

@@ -3,13 +3,16 @@ import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
 import { ExerciseType } from '../types/exercise';
 
+/** Strip = one long line of music, current beat centred (#5153); pages / scroll (#5137). */
+export type ScoreLayout = 'strip' | 'pages' | 'scroll';
+
 interface SettingsState {
   clef: Clef;
   exerciseType: ExerciseType;
   audioEnabled: boolean;
   showNoteNames: boolean;
   showKeyboard: boolean;
-  scoreLayout: 'scroll' | 'pages';
+  scoreLayout: ScoreLayout;
   /** Score-tab pieces pinned to the top of the list, by displayed title (#9610). */
   favoritePieces: string[];
   /** Version group slug -> the file of the version he last switched to (#9627). */
@@ -24,7 +27,7 @@ interface SettingsState {
   setAudioEnabled: (enabled: boolean) => void;
   setShowKeyboard: (show: boolean) => void;
   setShowNoteNames: (show: boolean) => void;
-  setScoreLayout: (layout: 'scroll' | 'pages') => void;
+  setScoreLayout: (layout: ScoreLayout) => void;
   toggleFavoritePiece: (title: string) => void;
   setPieceVersion: (slug: string, file: string) => void;
   countIntervalCorrect: () => void;
@@ -45,7 +48,7 @@ export const useSettingsStore = create<SettingsState>()(
       // He plays the notes himself; the tutor only sounds when he asks (#5059).
       audioEnabled: false,
       showNoteNames: false,
-      scoreLayout: 'scroll',
+      scoreLayout: 'strip',
       favoritePieces: [],
       pieceVersions: {},
       intervalGoal: { day: '', correct: 0 },
@@ -74,10 +77,13 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'miditutor-settings',
       // v1 (#5059): Audio now defaults OFF; turn off the ON every earlier install saved.
-      version: 1,
+      // v2 (#5153): he asked for the strip layout as the default; move him to it once.
+      version: 2,
       migrate: (persisted, version) => {
-        const state = persisted as Partial<SettingsState>;
-        return (version < 1 ? { ...state, audioEnabled: false } : state) as SettingsState;
+        let state = persisted as Partial<SettingsState>;
+        if (version < 1) state = { ...state, audioEnabled: false };
+        if (version < 2) state = { ...state, scoreLayout: 'strip' };
+        return state as SettingsState;
       },
     },
   ),

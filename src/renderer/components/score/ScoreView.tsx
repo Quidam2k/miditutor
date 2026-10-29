@@ -83,6 +83,8 @@ interface OsmdNote {
   /** Its voice entry; Timestamp is from the start of its measure (whole notes). */
   ParentVoiceEntry?: { Timestamp?: { RealValue: number } };
   Length?: { RealValue: number };
+  /** Its own <fingering>, when the score gives one. */
+  Fingering?: { value?: string } | null;
 }
 interface OsmdBox {
   AbsolutePosition: { x: number; y: number };
@@ -307,6 +309,30 @@ function pageSvgOf(osmd: OpenSheetMusicDisplay, container: HTMLElement, measureI
     ?? container.querySelector('svg');
 }
 
+// Strip (#5153): zoom so the one long system fills the height between toolbar and keyboard.
+// True when the zoom changed enough that the caller should render again.
+function fitStrip(osmd: OpenSheetMusicDisplay, container: HTMLElement, panel: HTMLElement | null): boolean {
+  const svg = container.querySelector('svg');
+  const free = panel ? panel.clientHeight - 32 : 0; // minus the panel's p-4
+  const drawn = svg?.getBoundingClientRect().height ?? 0;
+  if (!svg || free <= 0 || drawn <= 0) return false; // hidden behind the photo view
+  const zoom = Math.max(1, Math.min(1.8, (osmd.Zoom * free * 0.95) / drawn));
+  if (Math.abs(zoom - osmd.Zoom) / osmd.Zoom < 0.05) return false;
+  osmd.Zoom = zoom;
+  return true;
+}
+
+// The finger number written on each struck note of a step, by the key it lights.
+// A note with no <fingering> gets no label, never a guess.
+function fingersOf(notes: OsmdNote[] | undefined): Map<number, string> {
+  const out = new Map<number, string>();
+  for (const n of notes ?? []) {
+    const finger = n.Fingering?.value?.trim();
+    if (finger) out.set(toMidi(n), finger);
+  }
+  return out;
+}
+
 // Pixel box of every bar (all staves of one system), relative to its page's <svg>.
 function barBoxes(osmd: OpenSheetMusicDisplay): Map<number, Band> {
   const boxes = new Map<number, Band>();
@@ -368,6 +394,9 @@ export function ScoreView() {
   const watchRunRef = useRef(0);
   const watchBpmRef = useRef<number | null>(null);
   const layerRef = useRef<HTMLDivElement>(null);
+  // The white score panel; in the strip layout it is the sideways scroller.
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [cursorStep, setCursorStep] = useState(0);
   const markIdRef = useRef(0);
   const [marks, setMarks] = useState<PlayedMark[]>([]);
 
@@ -406,6 +435,9 @@ export function ScoreView() {
   const loopRequest = useTutorStore((s) => s.loopRequest);
   const scoreLayout = useSettingsStore((s) => s.scoreLayout);
   const setScoreLayout = useSettingsStore((s) => s.setScoreLayout);
+  const strip = scoreLayout === 'strip';
+  const stripRef = useRef(strip);
+  stripRef.current = strip;
 
   // Built-in pieces, his Pieces folder on disk, then anything pushed this session.
   // The folder is re-read when the window regains focus, so a synced file shows up.
@@ -624,6 +656,17 @@ export function ScoreView() {
     [fifths],
   );
 
+  // Strip (#5153): slide the music so the cursor sits in the middle of the panel.
+  const centerCursor = useCallback((behavior: ScrollBehavior) => {
+    const panel = panelRef.current;
+    const el = osmdRef.current?.cursor.cursorElement;
+    if (!stripRef.current || !panel || !el) return;
+    const c = el.getBoundingClientRect();
+    const p = panel.getBoundingClientRect();
+    const left = panel.scrollLeft + (c.left + c.width / 2) - (p.left + panel.clientLeft + panel.clientWidth / 2);
+    panel.scrollTo({ left, behavior });
+  }, []);
+
   // Move the visible cursor to step index i (relative moves; OSMD has no seek).
   const moveCursorTo = useCallback((i: number) => {
     const osmd = osmdRef.current;
@@ -636,7 +679,9 @@ export function ScoreView() {
       osmd.cursor.previous();
       cursorIndexRef.current--;
     }
-  }, []);
+    setCursorStep(cursorIndexRef.current);
+    centerCursor('smooth');
+  }, [centerCursor]);
 
   // Light the chord symbol once the keys struck under it (plus any still sounding)
   // hold all its notes: broken chords and arpeggios count. Passing chord=null
@@ -700,7 +745,8 @@ export function ScoreView() {
     f.reset();
     moveCursorTo(f.index);
     // The step walk at load leaves the view scrolled to the end; bring bar 1 back.
-    osmd.cursor.cursorElement?.scrollIntoView?.({ block: 'center' });
+    if (stripRef.current) centerCursor('auto');
+    else osmd.cursor.cursorElement?.scrollIntoView?.({ block: 'center' });
     setFeedback({ kind: 'idle' });
     setWrongCount(0);
     setLap(f.lap);
@@ -709,7 +755,7 @@ export function ScoreView() {
     exprNewPassRef.current = false;
     setExprFindings([]);
     syncUi();
-  }, [moveCursorTo, syncUi, trackChord]);
+  }, [moveCursorTo, centerCursor, syncUi, trackChord]);
 
   const buildFollower = useCallback((osmd: OpenSheetMusicDisplay) => {
     const { steps, notes, ringing, chords, restBefore } = extractSteps(osmd, handRef.current);
@@ -924,19 +970,31 @@ export function ScoreView() {
       autoResize: true,
       autoBeam: true,
       backend: 'svg',
-      drawTitle: true,
-      followCursor: true,
+      drawTitle: !strip,
+      followCursor: !strip,
       // Break lines where the printed page does (#5056), so the bar number at the start
       // of each line matches the boxed number on his page.
-      newSystemFromXML: true,
+      newSystemFromXML: !strip,
       ...(scoreLayout === 'pages' ? { pageFormat: 'A4_P', pageBackgroundColor: '#FFFFFF' } : {}),
+      // Strip (#5153): the whole piece on one line, slid by centerCursor, so there are no
+      // line starts to carry bar numbers: number every bar. The title is in the piece list.
+      ...(strip ? {
+        renderSingleHorizontalStaffline: true,
+        measureNumberInterval: 1,
+        drawSubtitle: false,
+        drawComposer: false,
+        drawLyricist: false,
+        drawCredits: false,
+      } : {}),
     });
     const render = osmd.render.bind(osmd);
     // autoResize calls this.render(), so the instance override covers re-layouts too.
     osmd.render = () => {
       if (scoreLayout === 'pages') fitPages(osmd, container);
       render();
+      if (strip && fitStrip(osmd, container, panelRef.current)) render();
       paintFingerings(osmd, container);
+      centerCursor('auto'); // a re-layout moves the cursor along the strip
     };
     osmdRef.current = osmd;
     const cursorObs = keepCursorHeight(container);
@@ -988,7 +1046,7 @@ export function ScoreView() {
       exprRef.current = null;
     };
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
-  }, [piece.id, piece.xml, scoreLayout, restart, buildFollower]);
+  }, [piece.id, piece.xml, scoreLayout, strip, restart, buildFollower, centerCursor]);
 
   // #9976: pedal lifts, with what was ringing only on the pedal just before.
   useEffect(
@@ -1163,6 +1221,34 @@ export function ScoreView() {
     };
   }, []);
 
+  // Strip: the free height also changes without a window resize (Keyboard, Original, a task
+  // panel), so re-fit the zoom when the panel itself changes height.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!strip || status !== 'ready' || !panel) return;
+    let lastHeight = panel.clientHeight;
+    let timer: number | undefined;
+    const obs = new ResizeObserver(() => {
+      if (Math.abs(panel.clientHeight - lastHeight) < 8) return;
+      lastHeight = panel.clientHeight;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const osmd = osmdRef.current;
+        const container = containerRef.current;
+        if (!osmd || !container || !fitStrip(osmd, container, panel)) return;
+        osmd.render();
+        setMarks([]);
+        chordLitRef.current = noChord();
+        setLayoutTick((t) => t + 1);
+      }, 300);
+    });
+    obs.observe(panel);
+    return () => {
+      obs.disconnect();
+      window.clearTimeout(timer);
+    };
+  }, [strip, status]);
+
   // --- manual cursor controls (re-sync the follower to wherever the cursor lands) ---
   // #9988: tap a notehead to give it a finger number.
   const onScoreTap = (ev: React.MouseEvent) => {
@@ -1249,7 +1335,8 @@ export function ScoreView() {
   const loopBtn = picking !== 'off' || loopBars ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : '';
 
   return (
-    <div className="flex w-full flex-col gap-3">
+    // Strip (#5153): exactly the screen's height; the music slides sideways, never the page.
+    <div className={`flex w-full flex-col gap-3 ${strip ? 'h-full min-h-0' : ''}`}>
       <TaskPanel />
       {/* Sticky so Restart / loop / piece stay on screen in full screen and when the
           cursor scrolls the score (#9480). */}
@@ -1370,14 +1457,26 @@ export function ScoreView() {
             ))}
           </div>
         )}
-        <button
-          data-testid="layout-toggle"
-          onClick={() => setScoreLayout(scoreLayout === 'scroll' ? 'pages' : 'scroll')}
-          title="Switch between two pages side by side and one long scrolling page"
-          className={btn}
-        >
-          {scoreLayout === 'scroll' ? 'Pages side by side' : 'Scroll'}
-        </button>
+        <div role="group" aria-label="Layout" data-testid="layout-toggle" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
+          {([
+            ['strip', 'Strip', 'One long line of music that slides along as you play'],
+            ['pages', 'Pages', 'Two pages side by side'],
+            ['scroll', 'Scroll', 'One long page that scrolls down'],
+          ] as const).map(([value, label, title]) => (
+            <button
+              key={value}
+              data-testid={`layout-${value}`}
+              aria-pressed={scoreLayout === value}
+              title={title}
+              onClick={() => setScoreLayout(value)}
+              className={`px-2 py-1 ${
+                scoreLayout === value ? 'bg-sky-600 text-white' : 'bg-gray-900 text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
         {scanLayout && (
           <button
             data-testid="original-toggle"
@@ -1533,16 +1632,21 @@ export function ScoreView() {
       {/* OSMD draws black notation, so give it a light panel. Blue heads = what he played
           right; red heads = a wrong note; red accidental = wrong sharp/flat/natural;
           yellow = the loop range. */}
+      {/* Strip: the panel is the sideways scroller; half-panel spacers either side let the
+          first and last beats sit in the middle too. */}
       <div
+        ref={panelRef}
         onClick={onScoreClick}
         className={`overflow-x-auto rounded-lg bg-white p-4 ring-4 transition-shadow ${
           wrongFlash ? 'ring-red-500' : 'ring-transparent'
-        } ${picking !== 'off' ? 'cursor-pointer' : ''}`}
+        } ${picking !== 'off' ? 'cursor-pointer' : ''} ${strip ? 'flex min-h-0 flex-1 overflow-y-auto' : ''}`}
+        style={strip ? { alignItems: 'safe center' } : undefined}
       >
         {showPhoto && piece.photo && (
           <img src={piece.photo} alt={`Photo of ${piece.label}`} className="mx-auto max-h-[70vh] w-auto max-w-full" />
         )}
-        <div ref={layerRef} className={showPhoto ? 'hidden' : 'relative'}>
+        {strip && !showPhoto && <div className="shrink-0 basis-1/2" />}
+        <div ref={layerRef} className={showPhoto ? 'hidden' : strip ? 'relative shrink-0' : 'relative'}>
           {/* OSMD makes each page as wide as this container, so it is half the panel and
               the second column of pages overflows into the other half on purpose. */}
           <div
@@ -1560,6 +1664,7 @@ export function ScoreView() {
           />
           <PlayedOverlay marks={marks} bands={bands} />
         </div>
+        {strip && !showPhoto && <div className="shrink-0 basis-1/2" />}
       </div>
       {fingerPick && (
         <div
@@ -1577,9 +1682,20 @@ export function ScoreView() {
           <button onClick={() => setFingerPick(null)} className="rounded px-2 py-1 text-sm text-gray-400">Cancel</button>
         </div>
       )}
+      {/* Opaque, so nothing of the score shows through it (#5153). The strip puts it under
+          the music edge to edge instead of over it. */}
       {showKeyboard && (
-        <div className="sticky bottom-0 z-20 -mx-2 rounded-t-md bg-gray-950/95 px-2 py-1" data-testid="keyboard-strip">
-          <PianoKeyboard88 heightRatio={20} green={new Set(watching ? watchNotes : stepKeys)} red={wrongKeys} held={held} />
+        <div
+          className={strip ? '-mx-6 -mb-6 shrink-0 bg-gray-950 px-1 py-1' : 'sticky bottom-0 z-20 -mx-2 rounded-t-md bg-gray-950 px-2 py-1'}
+          data-testid="keyboard-strip"
+        >
+          <PianoKeyboard88
+            heightRatio={20}
+            green={new Set(watching ? watchNotes : stepKeys)}
+            red={wrongKeys}
+            held={held}
+            labels={fingersOf(stepNotesRef.current[cursorStep])}
+          />
         </div>
       )}
     </div>

@@ -25,6 +25,12 @@ export function App() {
   useMidi();
   const [view, setView] = useState<View>('practice');
   const scoreLayout = useSettingsStore((s) => s.scoreLayout);
+  const strip = view === 'score' && scoreLayout === 'strip';
+  const mainWidth =
+    view === 'review' ? 'max-w-7xl'
+    : strip ? 'max-w-none min-h-0'
+    : view === 'score' && scoreLayout === 'pages' ? 'max-w-none'
+    : 'max-w-3xl';
   // Bumped on every click of Practice (or the title) so it always lands on the drill's start screen.
   const [practiceVisit, setPracticeVisit] = useState(0);
   const mainRef = useRef<HTMLElement>(null);
@@ -85,11 +91,10 @@ export function App() {
       {/* Main content */}
       <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center p-6 gap-6">
         {/* Review puts a full-width scan line beside the score: it gets the wide column. */}
-        {/* Pages side by side (#5137) needs the whole screen width. */}
+        {/* Pages side by side (#5137) and the strip (#5153) need the whole screen width; the
+            strip also fits the screen's height, so it never scrolls the page. */}
         <div
-          className={`w-full flex-1 ${
-            view === 'review' ? 'max-w-7xl' : view === 'score' && scoreLayout === 'pages' ? 'max-w-none' : 'max-w-3xl'
-          }`}
+          className={`w-full flex-1 ${mainWidth}`}
         >
           {view === 'practice' && <ExerciseView key={practiceVisit} />}
           {view === 'monitor' && <MidiMonitor />}
@@ -99,7 +104,7 @@ export function App() {
 
         {/* DEV-ONLY virtual keyboard: exercise the app without hardware/loopMIDI.
             import.meta.env.DEV is false in packaged builds, so this never ships. */}
-        {import.meta.env.DEV && (
+        {import.meta.env.DEV && !strip && (
           <div className="w-full max-w-3xl">
             <VirtualKeyboardDev />
           </div>

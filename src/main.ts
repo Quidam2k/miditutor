@@ -443,11 +443,13 @@ const startTutorApi = () => {
 };
 
 const hidden = process.env.MIDITUTOR_HIDDEN === '1';
+// MIDITUTOR_WINDOW_SIZE=1920x1080: test a TV-shaped window without showing one (#5153).
+const [winW, winH] = (process.env.MIDITUTOR_WINDOW_SIZE ?? '').split('x').map(Number);
 
 const createWindow = () => {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: winW || 1200,
+    height: winH || 800,
     minWidth: 900,
     minHeight: 600,
     title: 'MidiTutor',
