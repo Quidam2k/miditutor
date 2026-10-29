@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ScoreFollower } from '../src/renderer/engine/ScoreFollower';
+import { ScoreFollower, heldTies } from '../src/renderer/engine/ScoreFollower';
 import type { ScoreStep } from '../src/renderer/engine/ScoreFollower';
 
 function makeSteps(notes: number[][]): ScoreStep[] {
@@ -535,5 +535,27 @@ describe('ScoreFollower carry-over and ringing notes (#9480, #9481)', () => {
       // Once he has played on, a stray note from that chord is wrong again.
       expect(follower.noteOn(84, 1000)).toMatchObject({ kind: 'wrong', played: 84 });
     }
+  });
+});
+
+// #10136: Sorcerer's Apprentice bar 3. The tied Ab5 (80) and the LH C5 (72) / F4 (65)
+// continuations turn blue when he is still sounding them (pedal), never struck.
+describe('heldTies', () => {
+  const ties = [[], [], [80, 72, 65], [], [72]];
+  it('picks the continuations still sounding in the steps the cursor moved into', () => {
+    expect(heldTies(ties, 1, 2, new Set([80, 65]))).toEqual([
+      { step: 2, index: 0 },
+      { step: 2, index: 2 },
+    ]);
+  });
+  it('covers empty steps skipped on the way', () => {
+    expect(heldTies(ties, 2, 4, new Set([72]))).toEqual([{ step: 4, index: 0 }]);
+    expect(heldTies(ties, 0, 4, new Set([72]))).toEqual([
+      { step: 2, index: 1 },
+      { step: 4, index: 0 },
+    ]);
+  });
+  it('leaves a tie he let go of (pedal up) black', () => {
+    expect(heldTies(ties, 1, 2, new Set())).toEqual([]);
   });
 });

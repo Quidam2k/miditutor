@@ -30,6 +30,27 @@ export type FollowResult =
   | { kind: 'wrong'; index: number; played: number; expected: number[]; remaining: number[] }
   | { kind: 'ignored' };
 
+/**
+ * #10136: the tie continuations to colour as played when the cursor moves from step
+ * `from` to `to`: those in the steps it passed into (empty steps included) whose pitch
+ * he is still sounding (key down, or let go under the pedal). `ties[i]` = the MIDI
+ * pitches tied over into step i. After a lap wrap, pass from = the loop's first step - 1.
+ */
+export function heldTies(
+  ties: number[][],
+  from: number,
+  to: number,
+  sounding: ReadonlySet<number>,
+): Array<{ step: number; index: number }> {
+  const out: Array<{ step: number; index: number }> = [];
+  for (let step = from + 1; step <= to; step++) {
+    (ties[step] ?? []).forEach((midi, index) => {
+      if (sounding.has(midi)) out.push({ step, index });
+    });
+  }
+  return out;
+}
+
 export class ScoreFollower {
   readonly steps: ScoreStep[];
 

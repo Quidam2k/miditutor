@@ -11,7 +11,7 @@ import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { initAudio, playChord } from '../../audio/AudioEngine';
 import { PianoKeyboard88 } from '../homework/PianoKeyboard88';
 import { useMidiStore } from '../../store/useMidiStore';
-import { ScoreFollower, ScoreStep } from '../../engine/ScoreFollower';
+import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { PedalCoach } from '../../engine/PedalCoach';
 import { useTutorStore } from '../../store/useTutorStore';
@@ -152,6 +152,22 @@ function hintFor(osmd: OpenSheetMusicDisplay | null, stepNotes: OsmdNote[], midi
   return '';
 }
 
+// The steps covering bars first..last (a loop, #5004), or null if there are none.
+function stepRangeOf(steps: ScoreStep[], first: number, last: number): { first: number; last: number } | null {
+  const firstStep = steps.findIndex((st) => st.measure >= first);
+  let lastStep = -1;
+  steps.forEach((st, i) => {
+    if (st.measure <= last) lastStep = i;
+  });
+  return firstStep < 0 || lastStep < firstStep ? null : { first: firstStep, last: lastStep };
+}
+
+// Keys down plus keys let go under the sustain pedal (#9480).
+function soundingNow(): Set<number> {
+  const { held, pedal, pedalRinging } = useMidiStore.getState();
+  return new Set([...held, ...(pedal ? pedalRinging : [])]);
+}
+
 // First key signature in the file. Mid-piece key changes are not tracked (v1).
 const fifthsOf = (xml: string) => Number(/<fifths>\s*(-?\d+)\s*<\/fifths>/.exec(xml)?.[1] ?? 0);
 
@@ -193,12 +209,15 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
   steps: ScoreStep[];
   notes: OsmdNote[][];
   ringing: OsmdNote[][];
+  ties: OsmdNote[][];
   chords: (StepChord | null)[];
   restBefore: boolean[];
 } {
   const steps: ScoreStep[] = [];
   const notes: OsmdNote[][] = [];
   const ringing: OsmdNote[][] = [];
+  // #10136: tie continuations of the selected hand, coloured blue while he holds them.
+  const ties: OsmdNote[][] = [];
   const chords: (StepChord | null)[] = [];
   // #9976: the page is silent just before this step (a rest), so lifting the pedal is right.
   const restBefore: boolean[] = [];
@@ -226,6 +245,9 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
     });
     notes.push(under);
     ringing.push(ring);
+    ties.push(
+      all.filter((n) => !n.isRest() && !n.IsGraceNote && !isStruck(n) && (selectedStaff === null || staffOf(n) === selectedStaff)),
+    );
     const entries = cursor.iterator.CurrentVoiceEntries as unknown as OsmdVoiceEntry[];
     for (const c of entries.flatMap((ve) => ve.ParentSourceStaffEntry?.ChordContainers ?? [])) {
       const sym = c.RootPitch && chordSymbol(pcOf(c.RootPitch), c.ChordKind, c.BassPitch && pcOf(c.BassPitch));
@@ -242,7 +264,7 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
     cursor.next();
   }
   cursor.reset();
-  return { steps, notes, ringing, chords, restBefore };
+  return { steps, notes, ringing, ties, chords, restBefore };
 }
 
 // Colour a chord symbol's text (green = he is playing that chord), or reset it.
@@ -366,6 +388,7 @@ export function ScoreView() {
   const followerRef = useRef<ScoreFollower | null>(null);
   const stepNotesRef = useRef<OsmdNote[][]>([]);
   const ringNotesRef = useRef<OsmdNote[][]>([]);
+  const tieNotesRef = useRef<OsmdNote[][]>([]);
   const stepChordsRef = useRef<(StepChord | null)[]>([]);
   const stepRestRef = useRef<boolean[]>([]);
   // #9976: notices the pedal lifted before the next note (a gap in the sound).
@@ -376,6 +399,8 @@ export function ScoreView() {
   const [fingerPick, setFingerPick] = useState<{ x: number; y: number; target: FingerTarget; name: string } | null>(null);
   const [fingerMsg, setFingerMsg] = useState('');
   const resumeStepRef = useRef<number | null>(null);
+  // #10134: the loop he had set when a fingering edit re-rendered the score.
+  const resumeLoopRef = useRef<{ first: number; last: number } | null>(null);
   // The chord symbol in force where he is playing, the keys struck under it, and
   // whether they now cover it (then the symbol is green).
   const chordLitRef = useRef(noChord());
@@ -582,14 +607,14 @@ export function ScoreView() {
   // from the staff's top line plus the diatonic offset of the played pitch,
   // spelled against the key and what is written there.
   const placePlayed = useCallback(
-    (stepIdx: number, midi: number, wrong: boolean): PlayedMark | null => {
+    (stepIdx: number, midi: number, wrong: boolean, anchor?: OsmdNote): PlayedMark | null => {
       const osmd = osmdRef.current;
       const layer = layerRef.current;
       const step = followerRef.current?.steps[stepIdx];
       const stepNotes = stepNotesRef.current[stepIdx] ?? [];
       const ringNotes = ringNotesRef.current[stepIdx] ?? [];
       const container = containerRef.current;
-      if (!osmd || !layer || !step || !container || stepNotes.length === 0) return null;
+      if (!osmd || !layer || !step || !container || (stepNotes.length === 0 && !anchor)) return null;
       const svg = pageSvgOf(osmd, container, step.measure - 1);
       if (!svg) return null;
       try {
@@ -598,7 +623,7 @@ export function ScoreView() {
         // nearest written note. Pitch alone fails with two treble staves (#9481).
         // Held-over notes count only on an exact match; "nearest" uses the notes struck here.
         const candidates = [...stepNotes, ...ringNotes];
-        const exact = candidates.find((n) => toMidi(n) === midi);
+        const exact = anchor ?? candidates.find((n) => toMidi(n) === midi);
         const nearest = [...stepNotes].sort((a, b) => Math.abs(toMidi(a) - midi) - Math.abs(toMidi(b) - midi))[0];
         const staffIdx =
           staves < 2 ? 0 : exact ? staffOf(exact) : nearest ? staffOf(nearest) : clefForMidi(midi, staves) === 'bass' ? 1 : 0;
@@ -615,7 +640,8 @@ export function ScoreView() {
           const el = g?.getSVGGElement?.();
           return el?.querySelector('.vf-notehead') ?? el ?? null;
         };
-        const head = headOf(stepNotes.find((n) => staffOf(n) === staffIdx) ?? stepNotes[0]);
+        // A held tie (#10136) sits on its own head; a struck note on the step's head.
+        const head = headOf(anchor ?? stepNotes.find((n) => staffOf(n) === staffIdx) ?? stepNotes[0]);
         if (!head) return null;
 
         const layerRect = layer.getBoundingClientRect();
@@ -654,6 +680,20 @@ export function ScoreView() {
       }
     },
     [fifths],
+  );
+
+  // #10136: as the cursor moves from `from` to `to`, a tied note he is still sounding
+  // (key down or pedal) turns blue like a struck one. One he let go of stays black.
+  const paintHeldTies = useCallback(
+    (from: number, to: number) => {
+      const ties = tieNotesRef.current;
+      const picks = heldTies(ties.map((t) => t.map(toMidi)), from, to, soundingNow());
+      const added = picks
+        .map(({ step, index }) => placePlayed(step, toMidi(ties[step][index]), false, ties[step][index]))
+        .filter((m): m is PlayedMark => m !== null);
+      if (added.length) setMarks((m) => [...m, ...added]);
+    },
+    [placePlayed],
   );
 
   // Strip (#5153): slide the music so the cursor sits in the middle of the panel.
@@ -758,11 +798,12 @@ export function ScoreView() {
   }, [moveCursorTo, centerCursor, syncUi, trackChord]);
 
   const buildFollower = useCallback((osmd: OpenSheetMusicDisplay) => {
-    const { steps, notes, ringing, chords, restBefore } = extractSteps(osmd, handRef.current);
+    const { steps, notes, ringing, ties, chords, restBefore } = extractSteps(osmd, handRef.current);
     stepRestRef.current = restBefore;
     pedalCoachRef.current.reset();
     stepNotesRef.current = notes;
     ringNotesRef.current = ringing;
+    tieNotesRef.current = ties;
     stepChordsRef.current = chords;
     trackChord(null, []);
     chordLitRef.current = noChord();
@@ -837,13 +878,9 @@ export function ScoreView() {
       if (bars) {
         const first = Math.min(bars.first, bars.last);
         const last = Math.max(bars.first, bars.last);
-        const firstStep = f.steps.findIndex((st) => st.measure >= first);
-        let lastStep = -1;
-        f.steps.forEach((st, i) => {
-          if (st.measure <= last) lastStep = i;
-        });
-        if (firstStep < 0 || lastStep < firstStep) return;
-        f.setRange(firstStep, lastStep);
+        const range = stepRangeOf(f.steps, first, last);
+        if (!range) return;
+        f.setRange(range.first, range.last);
         setLoopBars({ first, last });
         reportEvent('loop', { firstBar: first, lastBar: last });
       } else {
@@ -1013,8 +1050,16 @@ export function ScoreView() {
         restart();
         // After his fingering edit re-renders the score, put him back where he was.
         const resume = resumeStepRef.current;
+        const resumeLoop = resumeLoopRef.current;
         resumeStepRef.current = null;
+        resumeLoopRef.current = null;
         if (resume !== null && followerRef.current) {
+          // Keep his loop too (#10134): Restart then still goes to the loop's first bar.
+          const range = resumeLoop && stepRangeOf(followerRef.current.steps, resumeLoop.first, resumeLoop.last);
+          if (range) {
+            followerRef.current.setRange(range.first, range.last);
+            setLoopBars(resumeLoop);
+          }
           followerRef.current.seek(resume);
           moveCursorTo(Math.min(followerRef.current.index, followerRef.current.steps.length - 1));
           syncUi();
@@ -1078,7 +1123,13 @@ export function ScoreView() {
       const keysDown = new Set(held);
       keysDown.delete(ev.note);
       const settled = f.settle(ev.timestamp, keysDown);
-      if (settled?.kind === 'advance' || settled?.kind === 'loop') moveCursorTo(settled.to);
+      if (settled?.kind === 'advance' || settled?.kind === 'loop') {
+        if (settled.kind === 'loop') setMarks([]);
+        moveCursorTo(settled.to);
+        paintHeldTies(settled.kind === 'loop' ? (f.range?.first ?? settled.to) - 1 : settled.from, settled.to);
+      } else if (settled?.kind === 'complete') {
+        paintHeldTies(settled.from, f.steps.length - 1);
+      }
       const idx = f.index;
       const step = f.steps[idx];
       // Spell against the step he played into, before the cursor moves on.
@@ -1145,6 +1196,7 @@ export function ScoreView() {
           break;
         case 'advance':
           moveCursorTo(result.to);
+          paintHeldTies(result.from, result.to);
           setFeedback({ kind: 'idle' });
           break;
         case 'loop': {
@@ -1158,14 +1210,17 @@ export function ScoreView() {
             if (beats > 0) setLapBpm(Math.round(beats / ((ev.timestamp - start) / 60000)));
           }
           lapStartRef.current = null;
-                setMarks([]);
+          setMarks([]);
           moveCursorTo(result.to);
+          // From the loop's first step: empty steps (ties only) there were skipped.
+          paintHeldTies((range?.first ?? result.to) - 1, result.to);
           setLap(result.lap);
           setFeedback({ kind: 'idle' });
           reportEvent('lap', { lap: result.lap });
           break;
         }
         case 'complete':
+          paintHeldTies(result.from, f.steps.length - 1);
           setFeedback({ kind: 'complete' });
           break;
         case 'wrong': {
@@ -1188,7 +1243,7 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, noteName, trackChord, reportExpression]);
+  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression]);
 
   // Key releases, for the length of a fermata on the last note. A wrong note shows
   // only while its key is down (#9630), so the score doesn't fill up with red.
@@ -1279,6 +1334,7 @@ export function ScoreView() {
       return;
     }
     resumeStepRef.current = cursorIndexRef.current;
+    resumeLoopRef.current = loopBars;
     setXmlEdits((e) => ({ ...e, [piece.id]: result.xml }));
     const what = digit ? `Finger ${digit} on ${pick.name}` : `Finger removed from ${pick.name}`;
     reportEvent('fingering', { ...pick.target, digit, name: pick.name });
