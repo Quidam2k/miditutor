@@ -204,3 +204,10 @@ export function orderUnpracticed<T extends { id: string }>(
     .sort((a, b) => (practiced[a.id] < practiced[b.id] ? -1 : practiced[a.id] > practiced[b.id] ? 1 : 0));
   return [...fresh, ...rest];
 }
+
+/** #10133: a piece the teacher says to practise backwards gets the Score tab's how-to. */
+export function backwardsHint(item: HomeworkItem): string | null {
+  if (item.kind !== 'piece') return null;
+  const text = [item.label, ...(item.notes ?? [])].join(' ');
+  return /backward/i.test(text) ? 'Score tab: Loop bars on your section, then Build backwards' : null;
+}

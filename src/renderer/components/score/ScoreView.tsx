@@ -14,6 +14,7 @@ import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { PedalCoach } from '../../engine/PedalCoach';
+import { chunkLabel, lapDone, parseTargets, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustBadge, trustMark } from '../../../shared/trust';
@@ -468,6 +469,13 @@ export function ScoreView() {
   const [loopBars, setLoopBars] = useState<{ first: number; last: number } | null>(null);
   const [lap, setLap] = useState(1);
   const [lapBpm, setLapBpm] = useState<number | null>(null);
+  // Build backwards (#10133): the loop runs chunk.start..chunk.last and grows a bar at a time.
+  const [chunk, setChunk] = useState<ChunkState | null>(null);
+  const chunkRef = useRef<ChunkState | null>(null);
+  chunkRef.current = chunk;
+  const lapWrongRef = useRef(0);
+  const backwardTargets = useSettingsStore((s) => s.backwardTargets);
+  const setBackwardTargets = useSettingsStore((s) => s.setBackwardTargets);
   const [bands, setBands] = useState<Band[]>([]);
   const [layoutTick, setLayoutTick] = useState(0);
   const loopRequest = useTutorStore((s) => s.loopRequest);
@@ -607,6 +615,9 @@ export function ScoreView() {
           : feedback,
       paceBpm: pace,
       loop: loopBars ? { firstBar: loopBars.first, lastBar: loopBars.last, lap, lastLapBpm: lapBpm } : null,
+      backwards: chunk
+        ? { firstBar: chunk.first, lastBar: chunk.last, startBar: chunk.start, clean: chunk.clean, need: chunk.need, done: chunk.done }
+        : null,
       pickingLoop: picking === 'off' ? null : picking,
       playedMarks: marks.length,
       wrongMarks: marks.filter((m) => m.wrong).length,
@@ -614,7 +625,7 @@ export function ScoreView() {
       expressionMarks: exprMarks.slice(0, 40),
       expression: exprFindings,
     });
-  }, [pieceName, pieceLabels, status, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings]);
+  }, [pieceName, pieceLabels, status, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -811,6 +822,7 @@ export function ScoreView() {
     setWrongCount(0);
     setLap(f.lap);
     lapStartRef.current = null;
+    lapWrongRef.current = 0;
     exprRef.current?.reset();
     exprNewPassRef.current = false;
     setExprFindings([]);
@@ -891,10 +903,12 @@ export function ScoreView() {
   }, [piece.id, piece.xml]);
 
   // --- loop range (#5004) ---
+  // keepChunk: Build backwards moving its own loop. Any other loop change ends it.
   const applyLoop = useCallback(
-    (bars: { first: number; last: number } | null) => {
+    (bars: { first: number; last: number } | null, keepChunk = false) => {
       const f = followerRef.current;
       if (!f) return;
+      if (!keepChunk) setChunk(null);
       if (bars) {
         const first = Math.min(bars.first, bars.last);
         const last = Math.max(bars.first, bars.last);
@@ -915,6 +929,40 @@ export function ScoreView() {
     },
     [restart],
   );
+
+  const chunkEvent = (c: ChunkState, extra: Record<string, unknown> = {}) =>
+    reportEvent('chunk', {
+      firstBar: c.first, lastBar: c.last, startBar: c.start, clean: c.clean, need: c.need, done: c.done, ...extra,
+    });
+
+  // Build backwards on his loop: start on its last bar. Off again: back to the whole loop.
+  const startBackwards = (bars: { first: number; last: number }) => {
+    const c = startChunk(bars.first, bars.last, parseTargets(useSettingsStore.getState().backwardTargets));
+    setChunk(c);
+    applyLoop({ first: c.start, last: c.last }, true);
+    chunkEvent(c, { on: true });
+  };
+  const toggleBackwards = () => {
+    if (chunk) {
+      chunkEvent(chunk, { on: false });
+      applyLoop({ first: chunk.first, last: chunk.last });
+    } else if (loopBars) startBackwards(loopBars);
+  };
+
+  // One lap wrapped. Clean (no wrong note in it) counts toward the chunk; enough of
+  // them and the loop starts a bar earlier. A wrong lap just doesn't count.
+  const chunkLap = useCallback(() => {
+    const wrong = lapWrongRef.current;
+    lapWrongRef.current = 0;
+    const c = chunkRef.current;
+    if (!c) return false;
+    const { state, grew } = lapDone(c, wrong, parseTargets(useSettingsStore.getState().backwardTargets));
+    chunkRef.current = state;
+    setChunk(state);
+    chunkEvent(state, { grew, wrongInLap: wrong });
+    if (grew) applyLoop({ first: state.start, last: state.last }, true);
+    return grew;
+  }, [applyLoop]);
 
   // Bar under a click on the score, from OSMD's bar layout.
   const barAt = (clientX: number, clientY: number): number | null => {
@@ -978,7 +1026,9 @@ export function ScoreView() {
   const ready = status === 'ready';
   useEffect(() => {
     if (!loopRequest || !ready) return;
-    applyLoop('clear' in loopRequest ? null : { first: loopRequest.firstBar, last: loopRequest.lastBar });
+    if ('clear' in loopRequest) applyLoop(null);
+    else if (loopRequest.backwards) startBackwards({ first: loopRequest.firstBar, last: loopRequest.lastBar });
+    else applyLoop({ first: loopRequest.firstBar, last: loopRequest.lastBar });
   }, [loopRequest?.seq, ready]);
 
   // Esc clears the loop (or cancels picking).
@@ -1073,6 +1123,8 @@ export function ScoreView() {
         const resumeLoop = resumeLoopRef.current;
         resumeStepRef.current = null;
         resumeLoopRef.current = null;
+        // A real piece switch ends Build backwards; a fingering/hold reload keeps it with the loop.
+        if (resume === null || !resumeLoop) setChunk(null);
         if (resume !== null && followerRef.current) {
           // Keep his loop too (#10134): Restart then still goes to the loop's first bar.
           const range = resumeLoop && stepRangeOf(followerRef.current.steps, resumeLoop.first, resumeLoop.last);
@@ -1147,6 +1199,8 @@ export function ScoreView() {
         if (settled.kind === 'loop') setMarks([]);
         moveCursorTo(settled.to);
         paintHeldTies(settled.kind === 'loop' ? (f.range?.first ?? settled.to) - 1 : settled.from, settled.to);
+        // The chunk grew a bar: the cursor jumped back, so this note was not aimed at it.
+        if (settled.kind === 'loop' && chunkLap()) return;
       } else if (settled?.kind === 'complete') {
         paintHeldTies(settled.from, f.steps.length - 1);
       }
@@ -1237,6 +1291,7 @@ export function ScoreView() {
           setLap(result.lap);
           setFeedback({ kind: 'idle' });
           reportEvent('lap', { lap: result.lap });
+          chunkLap();
           break;
         }
         case 'complete':
@@ -1245,6 +1300,7 @@ export function ScoreView() {
           break;
         case 'wrong': {
           setWrongCount((c) => c + 1);
+          lapWrongRef.current++;
           setFeedback({
             kind: 'wrong',
             played: result.played,
@@ -1263,7 +1319,7 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression]);
+  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap]);
 
   // Key releases, for the length of a fermata on the last note. A wrong note shows
   // only while its key is down (#9630), so the score doesn't fill up with red.
@@ -1639,6 +1695,28 @@ export function ScoreView() {
               Clear loop
             </button>
           )}
+          {loopBars && (
+            <button
+              onClick={toggleBackwards}
+              disabled={watching || (!chunk && loopBars.first === loopBars.last)}
+              className={`${btn} ${chunk ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+              title="Loop the last bar; after enough clean laps, add the bar before it, until the whole loop"
+              data-testid="build-backwards"
+            >
+              {chunk ? 'Backwards: on' : 'Build backwards'}
+            </button>
+          )}
+          {chunk && (
+            <label className="flex items-center gap-1 text-sm text-gray-300" title="Clean laps per chunk: first, then every later one">
+              Clean laps
+              <input
+                value={backwardTargets}
+                onChange={(e) => setBackwardTargets(e.target.value)}
+                className="w-14 rounded bg-gray-800 px-1 font-mono text-gray-100"
+                data-testid="backwards-targets"
+              />
+            </label>
+          )}
           {/* While it plays for him, the timer owns the cursor. */}
           <button onClick={() => manualMove(-1)} disabled={status !== 'ready' || watching} className={btn}>
             ◀ Prev
@@ -1681,6 +1759,11 @@ export function ScoreView() {
             <span className="text-yellow-300" data-testid="loop-status">
               Loop bars {loopBars.first}–{loopBars.last} · Lap <span className="font-mono">{lap}</span>
               {lapBpm && <span className="text-yellow-200/80"> (last lap ♩ = {lapBpm})</span>}
+            </span>
+          )}
+          {chunk && (
+            <span className="font-semibold text-yellow-300" data-testid="backwards-status">
+              {chunkLabel(chunk)}
             </span>
           )}
           {/* His live tempo, big enough to read from the bench (#8979). */}

@@ -21,6 +21,8 @@ interface SettingsState {
   intervalGoal: { day: string; correct: number };
   /** Homework item id -> local day he last finished it on the keyboard (#5058). */
   homeworkPracticed: Record<string, string>;
+  /** #10133 Build backwards: clean laps each chunk needs, e.g. "3,5" (3 first, then 5). */
+  backwardTargets: string;
 
   setClef: (clef: Clef) => void;
   setExerciseType: (type: ExerciseType) => void;
@@ -28,6 +30,7 @@ interface SettingsState {
   setShowKeyboard: (show: boolean) => void;
   setShowNoteNames: (show: boolean) => void;
   setScoreLayout: (layout: ScoreLayout) => void;
+  setBackwardTargets: (text: string) => void;
   toggleFavoritePiece: (title: string) => void;
   setPieceVersion: (slug: string, file: string) => void;
   countIntervalCorrect: () => void;
@@ -53,6 +56,7 @@ export const useSettingsStore = create<SettingsState>()(
       pieceVersions: {},
       intervalGoal: { day: '', correct: 0 },
       homeworkPracticed: {},
+      backwardTargets: '3,5',
 
       setClef: (clef) => set({ clef }),
       setShowKeyboard: (show) => set({ showKeyboard: show }),
@@ -60,6 +64,7 @@ export const useSettingsStore = create<SettingsState>()(
       setAudioEnabled: (enabled) => set({ audioEnabled: enabled }),
       setShowNoteNames: (show) => set({ showNoteNames: show }),
       setScoreLayout: (layout) => set({ scoreLayout: layout }),
+      setBackwardTargets: (text) => set({ backwardTargets: text }),
       toggleFavoritePiece: (title) =>
         set((s) => ({
           favoritePieces: s.favoritePieces.includes(title)

@@ -3,6 +3,7 @@ import {
   keyPitchClass,
   scaleOffsets,
   arpeggioOffsets,
+  backwardsHint,
   noteNames,
   startSequence,
   expectedNext,
@@ -149,5 +150,18 @@ describe('orderUnpracticed', () => {
     const items = [{ id: 'a' }, { id: 'b' }];
     orderUnpracticed(items, {});
     expect(items.map((i) => i.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('backwardsHint (#10133)', () => {
+  const piece = (notes: string[]) => ({ id: 'piece:x', kind: 'piece' as const, label: 'Sorcerer', source: '', notes });
+  it('a piece whose notes say backwards gets the Score tab how-to', () => {
+    expect(backwardsHint(piece(['bars 22-35, practise backwards']))).toBe(
+      'Score tab: Loop bars on your section, then Build backwards',
+    );
+  });
+  it('nothing for other pieces or other kinds', () => {
+    expect(backwardsHint(piece(['hands separately']))).toBeNull();
+    expect(backwardsHint({ id: 'task:b', kind: 'task', label: 'play it backwards', source: '' })).toBeNull();
   });
 });

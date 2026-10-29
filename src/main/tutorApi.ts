@@ -33,7 +33,7 @@ export type RendererCommand =
   | { type: 'clear-task' }
   | { type: 'piece'; title: string; musicxml: string; photo?: string }
   | { type: 'inject'; kind: 'noteon' | 'noteoff'; note: number; velocity: number }
-  | { type: 'loop'; firstBar: number; lastBar: number }
+  | { type: 'loop'; firstBar: number; lastBar: number; backwards?: boolean }
   | { type: 'clear-loop' }
   | { type: 'recording'; status: RecordingStatus }
   | { type: 'render-take'; id: string; events: TakeEvent[]; durationMs: number }
@@ -367,12 +367,14 @@ export class TutorApi {
       send({ file: path.basename(file), total: lines.length,
         entries: lines.slice(-tail).map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } }) });
     } else if (route === 'POST /loop') {
-      const { firstBar, lastBar } = await this.body(req);
+      const { firstBar, lastBar, backwards } = await this.body(req);
       if (!Number.isSafeInteger(firstBar) || !Number.isSafeInteger(lastBar) ||
           (firstBar as number) < 1 || (lastBar as number) < 1) {
         throw new HttpError(400, 'Expected firstBar and lastBar (1-based bar numbers)');
       }
-      this.opts.sendToRenderer({ type: 'loop', firstBar: firstBar as number, lastBar: lastBar as number });
+      // backwards (#10133): Build backwards on that loop, starting on its last bar.
+      this.opts.sendToRenderer({ type: 'loop', firstBar: firstBar as number, lastBar: lastBar as number,
+        ...(backwards === true ? { backwards: true } : {}) });
       send({ ok: true });
     } else if (route === 'DELETE /loop') {
       this.opts.sendToRenderer({ type: 'clear-loop' });

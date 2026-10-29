@@ -18,9 +18,9 @@ interface TutorState {
   /** Bumped when a piece is pushed, so the Score view selects it. */
   selectPieceId: string | null;
   /** A loop the API asked for (bars, 1-based); null = clear. `seq` makes repeats distinct. */
-  loopRequest: { seq: number; firstBar: number; lastBar: number } | { seq: number; clear: true } | null;
+  loopRequest: { seq: number; firstBar: number; lastBar: number; backwards?: boolean } | { seq: number; clear: true } | null;
   setTask: (task: Task | null) => void;
-  requestLoop: (bars: { firstBar: number; lastBar: number } | null) => void;
+  requestLoop: (bars: { firstBar: number; lastBar: number; backwards?: boolean } | null) => void;
   addPiece: (p: Omit<PushedPiece, 'id'>) => void;
 }
 

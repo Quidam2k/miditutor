@@ -149,7 +149,8 @@ def recent(seconds: float | None = None, limit: int = 50) -> dict:
     # Pedal, follower verdicts, loop/lap/piece changes (#9481) carry no plain note:
     # pass them through as-is. Velocity etc. stay in the raw /events.
     # invite-on/off/error (#5154): "Bring in the tutor" started, ended (button|idle) or failed.
-    feed_kinds = {"pedal", "follow", "loop", "lap", "piece", "screenshot",
+    # chunk (#10133): Build backwards progress (startBar, clean/need, grew, done).
+    feed_kinds = {"pedal", "follow", "loop", "lap", "chunk", "piece", "screenshot",
                   "invite-on", "invite-off", "invite-error"}
     notes = [e for e in events if "note" in e and e.get("kind") not in feed_kinds]
     feed = [{k: v for k, v in e.items() if k != "seq"} for e in events if e.get("kind") in feed_kinds]

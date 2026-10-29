@@ -4,7 +4,7 @@ import { useMidiStore } from '../../store/useMidiStore';
 import { useSettingsStore, localDay } from '../../store/useSettingsStore';
 import {
   Homework, HomeworkItem, ScaleType, SequenceState, TriadTarget,
-  arpeggioOffsets, expectedNext, keyPitchClass, matchesTriad, noteNames, orderUnpracticed,
+  arpeggioOffsets, backwardsHint, expectedNext, keyPitchClass, matchesTriad, noteNames, orderUnpracticed,
   playNote, scaleOffsets, startSequence, triadDisplayName, triadsFromGroups,
 } from '../../engine/Homework';
 
@@ -71,6 +71,11 @@ export function HomeworkExercise() {
           >
             <span className="text-gray-100">
               {item.kind === 'piece' ? `Piece: ${item.title ?? item.label} (open it in the Score tab)` : item.label}
+              {backwardsHint(item) && (
+                <span className="block text-sm text-yellow-300/90" data-testid="backwards-hint">
+                  {backwardsHint(item)}
+                </span>
+              )}
             </span>
             <span className={`text-sm ${last === today ? 'text-emerald-400' : 'text-gray-400'}`}>
               {last === today ? '✓ today' : last ? `last ${last}` : playable ? 'not yet' : ''}
