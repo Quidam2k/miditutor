@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import {
+  holdsOf,
   setFingering,
+  setHold,
   type Digit,
   type FingerTarget,
   type XmlImpl,
@@ -189,5 +191,48 @@ describe('setFingering', () => {
     };
     expect(setFingering('<', target, '3', broken))
       .toEqual({ ok: false, reason: 'parse error' });
+  });
+});
+
+// #10146: Sorcerer's Apprentice bar 3, the 8va A-flat JP has him hold on the pedal.
+describe('setHold / holdsOf', () => {
+  const ab6 = { measure: 2, staff: 1, onset: 3, midi: 92 };
+  const twoBars = `<score-partwise><part id="P1">
+    <measure number="2"><attributes><divisions>2</divisions></attributes>${note('C', 4).replace('<duration>4', '<duration>18')}</measure>
+    <measure number="3">${note('A', 5, '', '', '<alter>-1</alter>').replace('<duration>4', '<duration>6')}${note('A', 6, '<voice>1</voice><notations><slur type="start"/></notations><lyric><text>la</text></lyric>', '', '<alter>-1</alter>').replace('<duration>4', '<duration>3')}</measure>
+  </part></score-partwise>`;
+
+  it('adds a hold that holdsOf finds, after the lyric, keeping the slur', () => {
+    const result = setHold(twoBars, ab6, true, impl);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(holdsOf(result.xml, impl)).toEqual([ab6]);
+    expect(result.xml).toContain('<lyric><text>la</text></lyric><play><other-play type="miditutor">hold</other-play></play>');
+    expect(result.xml).toContain('<slur type="start"/>');
+  });
+
+  it('is idempotent and removes cleanly', () => {
+    const once = setHold(twoBars, ab6, true, impl);
+    if (!once.ok) throw new Error(once.reason);
+    const twice = setHold(once.xml, ab6, true, impl);
+    if (!twice.ok) throw new Error(twice.reason);
+    expect(twice.xml.match(/other-play/g)?.length).toBe(2); // open + close tag: one mark
+    const off = setHold(twice.xml, ab6, false, impl);
+    if (!off.ok) throw new Error(off.reason);
+    expect(off.xml).not.toContain('<play');
+    expect(holdsOf(off.xml, impl)).toEqual([]);
+  });
+
+  it('refuses a note that is not there', () => {
+    expect(setHold(twoBars, { ...ab6, midi: 80 }, true, impl)).toEqual({ ok: false, reason: 'no such note' });
+  });
+
+  it('keeps a play element that holds other things', () => {
+    const withPlay = twoBars.replace('<lyric>', '<play><mute>straight</mute></play><lyric>');
+    const on = setHold(withPlay, ab6, true, impl);
+    if (!on.ok) throw new Error(on.reason);
+    const off = setHold(on.xml, ab6, false, impl);
+    if (!off.ok) throw new Error(off.reason);
+    expect(off.xml).toContain('<play><mute>straight</mute></play>');
   });
 });

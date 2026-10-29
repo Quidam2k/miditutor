@@ -10,6 +10,8 @@ Default score: his Sorcerer's Apprentice in the library. It plays bars 1-4 throu
 only to strike it again), and checks that the cursor reaches bar 5 and that each tie
 continuation he passed got a blue mark (marks = keys struck + ties held).
 Run it with --release to let each key go at once: then no tie may turn blue.
+--hold (#10146) marks bar 3's 8va A-flat "hold" in a copy of the score (his file is not
+touched), as JP has him play it: the tutor must not ask for it, and it turns blue too.
 """
 from __future__ import annotations
 
@@ -80,11 +82,30 @@ def ties_before_bar(xml: str, bar: int) -> int:
     return count
 
 
+HOLD = '<play><other-play type="miditutor">hold</other-play></play>'
+
+
+def hold_bar3_ab6(xml: str) -> str:
+    """Mark bar 3's A-flat 6 (the 8va one) the way setHold does."""
+    bar = re.search(r'<measure[^>]*number="3".*?</measure>', xml, re.S)
+    notes = [m for m in re.finditer(r"<note\b.*?</note>", bar.group(0), re.S)
+             if re.search(r"<step>A</step>\s*<alter>-1</alter>\s*<octave>6</octave>", m.group(0))]
+    if len(notes) != 1:
+        sys.exit(f"expected one Ab6 in bar 3, found {len(notes)}")
+    note = notes[0].group(0)
+    marked = note.replace("</note>", HOLD + "</note>")
+    start = bar.start() + notes[0].start()
+    return xml[:start] + marked + xml[start + len(note):]
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     release = "--release" in sys.argv
+    hold = "--hold" in sys.argv
     score = Path(args[0]) if args else DEFAULT
     xml = score.read_text(encoding="utf-8")
+    if hold:
+        xml = hold_bar3_ab6(xml)
     for _ in range(60):
         try:
             state = tc.state()
@@ -109,11 +130,13 @@ def main() -> int:
 
     down: set[int] = set()
     struck = 0
+    asked_ab6_in_bar3 = False
     for _ in range(80):
         s = screen()
         if s.get("measure", 0) >= 5:
             break
         remaining = [midi_of(n) for n in s.get("remaining", [])]
+        asked_ab6_in_bar3 |= s.get("measure") == 3 and 92 in remaining
         if not remaining:
             sys.exit(f"nothing to play at bar {s.get('measure')}: {s}")
         for note in remaining:
@@ -138,7 +161,10 @@ def main() -> int:
     check(s.get("measure") == 5, "cursor reached bar 5", s.get("measure"))
     check(s.get("wrongCount") == 0, "no wrong notes", s.get("feedback"))
     painted = s.get("playedMarks", 0) - struck
-    expected = 0 if release else ties_before_bar(xml, 5)
+    # The held Ab6 itself and its tie into bar 4 ring on the Ab5 he holds.
+    expected = 0 if release else ties_before_bar(xml, 5) + (1 if hold else 0)
+    if hold:
+        check(not asked_ab6_in_bar3, "bar 3 never asks for the held Ab6")
     check(painted == expected, f"tie continuations painted blue = {expected}", f"got {painted} (marks {s.get('playedMarks')}, struck {struck})")
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0

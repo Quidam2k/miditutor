@@ -74,6 +74,23 @@ with sync_playwright() as p:
     page.wait_for_timeout(2500)
     check(page.locator("[data-testid=loop-status]").count() == 1, "loop kept after fingering edit")
 
+    # #10146: the same note gets "Hold"; tapped again it offers "Re-strike".
+    def tap():
+        page.mouse.click(target["x"], target["y"])
+        page.wait_for_selector("[data-testid=finger-picker]", timeout=5000)
+    tap()
+    toggle = page.locator("[data-testid=hold-toggle]")
+    check(toggle.inner_text() == "Hold (don't re-strike)", "picker offers Hold", toggle.inner_text())
+    toggle.click()
+    page.wait_for_timeout(2500)
+    tap()
+    check(toggle.inner_text() == "Re-strike", "held note offers Re-strike", toggle.inner_text())
+    toggle.click()
+    page.wait_for_timeout(2500)
+    tap()
+    check(toggle.inner_text() == "Hold (don't re-strike)", "hold removed", toggle.inner_text())
+    page.get_by_role("button", name="Cancel", exact=True).click()
+
     page.get_by_role("button", name="Restart", exact=True).click()
     page.wait_for_timeout(800)
     check(page.locator("[data-testid=loop-status]").count() == 1, "loop kept after Restart")

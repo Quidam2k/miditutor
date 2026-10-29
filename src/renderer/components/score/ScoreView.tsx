@@ -24,7 +24,7 @@ import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
 import { MixBuilder } from './MixBuilder';
 import { OriginalScan, useScanLayout } from './OriginalScan';
-import { setFingering, type Digit, type FingerTarget } from '../../../shared/fingering';
+import { holdsOf, setFingering, setHold, type Digit, type FingerTarget } from '../../../shared/fingering';
 import { ChordSymbol, chordSymbol, playsChord } from './chordSymbols';
 import {
   WrittenNote,
@@ -179,6 +179,14 @@ const toMidi = (n: OsmdNote) => n.halfTone + 12;
 const isStruck = (n: OsmdNote) =>
   !n.isRest() && !n.IsGraceNote && !(n.NoteTie && n.NoteTie.StartNote !== n);
 
+// Where a note sits, as the fingering / hold editors find it in the MusicXML.
+const targetOf = (n: OsmdNote, measure: number): FingerTarget | null => {
+  const onset = (n.ParentVoiceEntry?.Timestamp?.RealValue ?? NaN) * 4;
+  return Number.isFinite(onset) ? { measure, staff: staffOf(n) + 1, onset, midi: toMidi(n) } : null;
+};
+const sameTarget = (a: FingerTarget, b: FingerTarget) =>
+  a.measure === b.measure && a.staff === b.staff && Math.abs(a.onset - b.onset) < 1e-6 && a.midi === b.midi;
+
 // Tailwind's preflight sets `img { height: auto }`, which overrides the height
 // attribute OSMD puts on its cursor <img> and collapses it to 1px. Mirror the
 // attribute into an inline style whenever OSMD sets it (moves, re-renders).
@@ -205,7 +213,8 @@ function keepCursorHeight(container: HTMLElement): MutationObserver {
 // played note can be placed on the staff it is written on.
 // Also the chord symbol in force at each step: one printed at a step lasts until
 // the next one.
-function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'left'): {
+// #10146: notes he marked "hold" are not struck; like a tie, they ring on from before.
+function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'left', holds: FingerTarget[] = []): {
   steps: ScoreStep[];
   notes: OsmdNote[][];
   ringing: OsmdNote[][];
@@ -229,25 +238,29 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
   cursor.reset();
   for (let guard = 0; guard < 20000 && !cursor.iterator.EndReached; guard++) {
     const all = cursor.NotesUnderCursor() as unknown as OsmdNote[];
-    const struck = all.filter(isStruck);
+    const measure = cursor.iterator.CurrentMeasureIndex + 1;
+    const isHeld = (n: OsmdNote) => {
+      const at = holds.length ? targetOf(n, measure) : null;
+      return at !== null && holds.some((h) => sameTarget(h, at));
+    };
+    const struck = all.filter((n) => isStruck(n) && !isHeld(n));
     const under = struck.filter((n) => selectedStaff === null || staffOf(n) === selectedStaff);
     const other = struck.filter((n) => selectedStaff !== null && staffOf(n) !== selectedStaff);
     const beat = cursor.iterator.currentTimeStamp.RealValue * 4;
     active = active.filter((a) => a.end > beat + 1e-6);
     restBefore.push(steps.length > 0 && soundEnd < beat - 1e-6);
     // The other hand is optional, so playing its written notes is not wrong.
-    const ring = [...active.map((a) => a.note), ...all.filter((n) => !n.isRest() && !isStruck(n)), ...other];
+    const unstruck = all.filter((n) => !n.isRest() && (!isStruck(n) || isHeld(n)));
+    const ring = [...active.map((a) => a.note), ...unstruck, ...other];
     steps.push({
       notes: under.map(toMidi),
       beat,
-      measure: cursor.iterator.CurrentMeasureIndex + 1,
+      measure,
       ringing: [...new Set(ring.map(toMidi))],
     });
     notes.push(under);
     ringing.push(ring);
-    ties.push(
-      all.filter((n) => !n.isRest() && !n.IsGraceNote && !isStruck(n) && (selectedStaff === null || staffOf(n) === selectedStaff)),
-    );
+    ties.push(unstruck.filter((n) => !n.IsGraceNote && (selectedStaff === null || staffOf(n) === selectedStaff)));
     const entries = cursor.iterator.CurrentVoiceEntries as unknown as OsmdVoiceEntry[];
     for (const c of entries.flatMap((ve) => ve.ParentSourceStaffEntry?.ChordContainers ?? [])) {
       const sym = c.RootPitch && chordSymbol(pcOf(c.RootPitch), c.ChordKind, c.BassPitch && pcOf(c.BassPitch));
@@ -396,7 +409,7 @@ export function ScoreView() {
   const [pedalTip, setPedalTip] = useState('');
   const pedalTipTimerRef = useRef<number | undefined>(undefined);
   // #9988 tap-to-finger: the note he tapped, the message after, where to resume.
-  const [fingerPick, setFingerPick] = useState<{ x: number; y: number; target: FingerTarget; name: string } | null>(null);
+  const [fingerPick, setFingerPick] = useState<{ x: number; y: number; target: FingerTarget; name: string; held: boolean } | null>(null);
   const [fingerMsg, setFingerMsg] = useState('');
   const resumeStepRef = useRef<number | null>(null);
   // #10134: the loop he had set when a fingering edit re-rendered the score.
@@ -687,7 +700,14 @@ export function ScoreView() {
   const paintHeldTies = useCallback(
     (from: number, to: number) => {
       const ties = tieNotesRef.current;
-      const picks = heldTies(ties.map((t) => t.map(toMidi)), from, to, soundingNow());
+      const osmd = osmdRef.current;
+      // A held note under an 8va (#10146) rings as the pitch he holds where it is drawn.
+      const pitchesOf = (n: OsmdNote, sounding: Set<number>) => {
+        const shift = osmd ? shiftOf(osmd, n) : 0;
+        return shift && sounding.has(toMidi(n) - shift) ? toMidi(n) - shift : toMidi(n);
+      };
+      const sounding = soundingNow();
+      const picks = heldTies(ties.map((t) => t.map((n) => pitchesOf(n, sounding))), from, to, sounding);
       const added = picks
         .map(({ step, index }) => placePlayed(step, toMidi(ties[step][index]), false, ties[step][index]))
         .filter((m): m is PlayedMark => m !== null);
@@ -798,7 +818,7 @@ export function ScoreView() {
   }, [moveCursorTo, centerCursor, syncUi, trackChord]);
 
   const buildFollower = useCallback((osmd: OpenSheetMusicDisplay) => {
-    const { steps, notes, ringing, ties, chords, restBefore } = extractSteps(osmd, handRef.current);
+    const { steps, notes, ringing, ties, chords, restBefore } = extractSteps(osmd, handRef.current, holdsOf(piece.xml));
     stepRestRef.current = restBefore;
     pedalCoachRef.current.reset();
     stepNotesRef.current = notes;
@@ -1305,23 +1325,56 @@ export function ScoreView() {
   }, [strip, status]);
 
   // --- manual cursor controls (re-sync the follower to wherever the cursor lands) ---
-  // #9988: tap a notehead to give it a finger number.
+  // #9988: tap a notehead to give it a finger number, or (#10146) mark it "hold".
   const onScoreTap = (ev: React.MouseEvent) => {
     const osmd = osmdRef.current;
     const f = followerRef.current;
     if (!osmd || !f || watching || !(ev.target instanceof Element)) return;
+    const holds = holdsOf(piece.xml);
     for (let i = 0; i < f.steps.length; i++) {
-      for (const n of stepNotesRef.current[i] ?? []) {
+      // A held note is no longer struck, so look among the held-over notes too.
+      for (const n of [...(stepNotesRef.current[i] ?? []), ...(tieNotesRef.current[i] ?? [])]) {
         const g = osmd.EngravingRules.GNote(n as never) as unknown as OsmdGraphicalNote | undefined;
         if (!g?.getSVGGElement?.()?.contains(ev.target)) continue;
-        const onset = (n.ParentVoiceEntry?.Timestamp?.RealValue ?? NaN) * 4;
-        if (!Number.isFinite(onset)) return;
-        const target = { measure: f.steps[i].measure, staff: staffOf(n) + 1, onset, midi: toMidi(n) };
+        const target = targetOf(n, f.steps[i].measure);
+        if (!target) return;
         setFingerMsg('');
-        setFingerPick({ x: ev.clientX, y: ev.clientY, target, name: noteName(target.midi) });
+        const held = holds.some((h) => sameTarget(h, target));
+        setFingerPick({ x: ev.clientX, y: ev.clientY, target, name: noteName(target.midi), held });
         return;
       }
     }
+  };
+
+  // Re-render with the edited score where he is (loop kept, #10134).
+  const showEditedXml = (xml: string) => {
+    resumeStepRef.current = cursorIndexRef.current;
+    resumeLoopRef.current = loopBars;
+    setXmlEdits((e) => ({ ...e, [piece.id]: xml }));
+  };
+
+  // #10146: mark the picked note "hold, don't re-strike", or take the mark off.
+  const applyHold = (on: boolean) => {
+    const pick = fingerPick;
+    setFingerPick(null);
+    if (!pick) return;
+    const result = setHold(piece.xml, pick.target, on);
+    if (!result.ok) {
+      setFingerMsg(`Couldn't change that note: ${result.reason}`);
+      return;
+    }
+    showEditedXml(result.xml);
+    const what = on ? `${pick.name} is held from before, not struck again` : `${pick.name} is struck again`;
+    reportEvent('hold', { ...pick.target, on, name: pick.name });
+    const bridge = window.tutorBridge;
+    if (!scanSlug || !bridge?.writeScore) {
+      setFingerMsg(`${what} (this session only: the piece has no file to save to).`);
+      return;
+    }
+    void bridge
+      .writeScore(scanSlug, result.xml)
+      .then(() => setFingerMsg(`${what}: saved here (a re-sync from the desk would undo it).`))
+      .catch((err: unknown) => setFingerMsg(`${what}, but saving failed: ${err instanceof Error ? err.message : String(err)}`));
   };
 
   const applyFinger = (digit: Digit | null) => {
@@ -1333,9 +1386,7 @@ export function ScoreView() {
       setFingerMsg(`Couldn't change that note's finger: ${result.reason}`);
       return;
     }
-    resumeStepRef.current = cursorIndexRef.current;
-    resumeLoopRef.current = loopBars;
-    setXmlEdits((e) => ({ ...e, [piece.id]: result.xml }));
+    showEditedXml(result.xml);
     const what = digit ? `Finger ${digit} on ${pick.name}` : `Finger removed from ${pick.name}`;
     reportEvent('fingering', { ...pick.target, digit, name: pick.name });
     const bridge = window.tutorBridge;
@@ -1735,6 +1786,14 @@ export function ScoreView() {
             </button>
           ))}
           <button onClick={() => applyFinger(null)} title="Remove its finger number" className="rounded bg-gray-700 px-2 py-1 text-sm text-gray-200">×</button>
+          <button
+            onClick={() => applyHold(!fingerPick.held)}
+            title={fingerPick.held ? 'Play this note again here' : 'Keep it sounding from before (pedal or held key) instead of playing it again'}
+            className="rounded bg-sky-800 px-2 py-1 text-sm text-white hover:bg-sky-700"
+            data-testid="hold-toggle"
+          >
+            {fingerPick.held ? 'Re-strike' : "Hold (don't re-strike)"}
+          </button>
           <button onClick={() => setFingerPick(null)} className="rounded px-2 py-1 text-sm text-gray-400">Cancel</button>
         </div>
       )}
