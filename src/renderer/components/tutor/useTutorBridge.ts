@@ -1,6 +1,8 @@
 import { useEffect } from 'react';
 import { useMidiStore } from '../../store/useMidiStore';
 import { useTutorStore } from '../../store/useTutorStore';
+import { useSettingsStore } from '../../store/useSettingsStore';
+import { rememberRef } from '../score/lastPiece';
 import type { RendererCommand } from '../../../main/tutorApi';
 import type { RecordingStatus } from '../../../main/recorder';
 import type { InviteState } from '../../../main/invite';
@@ -114,6 +116,10 @@ export function useTutorBridge(onShowScore: () => void) {
           break;
         case 'piece':
           useTutorStore.getState().addPiece({ label: cmd.title, xml: cmd.musicxml, photo: cmd.photo });
+          // #10160: it's his last piece now, even if the Score tab mounts only after this.
+          useSettingsStore.getState().setLastPiece(
+            rememberRef(useTutorStore.getState().selectPieceId ?? '', cmd.title, !!cmd.musicxml),
+          );
           onShowScore();
           break;
       }

@@ -23,6 +23,10 @@ interface SettingsState {
   homeworkPracticed: Record<string, string>;
   /** #10133 Build backwards: clean laps each chunk needs, e.g. "3,5" (3 first, then 5). */
   backwardTargets: string;
+  /** #10160: the Score tab's piece at last look (id, and its title for a pushed piece). */
+  lastPiece: { id: string; label: string } | null;
+  /** #10162: the tab he was on, so a restart reopens it. */
+  lastView: string;
 
   setClef: (clef: Clef) => void;
   setExerciseType: (type: ExerciseType) => void;
@@ -31,6 +35,8 @@ interface SettingsState {
   setShowNoteNames: (show: boolean) => void;
   setScoreLayout: (layout: ScoreLayout) => void;
   setBackwardTargets: (text: string) => void;
+  setLastPiece: (piece: { id: string; label: string }) => void;
+  setLastView: (view: string) => void;
   toggleFavoritePiece: (title: string) => void;
   setPieceVersion: (slug: string, file: string) => void;
   countIntervalCorrect: () => void;
@@ -57,6 +63,8 @@ export const useSettingsStore = create<SettingsState>()(
       intervalGoal: { day: '', correct: 0 },
       homeworkPracticed: {},
       backwardTargets: '3,5',
+      lastPiece: null,
+      lastView: 'practice',
 
       setClef: (clef) => set({ clef }),
       setShowKeyboard: (show) => set({ showKeyboard: show }),
@@ -65,6 +73,8 @@ export const useSettingsStore = create<SettingsState>()(
       setShowNoteNames: (show) => set({ showNoteNames: show }),
       setScoreLayout: (layout) => set({ scoreLayout: layout }),
       setBackwardTargets: (text) => set({ backwardTargets: text }),
+      setLastPiece: (piece) => set({ lastPiece: piece }),
+      setLastView: (view) => set({ lastView: view }),
       toggleFavoritePiece: (title) =>
         set((s) => ({
           favoritePieces: s.favoritePieces.includes(title)

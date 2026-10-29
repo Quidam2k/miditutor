@@ -14,6 +14,7 @@ import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { PedalCoach } from '../../engine/PedalCoach';
+import { rememberRef, resolvePieceId } from './lastPiece';
 import { chunkLabel, lapDone, parseTargets, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
@@ -440,6 +441,8 @@ export function ScoreView() {
   const [marks, setMarks] = useState<PlayedMark[]>([]);
 
   const [pieceId, setPieceId] = useState(PIECES[0].id);
+  // #10160: the piece he had last time, picked once the Pieces folder has been read.
+  const [startResolved, setStartResolved] = useState(false);
   // 'photo': a pushed piece with no readable score yet, only its photo to show.
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'photo'>('loading');
   const [view, setView] = useState<'score' | 'photo'>('score');
@@ -488,11 +491,15 @@ export function ScoreView() {
   // Built-in pieces, his Pieces folder on disk, then anything pushed this session.
   // The folder is re-read when the window regains focus, so a synced file shows up.
   const [folder, setFolder] = useState<Piece[]>([]);
+  const [folderLoaded, setFolderLoaded] = useState(false);
   // Re-read the folder now (after a mix is saved), whatever it looked like before.
   const reloadFolderRef = useRef<(() => Promise<void>) | undefined>(undefined);
   useEffect(() => {
     const list = window.tutorBridge?.listPieces;
-    if (!list) return;
+    if (!list) {
+      setFolderLoaded(true);
+      return;
+    }
     let lastKey = '';
     const refresh = () =>
       list()
@@ -512,7 +519,8 @@ export function ScoreView() {
             })),
           );
         })
-        .catch((err) => console.warn('[pieces] list failed:', err));
+        .catch((err) => console.warn('[pieces] list failed:', err))
+        .finally(() => setFolderLoaded(true));
     reloadFolderRef.current = () => {
       lastKey = '';
       return refresh();
@@ -549,8 +557,23 @@ export function ScoreView() {
   const favoritePieces = pieces.filter((p) => favorites.includes(p.label));
   const otherPieces = pieces.filter((p) => !favorites.includes(p.label));
   useEffect(() => {
-    if (selectPieceId) setPieceId(selectPieceId);
+    if (!selectPieceId) return;
+    setPieceId(selectPieceId);
+    setStartResolved(true);
   }, [selectPieceId]);
+  // Missing (deleted or renamed): today's default, quietly.
+  const startChoice = startResolved
+    ? pieceId
+    : resolvePieceId(useSettingsStore.getState().lastPiece, allPieces, folderLoaded, PIECES[0].id);
+  useEffect(() => {
+    if (startResolved || startChoice === 'wait') return;
+    setPieceId(startChoice);
+    setStartResolved(true);
+  }, [startResolved, startChoice]);
+  const setLastPiece = useSettingsStore((s) => s.setLastPiece);
+  useEffect(() => {
+    if (startResolved && onScreen) setLastPiece(rememberRef(onScreen.id, onScreen.label, !!onScreen.xml));
+  }, [startResolved, onScreen?.id, onScreen?.label, setLastPiece]);
   // #9988: his fingering edits this session, by piece id (the file is saved too).
   const [xmlEdits, setXmlEdits] = useState<Record<string, string>>({});
   const listed = onScreen ?? PIECES[0];
@@ -1066,6 +1089,11 @@ export function ScoreView() {
     const container = containerRef.current;
     if (!container) return;
     setStaffCount(0);
+    // #10160: don't flash the default piece while his last one is still being found.
+    if (!startResolved) {
+      setStatus('loading');
+      return;
+    }
     if (!piece.xml) {
       setStatus('photo');
       return;
@@ -1163,7 +1191,7 @@ export function ScoreView() {
       exprRef.current = null;
     };
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
-  }, [piece.id, piece.xml, scoreLayout, strip, restart, buildFollower, centerCursor]);
+  }, [piece.id, piece.xml, scoreLayout, strip, restart, buildFollower, centerCursor, startResolved]);
 
   // #9976: pedal lifts, with what was ringing only on the pedal just before.
   useEffect(

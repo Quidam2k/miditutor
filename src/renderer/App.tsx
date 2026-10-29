@@ -23,7 +23,13 @@ const REVIEW_TAB = { id: 'review' as const, label: 'Review' };
 
 export function App() {
   useMidi();
-  const [view, setView] = useState<View>('practice');
+  // #10162: a restart reopens the tab he left (Review is desk-only, so not that one).
+  const [view, setView] = useState<View>(() => {
+    const last = useSettingsStore.getState().lastView;
+    return last === 'monitor' || last === 'score' ? last : 'practice';
+  });
+  const setLastView = useSettingsStore((s) => s.setLastView);
+  useEffect(() => setLastView(view), [view, setLastView]);
   const scoreLayout = useSettingsStore((s) => s.scoreLayout);
   const strip = view === 'score' && scoreLayout === 'strip';
   const mainWidth =
