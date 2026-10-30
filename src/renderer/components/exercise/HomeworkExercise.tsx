@@ -5,8 +5,9 @@ import { useSettingsStore, localDay } from '../../store/useSettingsStore';
 import {
   Homework, HomeworkItem, ScaleType, SequenceState, TriadTarget,
   arpeggioOffsets, backwardsHint, expectedNext, keyPitchClass, matchesTriad, noteNames, orderUnpracticed,
-  playNote, scaleOffsets, startSequence, triadDisplayName, triadsFromGroups,
+  playNote, scaleOffsets, startSequence, triadDisplayName, triadsFromGroups, writtenFingering,
 } from '../../engine/Homework';
+import { scaleFingers } from '../../engine/ScaleFingering';
 
 const NEXT_DELAY = 1200;
 const mod12 = (n: number) => ((n % 12) + 12) % 12;
@@ -98,11 +99,11 @@ function ItemDrill({ item, onBack }: { item: HomeworkItem; onBack: () => void })
   );
 }
 
-/** Scale or arpeggio: one octave up and down from any octave, right hand then left hand. */
+/** Scale (two octaves) or arpeggio (one) up and down from any octave, right hand then left hand. */
 function SequenceDrill({ item }: { item: HomeworkItem }) {
   const choices = item.kind === 'scale' ? scaleChoices(item) : [];
-  // Several types: start on harmonic, the one JP paired with natural for A minor (Jarvis, #9661).
-  const [type, setType] = useState<ScaleType>(choices.includes('harmonic') ? 'harmonic' : choices[0] ?? 'major');
+  // Several types: start on natural, with the others a click away (#10130).
+  const [type, setType] = useState<ScaleType>(choices.includes('natural') ? 'natural' : choices[0] ?? 'major');
   if (item.kind === 'arpeggio') return <SequenceRun item={item} offsets={arpeggioOffsets(item.quality ?? 'major')} title={item.label} />;
   const title = type === 'major' ? item.label : `${item.label} (${type})`;
   return (
@@ -125,12 +126,18 @@ function SequenceDrill({ item }: { item: HomeworkItem }) {
           ))}
         </div>
       )}
-      <SequenceRun key={type} item={item} offsets={scaleOffsets(type)} title={title} />
+      <SequenceRun key={type} item={item} offsets={scaleOffsets(type)} title={title} type={type} />
     </div>
   );
 }
 
-function SequenceRun({ item, offsets: initial, title }: { item: HomeworkItem; offsets: number[]; title: string }) {
+function SequenceRun({ item, offsets: initial, title, type }: {
+  item: HomeworkItem;
+  offsets: number[];
+  title: string;
+  /** Scales only: picks the standard fingering. */
+  type?: ScaleType;
+}) {
   // Frozen: a new array identity would re-run the note effect, whose cleanup cancels the hand-change timer.
   const [offsets] = useState(initial);
   const key = item.key ?? 'C';
@@ -187,7 +194,10 @@ function SequenceRun({ item, offsets: initial, title }: { item: HomeworkItem; of
   const names = noteNames(key, offsets);
   const expected = hand !== 'done' ? expectedNext(seq, tonicPc) : [];
   const red = new Set([...held].filter((n) => !okNotes.has(n) && !expected.includes(n)));
-  const fingering = item.fingering?.[hand === 'left' ? 'LH' : 'RH'];
+  const handKey = hand === 'left' ? 'LH' : 'RH';
+  // JP's text wins. It won't line up note for note, so it replaces the numbers rather than joining them.
+  const fingering = writtenFingering(item, handKey);
+  const fingers = !fingering && type ? scaleFingers(key, type, handKey) : null;
 
   return (
     <div className="flex flex-col items-center gap-4 w-full">
@@ -195,13 +205,19 @@ function SequenceRun({ item, offsets: initial, title }: { item: HomeworkItem; of
       <p className="text-gray-200 text-lg">
         {hand === 'done'
           ? 'Both hands done. ✓'
-          : `${hand === 'right' ? 'Right' : 'Left'} hand: up and down one octave, starting on any ${key}.`}
+          : `${hand === 'right' ? 'Right' : 'Left'} hand: up and down ${type ? 'two octaves' : 'one octave'}, starting on any ${key}.`}
       </p>
-      {fingering && hand !== 'done' && <p className="text-gray-300">Fingering: {fingering}</p>}
-      <div className="flex gap-2 text-lg font-mono">
+      {fingering && hand !== 'done' && <p className="text-gray-300" data-testid="jp-fingering">JP's fingering: {fingering}</p>}
+      {fingers && hand !== 'done' && (
+        <p className="text-sm text-gray-400" data-testid="standard-fingering">
+          Standard fingering, not JP's. The number under each note is the finger; 1 is the thumb.
+        </p>
+      )}
+      <div className="flex flex-wrap justify-center gap-x-2 gap-y-1 text-lg font-mono">
         {names.map((n, i) => (
-          <span key={i} className={i < seq.index ? 'text-emerald-400' : i === seq.index ? 'text-white underline' : 'text-gray-400'}>
+          <span key={i} data-testid="scale-note" className={`flex flex-col items-center ${i < seq.index ? 'text-emerald-400' : i === seq.index ? 'text-white underline' : 'text-gray-400'}`}>
             {n}
+            {fingers && hand !== 'done' && <span className="text-sm no-underline" data-testid="scale-finger">{fingers[i]}</span>}
           </span>
         ))}
       </div>

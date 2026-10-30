@@ -12,6 +12,8 @@ import {
   triadDisplayName,
   matchesTriad,
   orderUnpracticed,
+  writtenFingering,
+  type HomeworkItem,
   type SequenceState,
 } from '../src/renderer/engine/Homework';
 
@@ -23,16 +25,32 @@ describe('scales', () => {
     expect(keyPitchClass('Cb')).toBe(11);
   });
 
-  it('major goes up and down in 15 notes', () => {
-    expect(scaleOffsets('major')).toEqual([0, 2, 4, 5, 7, 9, 11, 12, 11, 9, 7, 5, 4, 2, 0]);
+  it('one octave of major goes up and down in 15 notes', () => {
+    expect(scaleOffsets('major', 1)).toEqual([0, 2, 4, 5, 7, 9, 11, 12, 11, 9, 7, 5, 4, 2, 0]);
+  });
+
+  it('scales default to two octaves: 29 notes, top tonic once', () => {
+    const offsets = scaleOffsets('major');
+    expect(offsets).toHaveLength(29);
+    expect(offsets[14]).toBe(24);
+    expect(offsets.slice(0, 15)).toEqual([0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 17, 19, 21, 23, 24]);
+    expect(offsets[28]).toBe(0);
   });
 
   it('harmonic minor keeps its raised seventh both ways', () => {
-    expect(scaleOffsets('harmonic')).toEqual([0, 2, 3, 5, 7, 8, 11, 12, 11, 8, 7, 5, 3, 2, 0]);
+    expect(scaleOffsets('harmonic', 1)).toEqual([0, 2, 3, 5, 7, 8, 11, 12, 11, 8, 7, 5, 3, 2, 0]);
   });
 
   it('melodic minor descends as natural minor', () => {
-    expect(scaleOffsets('melodic')).toEqual([0, 2, 3, 5, 7, 9, 11, 12, 10, 8, 7, 5, 3, 2, 0]);
+    expect(scaleOffsets('melodic', 1)).toEqual([0, 2, 3, 5, 7, 9, 11, 12, 10, 8, 7, 5, 3, 2, 0]);
+    expect(scaleOffsets('melodic').slice(14)).toEqual([24, 22, 20, 19, 17, 15, 14, 12, 10, 8, 7, 5, 3, 2, 0]);
+  });
+
+  it('finds JP\'s written fingering under the keys homework_sync writes', () => {
+    const item = { id: 'x', kind: 'arpeggio', label: 'x', source: 'x', fingering: { 'RH arp': '123 123 5' } } as HomeworkItem;
+    expect(writtenFingering(item, 'RH')).toBe('123 123 5');
+    expect(writtenFingering(item, 'LH')).toBeNull();
+    expect(writtenFingering({ ...item, fingering: undefined }, 'RH')).toBeNull();
   });
 
   it('arpeggios', () => {
@@ -82,7 +100,14 @@ describe('sequence follower', () => {
     expect(r.state.mistakes).toBe(1);
   });
 
-  it('finishes after 15 notes', () => {
+  it('a tonic too high for two octaves is not a start', () => {
+    const s = startSequence(offsets);
+    expect(expectedNext(s, E)).not.toContain(100); // E7 + 24 is off the keyboard
+    expect(expectedNext(s, E)).toContain(76);
+    expect(playNote(s, 100, E).ok).toBe(false);
+  });
+
+  it('finishes after 29 notes', () => {
     let state = startSequence(offsets);
     let last = { ok: false, done: false };
     for (const o of offsets) {
@@ -92,7 +117,7 @@ describe('sequence follower', () => {
     }
     expect(last.ok).toBe(true);
     expect(last.done).toBe(true);
-    expect(state.index).toBe(15);
+    expect(state.index).toBe(29);
     expect(expectedNext(state, E)).toEqual([]);
   });
 });

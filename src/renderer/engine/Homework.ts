@@ -63,13 +63,19 @@ export function scaleSteps(type: ScaleType): { up: number[]; down: number[] } {
   }
 }
 
-/** Offsets from the tonic for a full up-and-down pass (top tonic once), e.g. 15 notes. */
-export function scaleOffsets(type: ScaleType): number[] {
+/** Offsets from the tonic for a full up-and-down pass (top tonic once): 29 notes over JP's two octaves. */
+export function scaleOffsets(type: ScaleType, octaves = 2): number[] {
   const { up, down } = scaleSteps(type);
   const offsets = [0];
-  for (const s of up) offsets.push(offsets[offsets.length - 1] + s);
-  for (const s of down) offsets.push(offsets[offsets.length - 1] - s);
+  for (let i = 0; i < octaves; i++) for (const s of up) offsets.push(offsets[offsets.length - 1] + s);
+  for (let i = 0; i < octaves; i++) for (const s of down) offsets.push(offsets[offsets.length - 1] - s);
   return offsets;
+}
+
+/** JP's written fingering for one hand: homework_sync.py keys it "RH scale", "LH arp" and so on. */
+export function writtenFingering(item: HomeworkItem, hand: 'RH' | 'LH'): string | null {
+  const found = Object.entries(item.fingering ?? {}).find(([k]) => k === hand || k.startsWith(`${hand} `));
+  return found ? found[1] : null;
 }
 
 /** Offsets for a one-octave arpeggio up and back down. */
@@ -107,12 +113,15 @@ export function startSequence(offsets: number[]): SequenceState {
   return { offsets, base: null, index: 0, mistakes: 0 };
 }
 
+/** A tonic he can start on: the whole run has to fit on the 88 keys. */
+const fitsKeyboard = (s: SequenceState, midi: number): boolean => midi + Math.max(...s.offsets) <= 108;
+
 /** MIDI numbers that would be accepted next (any-octave tonic to start; [] when done). */
 export function expectedNext(s: SequenceState, tonicPc: number): number[] {
   if (s.index >= s.offsets.length) return [];
   if (s.base === null) {
     const all: number[] = [];
-    for (let m = 21; m <= 108; m++) if (m % 12 === tonicPc) all.push(m);
+    for (let m = 21; m <= 108; m++) if (m % 12 === tonicPc && fitsKeyboard(s, m)) all.push(m);
     return all;
   }
   return [s.base + s.offsets[s.index]];
@@ -127,7 +136,7 @@ export function playNote(
   const finished = (st: SequenceState): boolean => st.index === st.offsets.length;
   if (finished(s)) return { state: s, ok: false, done: true };
   if (s.base === null) {
-    if (midi % 12 === tonicPc) {
+    if (midi % 12 === tonicPc && fitsKeyboard(s, midi)) {
       const state = { ...s, base: midi, index: 1 };
       return { state, ok: true, done: finished(state) };
     }
