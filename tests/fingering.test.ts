@@ -8,7 +8,35 @@ import {
   type FingerTarget,
   type XmlImpl,
 } from '../src/shared/fingering';
-import { nextFinger, prevPlayable, stepOfBar } from '../src/renderer/components/score/noteEdit';
+import { fingersLowToHigh, nextFinger, prevPlayable, stepOfBar } from '../src/renderer/components/score/noteEdit';
+
+describe('fingersLowToHigh (#10256)', () => {
+  type Mark = { finger: boolean; pitch?: number; label: string };
+  const sort = (marks: Mark[]) => {
+    fingersLowToHigh(marks, (m) => m.finger, (m) => m.pitch);
+    return marks.map((m) => m.label);
+  };
+  const f = (label: string, pitch?: number): Mark => ({ finger: true, pitch, label });
+
+  it('puts a chord written high first low to high', () => {
+    expect(sort([f('D3=2', 50), f('B2=4', 47)])).toEqual(['B2=4', 'D3=2']);
+  });
+
+  it('leaves a chord already low to high, and doing it twice changes nothing', () => {
+    const marks = [f('B2=4', 47), f('D3=2', 50)];
+    expect(sort(marks)).toEqual(['B2=4', 'D3=2']);
+    expect(sort(marks)).toEqual(['B2=4', 'D3=2']);
+  });
+
+  it('keeps non-finger marks in their slots', () => {
+    const string: Mark = { finger: false, label: 'string' };
+    expect(sort([f('high', 60), string, f('low', 40)])).toEqual(['low', 'string', 'high']);
+  });
+
+  it('keeps the file order for marks of equal or unknown pitch', () => {
+    expect(sort([f('a'), f('b')])).toEqual(['a', 'b']);
+  });
+});
 
 const impl: XmlImpl = {
   parse: s => new DOMParser().parseFromString(s, 'text/xml') as unknown as Document,

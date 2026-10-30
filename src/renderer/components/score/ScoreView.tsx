@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
+import { OpenSheetMusicDisplay, TechnicalInstructionType } from 'opensheetmusicdisplay';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import sampleXml from '../../assets/sample-score.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
@@ -15,7 +15,7 @@ import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { PedalCoach } from '../../engine/PedalCoach';
 import { rememberRef, resolvePieceId } from './lastPiece';
-import { nextFinger, prevPlayable, stepOfBar } from './noteEdit';
+import { fingersLowToHigh, nextFinger, prevPlayable, stepOfBar } from './noteEdit';
 import { chunkLabel, lapDone, parseTargets, rangeEdited, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { BarInput } from './BarInput';
 import { loadStartupSnapshot, type SessionSnapshot } from './sessionSnapshot';
@@ -124,6 +124,17 @@ interface OsmdVoiceEntry {
 interface OsmdStaffEntry {
   FingeringEntries?: { SVGNode?: Node }[];
   graphicalChordContainers?: { GetChordSymbolContainer: unknown; GraphicalLabel?: { SVGNode?: Node } }[];
+}
+
+/** The parts of OSMD's source score that hold a chord's finger marks. */
+interface OsmdSourceMeasure {
+  VerticalSourceStaffEntryContainers: {
+    StaffEntries: ({
+      VoiceEntries: {
+        TechnicalInstructions: { type: number; sourceNote?: { Pitch?: { getHalfTone(): number } } }[];
+      }[];
+    } | undefined)[];
+  }[];
 }
 
 /** The note whose finger / hold picker is open; alts = the same key in the other hand. */
@@ -320,6 +331,22 @@ function paintChord(osmd: OpenSheetMusicDisplay, container: OsmdChordContainer, 
             el.style.fill = on ? '#16a34a' : '';
             el.style.fontWeight = on ? 'bold' : '';
           }
+        }
+      }
+    }
+  }
+}
+
+// #10256: stacked left-hand fingers read top to bottom as the notes do. Before each layout, so a
+// re-render can't bring the old order back; it's a sort, so doing it again changes nothing.
+function orderChordFingers(osmd: OpenSheetMusicDisplay) {
+  const sheet = osmd.Sheet as unknown as { SourceMeasures?: OsmdSourceMeasure[] } | undefined;
+  for (const measure of sheet?.SourceMeasures ?? []) {
+    for (const container of measure.VerticalSourceStaffEntryContainers) {
+      for (const entry of container.StaffEntries) {
+        for (const voice of entry?.VoiceEntries ?? []) {
+          fingersLowToHigh(voice.TechnicalInstructions, (m) => m.type === TechnicalInstructionType.Fingering,
+            (m) => m.sourceNote?.Pitch?.getHalfTone());
         }
       }
     }
@@ -1286,6 +1313,7 @@ export function ScoreView() {
     const render = osmd.render.bind(osmd);
     // autoResize calls this.render(), so the instance override covers re-layouts too.
     osmd.render = () => {
+      orderChordFingers(osmd);
       if (scoreLayout === 'pages') fitPages(osmd, container);
       render();
       if (strip && fitStrip(osmd, container, panelRef.current)) render();

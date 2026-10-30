@@ -9,6 +9,20 @@ export function nextFinger(current: string | null | undefined, up: boolean): Fin
   return next < 1 || next > 5 ? null : (String(next) as FingerDigit);
 }
 
+/**
+ * #10256: put a chord's finger marks low to high, leaving anything else in its slot. OSMD stacks
+ * labels by the order they came in the file, then flips them under the left hand, assuming low
+ * first; a chord written high first (D3=2 over B2=4) read upside down as 4, 2. Sorted, the labels
+ * under a chord read top to bottom as the notes do. Only the drawing order: no mark moves note.
+ */
+export function fingersLowToHigh<T>(marks: T[], isFinger: (m: T) => boolean, pitch: (m: T) => number | undefined): void {
+  const slots = marks.flatMap((m, i) => (isFinger(m) ? [i] : []));
+  const sorted = slots.map((i) => marks[i]).sort((a, b) => (pitch(a) ?? 0) - (pitch(b) ?? 0));
+  slots.forEach((slot, i) => {
+    marks[slot] = sorted[i];
+  });
+}
+
 /** First step of the bar `delta` bars from `measure`; null when there is no such bar. */
 export function stepOfBar(steps: readonly { measure: number }[], measure: number, delta: number): number | null {
   const hit = steps.findIndex((s) => s.measure === measure + delta);
