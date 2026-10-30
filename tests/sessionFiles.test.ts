@@ -33,6 +33,15 @@ describe('sessionFiles (#10236)', () => {
     await expect(fs.access(path.join(dir, 'restore-next'))).rejects.toThrow();
   });
 
+  it('round trips the note trainer record (#5260), and leaves the marker alone', async () => {
+    const f = sessionFiles(dir);
+    expect(await f.loadNoteStats()).toBeNull();
+    await fs.writeFile(path.join(dir, 'restore-next'), '');
+    await f.saveNoteStats({ stats: { 'treble:C4': { attempts: 1 } } });
+    expect(await f.loadNoteStats()).toEqual({ stats: { 'treble:C4': { attempts: 1 } } });
+    await expect(fs.access(path.join(dir, 'restore-next'))).resolves.toBeUndefined();
+  });
+
   it('a corrupt snapshot reads as none', async () => {
     await fs.writeFile(path.join(dir, 'session.json'), '{"step":');
     expect((await sessionFiles(dir).loadSession()).snapshot).toBeNull();

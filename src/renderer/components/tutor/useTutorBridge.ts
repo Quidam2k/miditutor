@@ -36,6 +36,9 @@ interface TutorBridge {
   /** #10236: the practice snapshot. force = this launch is a patch relaunch. Null in a hidden test copy. */
   sessionLoad?: () => Promise<{ snapshot: unknown; force: boolean } | null>;
   sessionSave?: (snapshot: unknown) => void;
+  /** #5260: the note trainer's record. Null in a hidden test copy. */
+  noteStatsLoad?: () => Promise<unknown>;
+  noteStatsSave?: (record: unknown) => void;
   /** Scan review (#9664): null unless the desk app was started with a review library. */
   reviewInfo?: () => Promise<{ library: string } | null>;
 }

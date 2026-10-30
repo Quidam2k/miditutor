@@ -4,10 +4,13 @@ import { NoteExercise } from './NoteExercise';
 import { IntervalExercise } from './IntervalExercise';
 import { HomeworkExercise } from './HomeworkExercise';
 import { ExerciseType } from '../../types/exercise';
+import type { TrainerClef } from '../../engine/NoteTrainer';
 
 export function ExerciseView() {
-  const { exerciseType, setExerciseType, clef, setClef, audioEnabled, setAudioEnabled, showNoteNames, setShowNoteNames } =
-    useSettingsStore();
+  const {
+    exerciseType, setExerciseType, clef, setClef, audioEnabled, setAudioEnabled, showNoteNames, setShowNoteNames,
+    trainerClef, setTrainerClef, trainerAccidentals, setTrainerAccidentals,
+  } = useSettingsStore();
 
   return (
     <div className="flex flex-col items-center gap-6 w-full">
@@ -25,15 +28,36 @@ export function ExerciseView() {
         />
         {exerciseType !== 'homework' && (
           <>
-            <ToggleGroup
-              label="Clef"
-              options={[
-                { value: 'treble', label: 'Treble' },
-                { value: 'bass', label: 'Bass' },
-              ]}
-              selected={clef}
-              onChange={(v) => setClef(v as 'treble' | 'bass')}
-            />
+            {exerciseType === 'note-identification' ? (
+              <>
+                <ToggleGroup
+                  label="Clef"
+                  options={[
+                    { value: 'treble', label: 'Treble' },
+                    { value: 'bass', label: 'Bass' },
+                    { value: 'both', label: 'Both' },
+                  ]}
+                  selected={trainerClef}
+                  onChange={(v) => setTrainerClef(v as TrainerClef)}
+                />
+                <Toggle
+                  label="Sharps & flats"
+                  title="On: black keys come up, spelled both ways (F# and Gb). Off: white keys only."
+                  checked={trainerAccidentals}
+                  onChange={setTrainerAccidentals}
+                />
+              </>
+            ) : (
+              <ToggleGroup
+                label="Clef"
+                options={[
+                  { value: 'treble', label: 'Treble' },
+                  { value: 'bass', label: 'Bass' },
+                ]}
+                selected={clef}
+                onChange={(v) => setClef(v as 'treble' | 'bass')}
+              />
+            )}
             <Toggle
               label="Audio"
               title="Off: the tutor makes no sound. On: after a miss it plays the right notes so you can hear them."
@@ -56,7 +80,7 @@ export function ExerciseView() {
       {exerciseType === 'homework' && <HomeworkExercise />}
 
       {/* Stats */}
-      {exerciseType !== 'homework' && <SessionStats />}
+      {exerciseType === 'interval' && <SessionStats />}
     </div>
   );
 }

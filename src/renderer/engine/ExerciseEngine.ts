@@ -1,7 +1,7 @@
 import { Exercise, ExerciseType, ExerciseResult } from '../types/exercise';
 import { Clef } from '../types/music';
 import { DifficultyManager } from './DifficultyManager';
-import { generateRandomNote, generateJpInterval } from './NoteGenerator';
+import { generateJpInterval } from './NoteGenerator';
 import { evaluate } from './Evaluator';
 
 let exerciseCounter = 0;
@@ -10,10 +10,9 @@ export class ExerciseEngine {
   private difficulty: DifficultyManager;
   private clef: Clef;
   private exerciseType: ExerciseType;
-  private lastMidiNumber?: number;
   private lastInterval?: string;
 
-  constructor(clef: Clef = 'treble', exerciseType: ExerciseType = 'note-identification') {
+  constructor(clef: Clef = 'treble', exerciseType: ExerciseType = 'interval') {
     this.difficulty = new DifficultyManager();
     this.clef = clef;
     this.exerciseType = exerciseType;
@@ -33,37 +32,17 @@ export class ExerciseEngine {
 
   generateExercise(): Exercise {
     const id = `ex-${++exerciseCounter}`;
-    const options = {
-      rangeLow: this.difficulty.rangeLow,
-      rangeHigh: this.difficulty.rangeHigh,
-      includeAccidentals: this.difficulty.accidentals,
+    // JP's assigned set (m2..P8) rather than random semitone pairs, which were mostly half steps.
+    const { interval, notes: [first, second] } = generateJpInterval(this.clef, this.lastInterval);
+    this.lastInterval = interval.short;
+    return {
+      id,
+      type: 'interval',
+      prompt: [first, second],
+      expectedMidiNumbers: [first.midiNumber, second.midiNumber],
       clef: this.clef,
-      avoidRepeat: this.lastMidiNumber,
+      intervalName: interval.name,
     };
-
-    if (this.exerciseType === 'note-identification') {
-      const pitch = generateRandomNote(options);
-      this.lastMidiNumber = pitch.midiNumber;
-      return {
-        id,
-        type: 'note-identification',
-        prompt: [pitch],
-        expectedMidiNumbers: [pitch.midiNumber],
-        clef: this.clef,
-      };
-    } else {
-      // JP's assigned set (m2..P8) rather than random semitone pairs, which were mostly half steps.
-      const { interval, notes: [first, second] } = generateJpInterval(this.clef, this.lastInterval);
-      this.lastInterval = interval.short;
-      return {
-        id,
-        type: 'interval',
-        prompt: [first, second],
-        expectedMidiNumbers: [first.midiNumber, second.midiNumber],
-        clef: this.clef,
-        intervalName: interval.name,
-      };
-    }
   }
 
   evaluate(exercise: Exercise, playedMidiNumbers: number[], responseTimeMs: number): ExerciseResult {
@@ -79,7 +58,6 @@ export class ExerciseEngine {
 
   reset(): void {
     this.difficulty.reset();
-    this.lastMidiNumber = undefined;
     this.lastInterval = undefined;
     exerciseCounter = 0;
   }

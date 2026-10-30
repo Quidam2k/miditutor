@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
 import { ExerciseType } from '../types/exercise';
+import type { TrainerClef } from '../engine/NoteTrainer';
 
 /** Strip = one long line of music, current beat centred (#5153); pages / scroll (#5137). */
 export type ScoreLayout = 'strip' | 'pages' | 'scroll';
@@ -31,7 +32,12 @@ interface SettingsState {
   pieceLoops: Record<string, { first: number; last: number }>;
   /** #5259: the piece list shows only favorites (and the piece on screen). */
   favoritesOnly: boolean;
+  /** #5260 note trainer: which clef(s) it draws from, and whether black keys are in. */
+  trainerClef: TrainerClef;
+  trainerAccidentals: boolean;
 
+  setTrainerClef: (clef: TrainerClef) => void;
+  setTrainerAccidentals: (on: boolean) => void;
   setClef: (clef: Clef) => void;
   setExerciseType: (type: ExerciseType) => void;
   setAudioEnabled: (enabled: boolean) => void;
@@ -73,7 +79,11 @@ export const useSettingsStore = create<SettingsState>()(
       lastView: 'practice',
       pieceLoops: {},
       favoritesOnly: false,
+      trainerClef: 'treble',
+      trainerAccidentals: true,
 
+      setTrainerClef: (clef) => set({ trainerClef: clef }),
+      setTrainerAccidentals: (on) => set({ trainerAccidentals: on }),
       setClef: (clef) => set({ clef }),
       setShowKeyboard: (show) => set({ showKeyboard: show }),
       setExerciseType: (type) => set({ exerciseType: type }),
