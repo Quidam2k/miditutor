@@ -1,4 +1,5 @@
 import { Pitch, Clef } from '../../types/music';
+import { MajorKey } from '../../engine/MusicTheory';
 import { useVexFlow } from './useVexFlow';
 
 interface StaffDisplayProps {
@@ -6,10 +7,11 @@ interface StaffDisplayProps {
   clef: Clef;
   highlightColor?: string | null;
   wrongNotes?: Pitch[];
+  musicKey?: MajorKey | null;
 }
 
-export function StaffDisplay({ notes, clef, highlightColor = null, wrongNotes }: StaffDisplayProps) {
-  const containerRef = useVexFlow({ notes, clef, highlightColor, wrongNotes });
+export function StaffDisplay({ notes, clef, highlightColor = null, wrongNotes, musicKey }: StaffDisplayProps) {
+  const containerRef = useVexFlow({ notes, clef, highlightColor, wrongNotes, musicKey });
 
   return (
     <div

@@ -23,6 +23,7 @@ interface TutorState {
   pieceRequest: { pieceId: string; backwards: boolean } | null;
   requestPiece: (pieceId: string, backwards: boolean) => void;
   clearPieceRequest: () => void;
+  clearLoopRequest: () => void;
   setTask: (task: Task | null) => void;
   requestLoop: (bars: { firstBar: number; lastBar: number; backwards?: boolean } | null) => void;
   addPiece: (p: Omit<PushedPiece, 'id'>) => void;
@@ -39,6 +40,7 @@ export const useTutorStore = create<TutorState>((set) => ({
   pieceRequest: null,
   requestPiece: (pieceId, backwards) => set({ pieceRequest: { pieceId, backwards } }),
   clearPieceRequest: () => set({ pieceRequest: null }),
+  clearLoopRequest: () => set({ loopRequest: null }),
   setTask: (task) => set({ task }),
   requestLoop: (bars) => set({ loopRequest: bars ? { seq: ++loopSeq, ...bars } : { seq: ++loopSeq, clear: true } }),
   addPiece: (p) =>

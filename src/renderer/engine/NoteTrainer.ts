@@ -1,7 +1,7 @@
 // #5260 note-reading trainer: the note pool, per-note stats (hit rate + EWMA time), weighted
 // next-note choice (slow and missed notes come up more), and the daily tally. Pure logic.
 import { Clef, Pitch } from '../types/music';
-import { midiNumberToPitch, pitchToDisplayName, isWhiteKey } from './MusicTheory';
+import { MajorKey, midiNumberToPitch, pitchToDisplayName, printedAccidental, isWhiteKey } from './MusicTheory';
 
 export type TrainerClef = Clef | 'both';
 export const NOTE_RANGE: Record<Clef, [number, number]> = { treble: [60, 81], bass: [40, 60] };
@@ -32,6 +32,38 @@ const clefNotes = (clef: Clef, accidentals: boolean): TrainerNote[] => {
 export function notePool(clef: TrainerClef, accidentals: boolean): TrainerNote[] {
   if (clef === 'both') return [...clefNotes('treble', accidentals), ...clefNotes('bass', accidentals)];
   return clefNotes(clef, accidentals);
+}
+
+// #10262: up to 5 sharps or flats, the keys whose scales need no E#, B#, Cb or Fb (not in the pool).
+export const TRAINER_KEYS: MajorKey[] = [
+  { name: 'C', fifths: 0 }, { name: 'G', fifths: 1 }, { name: 'D', fifths: 2 }, { name: 'A', fifths: 3 },
+  { name: 'E', fifths: 4 }, { name: 'B', fifths: 5 }, { name: 'F', fifths: -1 }, { name: 'Bb', fifths: -2 },
+  { name: 'Eb', fifths: -3 }, { name: 'Ab', fifths: -4 }, { name: 'Db', fifths: -5 },
+];
+/** Notes drawn before the key changes, so he reads in it rather than re-reading a signature each time. */
+export const KEY_HOLD_NOTES = 8;
+const OUT_OF_KEY_SHARE = 0.2;
+
+export function pickKey(avoid?: MajorKey | null, rand: () => number = Math.random): MajorKey {
+  const rest = TRAINER_KEYS.filter((k) => k.name !== avoid?.name);
+  return rest[Math.min(Math.floor(rand() * rest.length), rest.length - 1)];
+}
+
+/**
+ * The notes a key can ask: its own, printed bare, and the rest of the keyboard with the accidental
+ * they need. A key on the scale is only ever its scale spelling: no Gb in D major, where that's F#.
+ */
+export function keyPool(clef: TrainerClef, key: MajorKey): { inKey: TrainerNote[]; outOfKey: TrainerNote[] } {
+  const all = notePool(clef, true);
+  const inKey = all.filter((n) => printedAccidental(n.pitch, key.fifths) === null);
+  const scale = new Set(inKey.map((n) => n.pitch.midiNumber % 12));
+  return { inKey, outOfKey: all.filter((n) => !scale.has(n.pitch.midiNumber % 12)) };
+}
+
+/** Mostly the key's own notes; the weighting by speed and misses applies inside each half. */
+export function pickInKey(clef: TrainerClef, key: MajorKey, stats: NoteStats, avoidId?: string, rand: () => number = Math.random): TrainerNote {
+  const { inKey, outOfKey } = keyPool(clef, key);
+  return pickNext(rand() < OUT_OF_KEY_SHARE ? outOfKey : inKey, stats, avoidId, rand);
 }
 
 export function recordAnswer(stats: NoteStats, id: string, correct: boolean, ms: number | null): NoteStats {

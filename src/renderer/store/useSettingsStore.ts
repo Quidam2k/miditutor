@@ -3,6 +3,7 @@ import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
 import { ExerciseType } from '../types/exercise';
 import type { TrainerClef } from '../engine/NoteTrainer';
+import type { SessionSnapshot } from '../components/score/sessionSnapshot';
 
 /** Strip = one long line of music, current beat centred (#5153); pages / scroll (#5137). */
 export type ScoreLayout = 'strip' | 'pages' | 'scroll';
@@ -32,10 +33,23 @@ interface SettingsState {
   pieceLoops: Record<string, { first: number; last: number }>;
   /** #5259: the piece list shows only favorites (and the piece on screen). */
   favoritesOnly: boolean;
-  /** #5260 note trainer: which clef(s) it draws from, and whether black keys are in. */
+  /** #5260 note trainer: which clef(s) it draws from; #10262: accidentals on = the Keys toggle. */
   trainerClef: TrainerClef;
   trainerAccidentals: boolean;
+  /** #10262 Sight-read: pieces he marked simple, by displayed title. */
+  simplePieces: string[];
+  /** Times Sight-read has picked each piece, by displayed title. */
+  sightDrilled: Record<string, number>;
+  /** The piece Sight-read last opened, while he's still on it. */
+  sightReadPiece: string | null;
+  /** The drill he left for Sight-read, by piece id; going back to the piece puts it back. */
+  parkedDrills: Record<string, SessionSnapshot>;
 
+  toggleSimplePiece: (title: string) => void;
+  markSightRead: (id: string, title: string) => void;
+  clearSightRead: () => void;
+  parkDrill: (snapshot: SessionSnapshot) => void;
+  unparkDrill: (id: string) => void;
   setTrainerClef: (clef: TrainerClef) => void;
   setTrainerAccidentals: (on: boolean) => void;
   setClef: (clef: Clef) => void;
@@ -81,7 +95,29 @@ export const useSettingsStore = create<SettingsState>()(
       favoritesOnly: false,
       trainerClef: 'treble',
       trainerAccidentals: true,
+      simplePieces: [],
+      sightDrilled: {},
+      sightReadPiece: null,
+      parkedDrills: {},
 
+      toggleSimplePiece: (title) =>
+        set((s) => ({
+          simplePieces: s.simplePieces.includes(title)
+            ? s.simplePieces.filter((t) => t !== title)
+            : [...s.simplePieces, title],
+        })),
+      markSightRead: (id, title) =>
+        set((s) => ({
+          sightReadPiece: id,
+          sightDrilled: { ...s.sightDrilled, [title]: (s.sightDrilled[title] ?? 0) + 1 },
+        })),
+      clearSightRead: () => set({ sightReadPiece: null }),
+      parkDrill: (snapshot) => set((s) => ({ parkedDrills: { ...s.parkedDrills, [snapshot.pieceId]: snapshot } })),
+      unparkDrill: (id) =>
+        set((s) => {
+          const { [id]: _gone, ...rest } = s.parkedDrills;
+          return { parkedDrills: rest };
+        }),
       setTrainerClef: (clef) => set({ trainerClef: clef }),
       setTrainerAccidentals: (on) => set({ trainerAccidentals: on }),
       setClef: (clef) => set({ clef }),

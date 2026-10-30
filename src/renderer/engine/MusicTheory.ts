@@ -63,6 +63,26 @@ export function getVexFlowAccidental(pitch: Pitch): string | null {
   return null;
 }
 
+/** A major key: fifths > 0 counts its sharps, < 0 its flats. name is VexFlow's key spec. */
+export interface MajorKey {
+  name: string;
+  fifths: number;
+}
+
+/** What the signature does to this letter, if anything. */
+export function keyAccidental(note: Pitch['note'], fifths: number): Accidental | undefined {
+  if (fifths > 0 && 'FCGDAEB'.indexOf(note) < fifths) return 'sharp';
+  if (fifths < 0 && 'BEADGCF'.indexOf(note) < -fifths) return 'flat';
+  return undefined;
+}
+
+/** The accidental printed beside this note under a signature: null when the key already says it. */
+export function printedAccidental(pitch: Pitch, fifths: number): string | null {
+  const wanted = pitch.accidental === 'natural' ? undefined : pitch.accidental;
+  if (wanted === keyAccidental(pitch.note, fifths)) return null;
+  return getVexFlowAccidental(pitch) ?? 'n';
+}
+
 /**
  * Check if two MIDI numbers are enharmonic equivalents
  * (they always are if they're the same number)

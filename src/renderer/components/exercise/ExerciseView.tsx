@@ -41,8 +41,8 @@ export function ExerciseView() {
                   onChange={(v) => setTrainerClef(v as TrainerClef)}
                 />
                 <Toggle
-                  label="Sharps & flats"
-                  title="On: black keys come up, spelled both ways (F# and Gb). Off: white keys only."
+                  label="Keys"
+                  title="On: a random key signature, and notes flagged only when the key needs it. Off: C major, white keys only."
                   checked={trainerAccidentals}
                   onChange={setTrainerAccidentals}
                 />

@@ -12,6 +12,7 @@ MIDITUTOR_CDP=http://127.0.0.1:9346:
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -29,6 +30,8 @@ from miditutor_mcp import tutor_client as tc  # noqa: E402
 CDP = os.environ.get("MIDITUTOR_CDP", "http://127.0.0.1:9346")
 FAILS: list[str] = []
 SHOTS = ROOT / "screengrab"
+RED = "() => document.querySelector('[data-testid=note-trainer] svg').innerHTML.includes('#ef4444')"
+GREEN = "() => document.querySelector('[data-testid=note-trainer] svg').innerHTML.includes('#22c55e')"
 
 
 def check(cond, label, detail="") -> None:
@@ -115,43 +118,39 @@ def phase_drill(scratch: Path) -> None:
         # Changing the clef asks a new note at once, so this one is already up.
         old = None
         seen: list[str] = []
+        keys: list[str] = []
         attempts, hits = 12, 12
         for i in range(36):
             note_id, midi = next_note(page, old)
             seen.append(note_id)
+            keys.append(page.get_by_test_id("note-trainer").get_attribute("data-key"))
             old = note_id
-            name = note_id.split(":")[1]
             feedback = page.get_by_test_id("note-feedback")
             if i % 4 == 3:
                 # A semitone off, which is always a real wrong key.
                 strike(midi + 1)
-                page.wait_for_function(
-                    "() => document.querySelector('[data-testid=note-feedback]').innerText.includes('it was')",
-                    timeout=3000,
-                )
+                page.wait_for_function(RED, timeout=3000)
                 text = feedback.inner_text()
-                check(text.endswith(f", it was {name}") and text.startswith("You played "), "a miss says both notes", text)
+                check(text == "", "a miss names no letter: the red note answers", text)
                 if i == 3:
                     page.screenshot(path=str(SHOTS / "note_trainer_miss.png"))
             else:
                 strike(midi)
                 hits += 1
-                page.wait_for_function(
-                    "() => document.querySelector('[data-testid=note-feedback]').innerText.startsWith('You played')",
-                    timeout=3000,
-                )
+                page.wait_for_function(GREEN, timeout=3000)
                 text = feedback.inner_text()
-                # The first of a clef switch isn't timed; all others show seconds.
-                check(re.fullmatch(rf"You played {re.escape(name)}( · \d+\.\d s)?", text) is not None,
-                      "a hit shows the spelling asked for", text)
+                # The first of a clef switch or a new key isn't timed; all others show seconds.
+                check(re.fullmatch(r"(\d+\.\d s)?", text) is not None, "a hit shows only the time", text)
             attempts += 1
 
         clefs = {s.split(":")[0] for s in seen}
         check(clefs == {"treble", "bass"}, "Both draws from both clefs", seen)
+        check(all(keys), "every note is asked in a key", keys)
+        runs = [len(list(g)) for _, g in itertools.groupby(keys)]
+        check(len(runs) > 2 and all(r == 8 for r in runs[1:-1]) and runs[0] <= 8 and runs[-1] <= 8,
+              "a key holds for 8 notes", runs)
         names = [s.split(":")[1] for s in seen]
-        # Coverage, not chance: unseen notes weigh most, but 36 picks may miss a spelling. Report it.
-        print("sharps seen:", sum("#" in n for n in names), "flats seen:", sum("b" in n for n in names))
-        check(any("#" in n for n in names) or any("b" in n for n in names), "black keys come up", names)
+        print("keys:", keys[::8], "sharps seen:", sum("#" in n for n in names), "flats seen:", sum("b" in n for n in names))
 
         today = page.get_by_test_id("note-today").inner_text()
         check(f"{attempts} notes" in today, "today's count", today)
@@ -204,30 +203,58 @@ def phase_check(scratch: Path) -> None:
         check(f"{want['attempts'] + 1} notes" in page.get_by_test_id("note-today").inner_text(), "tab switch keeps it")
 
         # Hold the miss on screen: a screenshot of a hidden window can outlast the feedback.
-        red = "() => document.querySelector('[data-testid=note-trainer] svg').innerHTML.includes('#ef4444')"
         page.evaluate("() => { window.__realTimeout = window.setTimeout; window.setTimeout = () => 0; }")
         note_id, midi = asked(page)
-        name = note_id.split(":")[1]
         strike(midi + 1)
-        page.wait_for_function(red, timeout=3000)
+        page.wait_for_function(RED, timeout=3000)
         text = page.get_by_test_id("note-feedback").inner_text()
-        check(text.startswith("You played ") and text.endswith(f", it was {name}"), "the near miss says both notes", text)
-        check(page.evaluate(red), "the near miss is drawn red on the staff")
+        check(text == "", "the near miss names no letter", text)
+        check(page.evaluate(RED), "the near miss is drawn red on the staff")
         page.screenshot(path=str(SHOTS / "note_trainer_miss.png"))
         switch_tabs()
 
         # A key far off the staff: said in words, not drawn, so the staff can't clip it.
-        note_id, midi = asked(page)
-        name = note_id.split(":")[1]
         strike(21)
         page.wait_for_function(
-            "() => document.querySelector('[data-testid=note-feedback]').innerText.includes('it was')", timeout=3000
+            "() => document.querySelector('[data-testid=note-feedback]').innerText === 'Much lower'", timeout=3000
         )
-        check(page.get_by_test_id("note-feedback").inner_text() == f"You played A0, it was {name}",
-              "the far miss says both notes", page.get_by_test_id("note-feedback").inner_text())
-        check(not page.evaluate(red), "the far miss isn't drawn")
+        check(not page.evaluate(RED), "the far miss isn't drawn")
         page.screenshot(path=str(SHOTS / "note_trainer_far_miss.png"))
+        switch_tabs()
+
+        # Note names on: the letters are back, for him to choose.
+        page.get_by_text("Note names").click()
+        page.wait_for_timeout(200)
+        note_id, midi = asked(page)
+        name = note_id.split(":")[1]
+        check(page.get_by_test_id("note-feedback").inner_text() == name, "names on: the asked note is named")
+        strike(midi + 1)
+        page.wait_for_function(RED, timeout=3000)
+        text = page.get_by_test_id("note-feedback").inner_text()
+        check(text.startswith("You played ") and text.endswith(f", it was {name}"), "names on: a miss says both notes", text)
+        switch_tabs()
+        note_id, midi = asked(page)
+        name = note_id.split(":")[1]
+        strike(midi)
+        page.wait_for_function(GREEN, timeout=3000)
+        text = page.get_by_test_id("note-feedback").inner_text()
+        check(text == f"You played {name}", "names on: a hit names the spelling asked", text)
+        page.get_by_text("Note names").click()
+        switch_tabs()
         page.evaluate("() => { window.setTimeout = window.__realTimeout; }")
+
+        # Keys off: C major, white keys, no signature.
+        page.get_by_text("Keys:").click()
+        page.wait_for_timeout(200)
+        box = page.get_by_test_id("note-trainer")
+        check(box.get_attribute("data-key") is None, "Keys off: no key")
+        old = None
+        for _ in range(10):
+            note_id, midi = next_note(page, old)
+            check(midi % 12 in (0, 2, 4, 5, 7, 9, 11) and not re.search("[#b]", note_id.split(":")[1]), "Keys off: white keys", note_id)
+            strike(midi)
+            old = note_id
+        page.get_by_text("Keys:").click()
 
 
 def main() -> int:

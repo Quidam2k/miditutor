@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   NOTE_RANGE, TIME_CAP_MS, notePool, recordAnswer, noteWeight, pickNext, slowestNotes,
   recordDay, parseNoteStats, parseDayTally, NoteStat, NoteStats, DayTally,
+  TRAINER_KEYS, keyPool, pickInKey, pickKey,
 } from '../src/renderer/engine/NoteTrainer';
+import { printedAccidental } from '../src/renderer/engine/MusicTheory';
 
 const ids = (clef: 'treble' | 'bass' | 'both', acc: boolean) => notePool(clef, acc).map((n) => n.id);
 const stat = (over: Partial<NoteStat> = {}): NoteStat => ({ attempts: 10, hits: 10, avgMs: 1000, recent: [], ...over });
@@ -220,5 +222,62 @@ describe('parseNoteStats / parseDayTally', () => {
     expect(parseDayTally({ ...t, hits: -1 })).toBeNull();
     expect(parseDayTally({ ...t, hitMs: NaN })).toBeNull();
     expect(parseDayTally({ ...t, timedHits: undefined })).toBeNull();
+  });
+});
+
+describe('keys (#10262)', () => {
+  it('has 11 keys, none needing a spelling outside the pool', () => {
+    expect(TRAINER_KEYS).toHaveLength(11);
+    for (const key of TRAINER_KEYS) {
+      const { inKey } = keyPool('treble', key);
+      const pcs = new Set(inKey.map((n) => n.pitch.midiNumber % 12));
+      expect(pcs.size, key.name).toBe(7);
+    }
+  });
+
+  it("D major: F#4 is in the key and prints bare; F4 prints a natural; Gb4 never comes up", () => {
+    const D = TRAINER_KEYS.find((k) => k.name === 'D')!;
+    const { inKey, outOfKey } = keyPool('treble', D);
+    const fs4 = inKey.find((n) => n.id === 'treble:F#4')!;
+    expect(printedAccidental(fs4.pitch, D.fifths)).toBeNull();
+    const f4 = outOfKey.find((n) => n.id === 'treble:F4')!;
+    expect(printedAccidental(f4.pitch, D.fifths)).toBe('n');
+    expect([...inKey, ...outOfKey].some((n) => n.id === 'treble:Gb4')).toBe(false);
+    expect(inKey.some((n) => n.id === 'treble:F4')).toBe(false);
+  });
+
+  it('C major: a black key prints its sharp or flat; a flat key prints naturals', () => {
+    const C = TRAINER_KEYS.find((k) => k.name === 'C')!;
+    const out = keyPool('treble', C).outOfKey;
+    expect(out.map((n) => n.id)).toContain('treble:Db4');
+    expect(printedAccidental(out.find((n) => n.id === 'treble:C#4')!.pitch, 0)).toBe('#');
+    const Eb = TRAINER_KEYS.find((k) => k.name === 'Eb')!;
+    const b4 = keyPool('treble', Eb).outOfKey.find((n) => n.id === 'treble:B4')!;
+    expect(printedAccidental(b4.pitch, Eb.fifths)).toBe('n');
+  });
+
+  it('every key: in-key notes print nothing, out-of-key notes print something, no pitch is in both', () => {
+    for (const key of TRAINER_KEYS) {
+      const { inKey, outOfKey } = keyPool('both', key);
+      expect(inKey.every((n) => printedAccidental(n.pitch, key.fifths) === null)).toBe(true);
+      expect(outOfKey.every((n) => printedAccidental(n.pitch, key.fifths) !== null)).toBe(true);
+      const inPcs = new Set(inKey.map((n) => n.pitch.midiNumber % 12));
+      expect(outOfKey.some((n) => inPcs.has(n.pitch.midiNumber % 12))).toBe(false);
+    }
+  });
+
+  it('draws about 80% in the key', () => {
+    const D = TRAINER_KEYS.find((k) => k.name === 'D')!;
+    const inIds = new Set(keyPool('treble', D).inKey.map((n) => n.id));
+    const rand = lcg(11);
+    let hits = 0;
+    for (let i = 0; i < 5000; i++) if (inIds.has(pickInKey('treble', D, {}, undefined, rand).id)) hits++;
+    expect(hits / 5000).toBeGreaterThan(0.77);
+    expect(hits / 5000).toBeLessThan(0.83);
+  });
+
+  it('pickKey never repeats the key it was told to avoid', () => {
+    const D = TRAINER_KEYS[2];
+    for (const r of [0, 0.5, 0.999999]) expect(pickKey(D, () => r).name).not.toBe(D.name);
   });
 });

@@ -24,7 +24,7 @@ interface VexFlowStatics {
 const { Renderer, Stave, StaveNote, Voice, Formatter, Accidental } =
   Vex as unknown as VexFlowStatics;
 import { Pitch, Clef } from '../../types/music';
-import { pitchToVexFlowKey, getVexFlowAccidental } from '../../engine/MusicTheory';
+import { MajorKey, pitchToVexFlowKey, getVexFlowAccidental, printedAccidental } from '../../engine/MusicTheory';
 
 interface UseVexFlowOptions {
   notes: Pitch[];
@@ -32,12 +32,14 @@ interface UseVexFlowOptions {
   highlightColor?: string | null; // null = default, 'green', 'red'
   /** Keys he played that were not asked for, drawn red beside the target. */
   wrongNotes?: Pitch[];
+  /** Draw this signature and print accidentals relative to it (#10262). */
+  musicKey?: MajorKey | null;
 }
 
 const HIGHLIGHT: Record<string, string> = { green: '#22c55e', red: '#ef4444' };
 const WRONG_RED = '#ef4444';
 
-export function useVexFlow({ notes, clef, highlightColor, wrongNotes }: UseVexFlowOptions) {
+export function useVexFlow({ notes, clef, highlightColor, wrongNotes, musicKey }: UseVexFlowOptions) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const render = useCallback(() => {
@@ -60,31 +62,41 @@ export function useVexFlow({ notes, clef, highlightColor, wrongNotes }: UseVexFl
     const staveX = (width - staveWidth) / 2;
     const stave = new Stave(staveX, 20, staveWidth);
     stave.addClef(clef);
+    if (musicKey) stave.addKeySignature(musicKey.name);
     stave.setContext(context).draw();
 
     if (notes.length === 0) return;
 
     // One whole note (or chord) per group: the target, then, after a wrong answer,
     // the key(s) he actually played in red beside it (#4045).
-    const makeNote = (pitches: Pitch[], color: string | null) => {
+    const makeNote = (pitches: Pitch[], color: string | null, accidentalOf: (pitch: Pitch) => string | null) => {
       const sorted = [...pitches].sort((a, b) => a.midiNumber - b.midiNumber);
       const note = new StaveNote({ keys: sorted.map(pitchToVexFlowKey), duration: 'w', clef });
       sorted.forEach((pitch, i) => {
-        const acc = getVexFlowAccidental(pitch);
+        const acc = accidentalOf(pitch);
         if (acc) note.addModifier(new Accidental(acc), i);
       });
       if (color) note.setStyle({ fillStyle: color, strokeStyle: color });
       return note;
     };
+    const printed = (pitch: Pitch) => (musicKey ? printedAccidental(pitch, musicKey.fifths) : getVexFlowAccidental(pitch));
+    // On the target's own line, a bare red note would read as the target's accidental carrying on: spell it out.
+    const printedWrong = (pitch: Pitch) => {
+      const acc = printed(pitch);
+      const sameLine = notes.some((t) => t.note === pitch.note && t.octave === pitch.octave && printed(t));
+      return acc ?? (musicKey && sameLine ? getVexFlowAccidental(pitch) ?? 'n' : null);
+    };
 
-    const tickables = [makeNote(notes, highlightColor ? HIGHLIGHT[highlightColor] ?? null : null)];
-    if (wrongNotes && wrongNotes.length > 0) tickables.push(makeNote(wrongNotes, WRONG_RED));
+    const tickables = [makeNote(notes, highlightColor ? HIGHLIGHT[highlightColor] ?? null : null, printed)];
+    if (wrongNotes && wrongNotes.length > 0) tickables.push(makeNote(wrongNotes, WRONG_RED, printedWrong));
 
     const voice = new Voice({ numBeats: 4 * tickables.length, beatValue: 4 });
     voice.addTickables(tickables);
-    new Formatter().joinVoices([voice]).format([voice], staveWidth - 60);
+    // A signature can eat a fifth of the stave: fit what's left of it.
+    const noteWidth = musicKey ? stave.getNoteEndX() - stave.getNoteStartX() - 30 : staveWidth - 60;
+    new Formatter().joinVoices([voice]).format([voice], noteWidth);
     voice.draw(context, stave);
-  }, [notes, clef, highlightColor, wrongNotes]);
+  }, [notes, clef, highlightColor, wrongNotes, musicKey]);
 
   useEffect(() => {
     render();

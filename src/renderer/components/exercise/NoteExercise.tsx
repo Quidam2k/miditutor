@@ -5,16 +5,19 @@ import { useSettingsStore, localDay } from '../../store/useSettingsStore';
 import {
   DayTally,
   NoteStats,
+  KEY_HOLD_NOTES,
   TrainerNote,
   notePool,
   parseDayTally,
   parseNoteStats,
+  pickInKey,
+  pickKey,
   pickNext,
   recordAnswer,
   recordDay,
   slowestNotes,
 } from '../../engine/NoteTrainer';
-import { pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
+import { MajorKey, midiNumberToPitch, pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
 import { Pitch } from '../../types/music';
 import { playNote, initAudio, isInitialized } from '../../audio/AudioEngine';
 
@@ -83,19 +86,37 @@ export function NoteExercise() {
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const answering = useRef(false);
 
-  const pool = useMemo(() => notePool(trainerClef, trainerAccidentals), [trainerClef, trainerAccidentals]);
-  const poolRef = useRef(pool);
-  poolRef.current = pool;
   const currentRef = useRef<TrainerNote | null>(null);
+  const [musicKey, setMusicKey] = useState<MajorKey | null>(null);
+  const keyRef = useRef<MajorKey | null>(null);
+  const keyNotesLeft = useRef(0);
 
   const ask = useCallback((isTimed: boolean) => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-    const next = pickNext(poolRef.current, mineRef.current.stats, currentRef.current?.id);
+    const { trainerClef: clef, trainerAccidentals: useKeys } = useSettingsStore.getState();
+    const { stats } = mineRef.current;
+    const avoid = currentRef.current?.id;
+    let next: TrainerNote;
+    let newKey = false;
+    if (useKeys) {
+      if (keyNotesLeft.current <= 0 || !keyRef.current) {
+        keyRef.current = pickKey(keyRef.current);
+        keyNotesLeft.current = KEY_HOLD_NOTES;
+        newKey = true;
+      }
+      keyNotesLeft.current--;
+      next = pickInKey(clef, keyRef.current, stats, avoid);
+    } else {
+      keyRef.current = null;
+      next = pickNext(notePool(clef, false), stats, avoid);
+    }
     currentRef.current = next;
     answering.current = true;
-    timed.current = isTimed;
+    // A new signature takes reading first: that isn't this note's time.
+    timed.current = isTimed && !newKey;
     presentedAt.current = Date.now();
+    setMusicKey(keyRef.current);
     setCurrent(next);
     setFeedback(null);
   }, []);
@@ -112,11 +133,11 @@ export function NoteExercise() {
     };
   }, []);
 
-  // A new clef or spelling set takes effect on the next note, straight away.
+  // A new clef or Keys setting takes effect on the next note, straight away.
   const loaded = mine !== null;
   useEffect(() => {
     if (loaded) ask(false);
-  }, [loaded, pool, ask]);
+  }, [loaded, trainerClef, trainerAccidentals, ask]);
 
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
@@ -155,16 +176,22 @@ export function NoteExercise() {
       });
 
       const name = pitchToDisplayName(asked.pitch);
+      // #10262 "go from here to here": with names off the staff answers, not a letter.
+      const names = settings.showNoteNames;
       if (correct) {
-        // The spelling asked for, not the key: he should learn what the page says.
-        setFeedback({ correct, line: `You played ${name}${ms === null ? '' : ` · ${seconds(ms)}`}`, wrong: [] });
+        setFeedback({ correct, line: names ? `You played ${name}` : ms === null ? '' : seconds(ms), wrong: [] });
       } else {
-        const played = wrongPitches([ev.note], [asked.pitch.midiNumber], [asked.pitch])[0];
+        const key = keyRef.current;
+        const played = key
+          ? midiNumberToPitch(ev.note, key.fifths < 0)
+          : wrongPitches([ev.note], [asked.pitch.midiNumber], [asked.pitch])[0];
+        const drawable = stepsOffStaff(played, asked.clef) <= MAX_DRAWN_LEDGER_STEPS;
+        const words = ev.note < asked.pitch.midiNumber ? 'Much lower' : 'Much higher';
         setFeedback({
           correct,
-          line: `You played ${pitchToDisplayName(played)}, it was ${name}`,
+          line: names ? `You played ${pitchToDisplayName(played)}, it was ${name}` : drawable ? '' : words,
           // The target stays black; the key he played is drawn red beside it (#4045).
-          wrong: stepsOffStaff(played, asked.clef) <= MAX_DRAWN_LEDGER_STEPS ? [played] : [],
+          wrong: drawable ? [played] : [],
         });
         // No sound effects (#5059); with Audio on he hears the right note.
         if (settings.audioEnabled) playNote(asked.pitch.midiNumber);
@@ -188,6 +215,7 @@ export function NoteExercise() {
       data-testid="note-trainer"
       data-note-id={current?.id}
       data-midi={current?.pitch.midiNumber}
+      data-key={musicKey?.name}
     >
       <div className="relative w-full max-w-2xl">
         <StaffDisplay
@@ -195,6 +223,7 @@ export function NoteExercise() {
           clef={current?.clef ?? (trainerClef === 'bass' ? 'bass' : 'treble')}
           highlightColor={feedback?.correct ? 'green' : null}
           wrongNotes={feedback?.wrong}
+          musicKey={musicKey}
         />
       </div>
 

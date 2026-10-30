@@ -18,7 +18,8 @@ import { rememberRef, resolvePieceId } from './lastPiece';
 import { fingersLowToHigh, nextFinger, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, lapDone, parseTargets, rangeEdited, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { BarInput } from './BarInput';
-import { loadStartupSnapshot, type SessionSnapshot } from './sessionSnapshot';
+import { loadStartupSnapshot, restorable, type SessionSnapshot } from './sessionSnapshot';
+import { pickBars, pickHand, pickSightPiece } from '../../engine/SightRead';
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustBadge, trustMark } from '../../../shared/trust';
@@ -767,6 +768,7 @@ export function ScoreView() {
       piece: pieceName,
       pieces: pieceLabels.split('\n'),
       status,
+      hand,
       measure,
       remaining: remaining.map(noteName),
       wrongCount,
@@ -792,7 +794,7 @@ export function ScoreView() {
       expressionMarks: exprMarks.slice(0, 40),
       expression: exprFindings,
     });
-  }, [pieceName, pieceLabels, status, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk]);
+  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1222,11 +1224,12 @@ export function ScoreView() {
     }
   }, [loopBars, pickStart, status, layoutTick]);
 
-  // A loop asked for through the tutor API (POST /loop, DELETE /loop). Only a new
-  // request (seq) applies; a status flip must not re-apply an old one.
+  // A loop asked for through the tutor API (POST /loop, DELETE /loop). Used up once it applies:
+  // left in the store, it came back on every piece that finished loading (#10262).
   const ready = status === 'ready';
   useEffect(() => {
     if (!loopRequest || !ready) return;
+    useTutorStore.getState().clearLoopRequest();
     if ('clear' in loopRequest) applyLoop(null);
     else if (loopRequest.backwards) startBackwards({ first: loopRequest.firstBar, last: loopRequest.lastBar });
     else applyLoop({ first: loopRequest.firstBar, last: loopRequest.lastBar });
@@ -1243,29 +1246,73 @@ export function ScoreView() {
     else applyLoop(range);
   }, [pendingOpen, piece.id, drawn]);
 
+  const takeSnapshot = (on: Piece): SessionSnapshot => ({
+    at: Date.now(),
+    pieceId: rememberRef(on.id, on.label, !!on.xml).id,
+    pieceLabel: on.label,
+    loop: loopBars,
+    chunk,
+    lap,
+    wrongCount,
+    lapWrong: lapWrongRef.current,
+    step: cursorStep,
+    hand,
+    following,
+    showOriginal,
+  });
+
   // #10236: keep the snapshot current. Not while loading, when these describe the piece before.
   useEffect(() => {
     const save = window.tutorBridge?.sessionSave;
     if (!save || status !== 'ready' || !onScreen || drawnPieceRef.current !== piece.id) return;
-    const timer = window.setTimeout(() => {
-      const snapshot: SessionSnapshot = {
-        at: Date.now(),
-        pieceId: rememberRef(onScreen.id, onScreen.label, !!onScreen.xml).id,
-        pieceLabel: onScreen.label,
-        loop: loopBars,
-        chunk,
-        lap,
-        wrongCount,
-        lapWrong: lapWrongRef.current,
-        step: cursorStep,
-        hand,
-        following,
-        showOriginal,
-      };
-      save(snapshot);
-    }, 500);
+    const timer = window.setTimeout(() => save(takeSnapshot(onScreen)), 500);
     return () => window.clearTimeout(timer);
   }, [status, piece.id, loopBars, chunk, lap, wrongCount, cursorStep, hand, following, showOriginal, drawn]);
+
+  // #10262 Sight-read: a piece he doesn't know, one hand, 5-8 bars, through the ordinary hand and
+  // loop controls. Reads the library and never writes a score. What he was drilling is parked first.
+  const simplePieces = useSettingsStore((s) => s.simplePieces);
+  const toggleSimple = useSettingsStore((s) => s.toggleSimplePiece);
+  const parkedDrills = useSettingsStore((s) => s.parkedDrills);
+  const [pendingSight, setPendingSight] = useState<string | null>(null);
+  const [sightMsg, setSightMsg] = useState('');
+  const sightRead = () => {
+    commitWheelRef.current();
+    const s = useSettingsStore.getState();
+    if (onScreen && status === 'ready' && drawnPieceRef.current === piece.id && piece.id !== s.sightReadPiece) {
+      s.parkDrill(takeSnapshot(onScreen));
+    }
+    const skip = new Set([piece.label, ...Object.values(useSettingsStore.getState().parkedDrills).map((d) => d.pieceLabel)]);
+    const pick = pickSightPiece(
+      allPieces
+        // A song's first version is its easiest; the built-ins aren't his library.
+        .filter((p) => p.id.startsWith('file:') && !skip.has(p.label) && (!p.group || p.id === versionsOf(p.group.slug)[0].id))
+        .map((p) => ({
+          id: p.id,
+          label: p.label,
+          xml: p.xml,
+          simple: s.simplePieces.includes(p.label),
+          favorite: s.favoritePieces.includes(p.label),
+          drilled: s.sightDrilled[p.label] ?? 0,
+          trusted: p.trust?.status !== 'issues',
+        })),
+    );
+    if (!pick) {
+      setSightMsg('No other piece to read.');
+      return;
+    }
+    s.markSightRead(pick.id, pick.label);
+    const nextHand = pickHand(pick.xml);
+    handRef.current = nextHand;
+    setHand(nextHand);
+    setPendingSight(pick.id);
+    setSightMsg('');
+    setPieceId(pick.id);
+  };
+  // The drill to go back to: the one he left most recently.
+  const backTo = Object.values(parkedDrills)
+    .sort((a, b) => b.at - a.at)
+    .map((d) => allPieces.find((p) => p.id === d.pieceId) ?? allPieces.find((p) => p.label === d.pieceLabel))[0];
 
   // Esc clears the loop (or cancels picking).
   useEffect(() => {
@@ -1306,6 +1353,28 @@ export function ScoreView() {
     if (!startResolved) {
       setStatus('loading');
       return;
+    }
+    // #10262: off the sight-read piece. Back on a parked piece the drill returns (before the load:
+    // the hand decides the steps); anywhere else the hand Sight-read chose doesn't follow him.
+    const settings = useSettingsStore.getState();
+    const leftSight = settings.sightReadPiece !== null && settings.sightReadPiece !== piece.id;
+    if (leftSight) {
+      settings.clearSightRead();
+      setSightMsg('');
+    }
+    const parkedId = rememberRef(piece.id, piece.label, !!piece.xml).id;
+    const parked = settings.parkedDrills[parkedId];
+    if (parked) settings.unparkDrill(parkedId);
+    const back = parked && resumeStepRef.current === null && !restoreRef.current ? restorable(parked, true, Date.now()) : null;
+    if (back) {
+      restoreRef.current = { ...back, pieceId: piece.id };
+      handRef.current = back.hand;
+      setHand(back.hand);
+      setFollowing(back.following);
+      setShowOriginal(back.showOriginal);
+    } else if (leftSight && !restoreRef.current) {
+      handRef.current = 'both';
+      setHand('both');
     }
     if (!piece.xml) {
       setStatus('photo');
@@ -1892,6 +1961,22 @@ export function ScoreView() {
     syncUi();
   };
 
+  // Once the picked piece is drawn with its hand's steps: its bars. keepChunk because this isn't a
+  // range he chose, so it stays out of pieceLoops, which homework lines open on.
+  useEffect(() => {
+    if (!pendingSight || pendingSight !== piece.id || drawnPieceRef.current !== piece.id || status !== 'ready') return;
+    setPendingSight(null);
+    const bars = pickBars(followerRef.current?.steps.map((st) => st.measure) ?? []);
+    const handName = hand === 'both' ? 'both hands' : `${hand} hand`;
+    if (!bars) {
+      setSightMsg(`${pieceName}: nothing to play in the ${handName}. Press again for another.`);
+      return;
+    }
+    applyLoop(bars, true);
+    setSightMsg(`${pieceName}: ${handName}, bars ${bars.first}-${bars.last}. Press again for another.`);
+    reportEvent('sight-read', { piece: pieceName, hand, firstBar: bars.first, lastBar: bars.last });
+  }, [pendingSight, piece.id, status, drawn]);
+
   // The bar field: straight to that bar's first note. No such bar: the field goes back.
   const jumpToBar = (bar: number) => {
     const f = followerRef.current;
@@ -2037,6 +2122,34 @@ export function ScoreView() {
         >
           ★ only
         </button>
+        <button
+          onClick={() => toggleSimple(piece.label)}
+          aria-pressed={simplePieces.includes(piece.label)}
+          title="Mark as simple: Sight-read picks from these first"
+          data-testid="simple-mark"
+          className={`${btn} ${simplePieces.includes(piece.label) ? 'ring-2 ring-emerald-400' : ''}`}
+        >
+          Simple
+        </button>
+        <button
+          onClick={sightRead}
+          disabled={status === 'loading'}
+          title="A piece you don't know, one hand, 5-8 bars. What you're drilling now is kept."
+          data-testid="sight-read"
+          className={btn}
+        >
+          Sight-read
+        </button>
+        {backTo && backTo.id !== piece.id && (
+          <button onClick={() => setPieceId(backTo.id)} data-testid="sight-back" className={btn}>
+            Back to {backTo.label}
+          </button>
+        )}
+        {sightMsg && (
+          <span data-testid="sight-msg" className="text-xs text-sky-300">
+            {sightMsg}
+          </span>
+        )}
         {/* Easy / Harder / My mix of the same song (#9627); his choice is remembered per song. */}
         {versions.length > 1 && (
           <div role="group" aria-label="Version" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
