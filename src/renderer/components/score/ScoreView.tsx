@@ -15,6 +15,7 @@ import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { PedalCoach } from '../../engine/PedalCoach';
 import { rememberRef, resolvePieceId } from './lastPiece';
+import { nextFinger, stepOfBar } from './noteEdit';
 import { chunkLabel, lapDone, parseTargets, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
@@ -102,7 +103,12 @@ interface OsmdMeasure {
   PositionAndShape?: OsmdBox;
 }
 interface OsmdGraphicalNote {
+  /** The group of the whole chord, not this note: VexFlow draws a chord as one note. */
   getSVGGElement?: () => SVGGElement | undefined;
+  /** Every head of that chord, lowest first. */
+  getNoteheadSVGs?: () => Element[];
+  /** [the VexFlow note, this note's place in its chord]. */
+  vfnote?: [unknown, number];
 }
 type OsmdPitch = { FundamentalNote: number; AccidentalHalfTones: number };
 interface OsmdChordContainer {
@@ -116,6 +122,16 @@ interface OsmdVoiceEntry {
 interface OsmdStaffEntry {
   FingeringEntries?: { SVGNode?: Node }[];
   graphicalChordContainers?: { GetChordSymbolContainer: unknown; GraphicalLabel?: { SVGNode?: Node } }[];
+}
+
+/** The note whose finger / hold picker is open; alts = the same key in the other hand. */
+interface FingerPick {
+  x: number;
+  y: number;
+  target: FingerTarget;
+  name: string;
+  held: boolean;
+  alts?: FingerTarget[];
 }
 
 /** A printed chord symbol (<harmony>) and the OSMD object it came from. */
@@ -188,6 +204,13 @@ const targetOf = (n: OsmdNote, measure: number): FingerTarget | null => {
 };
 const sameTarget = (a: FingerTarget, b: FingerTarget) =>
   a.measure === b.measure && a.staff === b.staff && Math.abs(a.onset - b.onset) < 1e-6 && a.midi === b.midi;
+const gNoteOf = (osmd: OpenSheetMusicDisplay, n: OsmdNote) =>
+  osmd.EngravingRules.GNote(n as never) as unknown as OsmdGraphicalNote | undefined;
+const headOf = (g: OsmdGraphicalNote | undefined) => g?.getNoteheadSVGs?.()[g.vfnote?.[1] ?? 0];
+
+// The note being edited, or the one the wheel would edit (#10236). No note drawn uses it.
+const EDIT_YELLOW = '#ffe600';
+const EDIT_OUTLINE = '#a16207';
 
 // Tailwind's preflight sets `img { height: auto }`, which overrides the height
 // attribute OSMD puts on its cursor <img> and collapses it to 1px. Mirror the
@@ -411,7 +434,17 @@ export function ScoreView() {
   const [pedalTip, setPedalTip] = useState('');
   const pedalTipTimerRef = useRef<number | undefined>(undefined);
   // #9988 tap-to-finger: the note he tapped, the message after, where to resume.
-  const [fingerPick, setFingerPick] = useState<{ x: number; y: number; target: FingerTarget; name: string; held: boolean } | null>(null);
+  const [fingerPick, setFingerPick] = useState<FingerPick | null>(null);
+  // #10238: the one note the wheel edits. Yellow and the wheel both read this, so they can't disagree.
+  const [wheelTarget, setWheelTarget] = useState<FingerTarget | null>(null);
+  const [hoverKey, setHoverKey] = useState<number | null>(null);
+  // Counts finished draws: a fingering save redraws without leaving 'ready'.
+  const [drawn, setDrawn] = useState(0);
+  const [wheelLive, setWheelLive] = useState<{ x: number; y: number; target: FingerTarget; digit: Digit | null } | null>(null);
+  const wheelPendingRef = useRef<{ pieceId: string; target: FingerTarget; digit: Digit | null } | null>(null);
+  const wheelTimerRef = useRef<number | undefined>(undefined);
+  const wheelAccRef = useRef({ at: 0, delta: 0 });
+  const keyStripRef = useRef<HTMLDivElement>(null);
   const [fingerMsg, setFingerMsg] = useState('');
   const resumeStepRef = useRef<number | null>(null);
   // #10134: the loop he had set when a fingering edit re-rendered the score.
@@ -1165,6 +1198,7 @@ export function ScoreView() {
           syncUi();
         }
         setStatus('ready');
+        setDrawn((n) => n + 1);
         reportEvent('piece', {
           piece: pieceName, steps: steps.length, bars: steps[steps.length - 1]?.measure ?? 0,
           expressionMarks: exprMarksParsed.length,
@@ -1409,26 +1443,137 @@ export function ScoreView() {
   }, [strip, status]);
 
   // --- manual cursor controls (re-sync the follower to wherever the cursor lands) ---
-  // #9988: tap a notehead to give it a finger number, or (#10146) mark it "hold".
-  const onScoreTap = (ev: React.MouseEvent) => {
+  // The note under the pointer: a chord is one drawn group, so the head he is on decides,
+  // else (on the stem) the head nearest the pointer.
+  const noteAt = (el: Element, clientY: number): FingerTarget | null => {
     const osmd = osmdRef.current;
     const f = followerRef.current;
-    if (!osmd || !f || watching || !(ev.target instanceof Element)) return;
-    const holds = holdsOf(piece.xml);
+    if (!osmd || !f) return null;
+    const gNote = (n: OsmdNote) => gNoteOf(osmd, n);
     for (let i = 0; i < f.steps.length; i++) {
       // A held note is no longer struck, so look among the held-over notes too.
+      const chord = [...(stepNotesRef.current[i] ?? []), ...(tieNotesRef.current[i] ?? [])].filter((n) =>
+        gNote(n)?.getSVGGElement?.()?.contains(el),
+      );
+      if (!chord.length) continue;
+      const away = (n: OsmdNote) => {
+        const r = headOf(gNote(n))?.getBoundingClientRect();
+        return r ? Math.abs((r.top + r.bottom) / 2 - clientY) : Infinity;
+      };
+      const note =
+        chord.find((n) => headOf(gNote(n))?.contains(el)) ??
+        chord.reduce((best, n) => (away(n) < away(best) ? n : best));
+      return targetOf(note, f.steps[i].measure);
+    }
+    return null;
+  };
+
+  // The written note for a target, wherever the score has been re-rendered since.
+  const noteOf = (target: FingerTarget): OsmdNote | null => {
+    const f = followerRef.current;
+    if (!f) return null;
+    for (let i = 0; i < f.steps.length; i++) {
+      if (f.steps[i].measure !== target.measure) continue;
       for (const n of [...(stepNotesRef.current[i] ?? []), ...(tieNotesRef.current[i] ?? [])]) {
-        const g = osmd.EngravingRules.GNote(n as never) as unknown as OsmdGraphicalNote | undefined;
-        if (!g?.getSVGGElement?.()?.contains(ev.target)) continue;
-        const target = targetOf(n, f.steps[i].measure);
-        if (!target) return;
-        setFingerMsg('');
-        const held = holds.some((h) => sameTarget(h, target));
-        setFingerPick({ x: ev.clientX, y: ev.clientY, target, name: noteName(target.midi), held });
-        return;
+        const at = targetOf(n, f.steps[i].measure);
+        if (at && sameTarget(at, target)) return n;
       }
     }
+    return null;
   };
+
+  // The notes of that key at the cursor (a pitch can sit in both hands at once).
+  const keyTargets = (midi: number): FingerTarget[] => {
+    const measure = followerRef.current?.steps[cursorStep]?.measure;
+    if (measure === undefined) return [];
+    return [...(stepNotesRef.current[cursorStep] ?? []), ...(tieNotesRef.current[cursorStep] ?? [])]
+      .filter((n) => toMidi(n) === midi)
+      .flatMap((n) => targetOf(n, measure) ?? []);
+  };
+
+  const openPick = (x: number, y: number, target: FingerTarget, alts?: FingerTarget[]) => {
+    setFingerMsg('');
+    const held = holdsOf(piece.xml).some((h) => sameTarget(h, target));
+    setFingerPick({ x, y, target, name: noteName(target.midi), held, alts });
+  };
+
+  // #9988: tap a notehead to give it a finger number, or (#10146) mark it "hold".
+  const onScoreTap = (ev: React.MouseEvent) => {
+    if (watching || !(ev.target instanceof Element)) return;
+    const hit = noteAt(ev.target, ev.clientY);
+    if (hit) openPick(ev.clientX, ev.clientY, hit);
+  };
+
+  // #10236: a key on the strip opens the same picker, for that pitch at the cursor.
+  const onKeyClick = (midi: number, ev: React.MouseEvent) => {
+    if (watching) return;
+    const [target, ...alts] = keyTargets(midi);
+    if (target) openPick(ev.clientX, ev.clientY, target, alts);
+    else setFingerMsg(`${noteName(midi)} isn't at the cursor.`);
+  };
+
+  const setHoverTarget = (next: FingerTarget | null) =>
+    setWheelTarget((was) => (was && next && sameTarget(was, next) ? was : next));
+
+  const onScoreHover = (ev: React.MouseEvent) => {
+    if (hoverKey !== null) setHoverKey(null);
+    const on = !watching && picking === 'off' && ev.target instanceof Element ? noteAt(ev.target, ev.clientY) : null;
+    setHoverTarget(on);
+  };
+
+  // A hovered key follows the cursor: no yellow once its pitch isn't in this step, and
+  // none for a pitch in both hands, since the wheel couldn't tell which one he means.
+  useEffect(() => {
+    if (hoverKey === null) {
+      return;
+    }
+    const hits = !watching && picking === 'off' ? keyTargets(hoverKey) : [];
+    setHoverTarget(hits.length === 1 ? hits[0] : null);
+  }, [hoverKey, cursorStep, watching, picking, drawn]);
+
+  // A save or a re-fit redraws the score under a pointer that hasn't moved: find what it's on
+  // again, or the next notch of the same spin would scroll instead of edit.
+  const pointerRef = useRef({ x: -1, y: -1 });
+  useEffect(() => {
+    const track = (ev: MouseEvent) => {
+      pointerRef.current = { x: ev.clientX, y: ev.clientY };
+    };
+    document.addEventListener('mousemove', track, { passive: true });
+    return () => document.removeEventListener('mousemove', track);
+  }, []);
+  useEffect(() => {
+    if (status !== 'ready') return;
+    const { x, y } = pointerRef.current;
+    const el = x < 0 ? null : document.elementFromPoint(x, y);
+    const midi = el?.getAttribute('data-midi');
+    if (midi) setHoverKey(Number(midi));
+    else if (el && containerRef.current?.contains(el) && !watching && picking === 'off') {
+      setHoverTarget(noteAt(el, y));
+    }
+  }, [drawn, layoutTick]);
+
+  // Paint the note being edited, and take the paint off afterwards so its colour survives.
+  useEffect(() => {
+    const osmd = osmdRef.current;
+    if (!osmd || status !== 'ready') return;
+    const painted: { el: SVGElement; fill: string; stroke: string }[] = [];
+    for (const target of [wheelTarget, fingerPick?.target]) {
+      const note = target && noteOf(target);
+      const head = note && headOf(gNoteOf(osmd, note));
+      if (!head) continue;
+      for (const el of [head, ...head.querySelectorAll('*')] as SVGElement[]) {
+        painted.push({ el, fill: el.style.fill, stroke: el.style.stroke });
+        el.style.fill = EDIT_YELLOW;
+        el.style.stroke = EDIT_OUTLINE;
+      }
+    }
+    return () => {
+      for (const { el, fill, stroke } of painted.reverse()) {
+        el.style.fill = fill;
+        el.style.stroke = stroke;
+      }
+    };
+  }, [wheelTarget, fingerPick?.target, drawn, layoutTick]);
 
   // Re-render with the edited score where he is (loop kept, #10134).
   const showEditedXml = (xml: string) => {
@@ -1464,7 +1609,10 @@ export function ScoreView() {
   const applyFinger = (digit: Digit | null) => {
     const pick = fingerPick;
     setFingerPick(null);
-    if (!pick) return;
+    if (pick) writeFinger(pick, digit);
+  };
+
+  const writeFinger = (pick: { target: FingerTarget; name: string }, digit: Digit | null) => {
     const result = setFingering(piece.xml, pick.target, digit);
     if (!result.ok) {
       setFingerMsg(`Couldn't change that note's finger: ${result.reason}`);
@@ -1501,6 +1649,62 @@ export function ScoreView() {
     syncUi();
   };
 
+  // The wheel's number lands once he stops, so a spin is one re-render and one file write.
+  const commitWheel = () => {
+    window.clearTimeout(wheelTimerRef.current);
+    const pending = wheelPendingRef.current;
+    wheelPendingRef.current = null;
+    setWheelLive(null);
+    if (pending && pending.pieceId === piece.id) {
+      writeFinger({ target: pending.target, name: noteName(pending.target.midi) }, pending.digit);
+    }
+  };
+  const commitWheelRef = useRef(commitWheel);
+  commitWheelRef.current = commitWheel;
+
+  // #10237 #10238: on a yellow note the wheel steps its finger; anywhere else it scrolls.
+  // The strip has no scroll of its own, so there it goes a bar at a time.
+  const onWheel = (ev: WheelEvent) => {
+    const f = followerRef.current;
+    if (!f || status !== 'ready') return;
+    const target = wheelTarget;
+    if (!target && !strip) return;
+    ev.preventDefault();
+    // A mouse notch is about 100; a trackpad sends many small deltas.
+    const acc = wheelAccRef.current;
+    const now = performance.now();
+    acc.delta = (now - acc.at > 300 ? 0 : acc.delta) + (ev.deltaMode === 1 ? ev.deltaY * 40 : ev.deltaY);
+    acc.at = now;
+    if (Math.abs(acc.delta) < 50) return;
+    const up = acc.delta < 0;
+    acc.delta = 0;
+    if (!target) {
+      if (watching || picking !== 'off') return;
+      const step = stepOfBar(f.steps, f.steps[cursorStep]?.measure ?? 1, up ? -1 : 1);
+      if (step !== null) manualMove(step - cursorIndexRef.current);
+      return;
+    }
+    if (wheelPendingRef.current && !sameTarget(wheelPendingRef.current.target, target)) commitWheel();
+    const pending = wheelPendingRef.current;
+    const digit = nextFinger(pending ? pending.digit : noteOf(target)?.Fingering?.value?.trim(), up);
+    wheelPendingRef.current = { pieceId: piece.id, target, digit };
+    setWheelLive({ x: ev.clientX, y: ev.clientY, target, digit });
+    window.clearTimeout(wheelTimerRef.current);
+    wheelTimerRef.current = window.setTimeout(() => commitWheelRef.current(), 400);
+  };
+  const onWheelRef = useRef(onWheel);
+  onWheelRef.current = onWheel;
+  useEffect(() => {
+    const listen = (ev: WheelEvent) => onWheelRef.current(ev);
+    const areas = [panelRef.current, keyStripRef.current];
+    // Not passive: over a note the score must not move as well.
+    for (const a of areas) a?.addEventListener('wheel', listen, { passive: false });
+    return () => {
+      for (const a of areas) a?.removeEventListener('wheel', listen);
+    };
+  }, [showKeyboard]);
+  useEffect(() => () => commitWheelRef.current(), []);
+
   // Red on the strip while a wrong key is down. The latest wrong note counts even when
   // the overlay could not place a mark for it on the staff.
   const wrongKeys = new Set(
@@ -1509,6 +1713,11 @@ export function ScoreView() {
     ),
   );
   const finished = feedback.kind === 'complete';
+  const keyLabels = fingersOf(stepNotesRef.current[cursorStep]);
+  if (wheelLive && hoverKey === wheelLive.target.midi) {
+    if (wheelLive.digit) keyLabels.set(hoverKey, wheelLive.digit);
+    else keyLabels.delete(hoverKey);
+  }
   const btn =
     'rounded-md px-3 py-1 text-sm font-medium disabled:opacity-40 bg-gray-800 text-gray-200 hover:bg-gray-700';
   const showPhoto = view === 'photo' && !!piece.photo;
@@ -1870,6 +2079,8 @@ export function ScoreView() {
           <div
             ref={containerRef}
             onClick={onScoreTap}
+            onMouseOver={onScoreHover}
+            onMouseLeave={() => setHoverTarget(null)}
             className={scoreLayout === 'pages' ? 'score-pages' : undefined}
             style={scoreLayout === 'pages' ? {
               width: 'calc((100% - 1.5rem) / 2)',
@@ -1887,10 +2098,26 @@ export function ScoreView() {
       {fingerPick && (
         <div
           className="fixed z-50 flex items-center gap-1 rounded-md border border-gray-700 bg-gray-900 p-1 shadow-lg"
-          style={{ left: fingerPick.x + 8, top: fingerPick.y + 8 }}
+          // A key on the strip is at the screen's edge: keep the picker on screen.
+          style={{ left: Math.min(fingerPick.x + 8, window.innerWidth - 460), top: Math.min(fingerPick.y + 8, window.innerHeight - 60) }}
           data-testid="finger-picker"
         >
-          <span className="px-1 text-xs text-gray-400">{fingerPick.name}: finger</span>
+          <span className="px-1 text-xs text-gray-400" data-testid="finger-pick-name">
+            {fingerPick.name}
+            {fingerPick.alts?.length ? ` (${fingerPick.target.staff === 1 ? 'right' : 'left'} hand)` : ''}: finger
+          </span>
+          {fingerPick.alts?.length ? (
+            <button
+              onClick={() => {
+                const [next, ...rest] = fingerPick.alts ?? [];
+                if (next) openPick(fingerPick.x, fingerPick.y, next, [...rest, fingerPick.target]);
+              }}
+              className="rounded bg-gray-700 px-2 py-1 text-sm text-gray-200"
+              data-testid="finger-other-hand"
+            >
+              Other hand
+            </button>
+          ) : null}
           {(['1', '2', '3', '4', '5'] as const).map((d) => (
             <button key={d} onClick={() => applyFinger(d)} className="rounded bg-purple-700 px-2 py-1 text-sm font-bold text-white hover:bg-purple-600">
               {d}
@@ -1908,10 +2135,20 @@ export function ScoreView() {
           <button onClick={() => setFingerPick(null)} className="rounded px-2 py-1 text-sm text-gray-400">Cancel</button>
         </div>
       )}
+      {wheelLive && (
+        <div
+          className="pointer-events-none fixed z-50 rounded bg-yellow-300 px-2 text-lg font-bold text-gray-900 shadow"
+          style={{ left: wheelLive.x + 12, top: wheelLive.y - 28 }}
+          data-testid="finger-live"
+        >
+          {wheelLive.digit ?? '–'}
+        </div>
+      )}
       {/* Opaque, so nothing of the score shows through it (#5153). The strip puts it under
           the music edge to edge instead of over it. */}
       {showKeyboard && (
         <div
+          ref={keyStripRef}
           className={strip ? '-mx-6 -mb-6 shrink-0 bg-gray-950 px-1 py-1' : 'sticky bottom-0 z-20 -mx-2 rounded-t-md bg-gray-950 px-2 py-1'}
           data-testid="keyboard-strip"
         >
@@ -1920,7 +2157,10 @@ export function ScoreView() {
             green={new Set(watching ? watchNotes : stepKeys)}
             red={wrongKeys}
             held={held}
-            labels={fingersOf(stepNotesRef.current[cursorStep])}
+            labels={keyLabels}
+            yellow={wheelTarget && hoverKey === wheelTarget.midi ? hoverKey : null}
+            onKeyHover={setHoverKey}
+            onKeyClick={onKeyClick}
           />
         </div>
       )}

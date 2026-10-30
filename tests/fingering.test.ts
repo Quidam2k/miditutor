@@ -8,6 +8,7 @@ import {
   type FingerTarget,
   type XmlImpl,
 } from '../src/shared/fingering';
+import { nextFinger, stepOfBar } from '../src/renderer/components/score/noteEdit';
 
 const impl: XmlImpl = {
   parse: s => new DOMParser().parseFromString(s, 'text/xml') as unknown as Document,
@@ -234,5 +235,25 @@ describe('setHold / holdsOf', () => {
     const off = setHold(on.xml, ab6, false, impl);
     if (!off.ok) throw new Error(off.reason);
     expect(off.xml).toContain('<play><mute>straight</mute></play>');
+  });
+});
+
+describe('wheel steps (#10237)', () => {
+  it('counts up from 1 and down from 5 on an empty note', () => {
+    expect(nextFinger(null, true)).toBe('1');
+    expect(nextFinger(undefined, false)).toBe('5');
+  });
+  it('steps a marked note and comes off past either end', () => {
+    expect(nextFinger('3', true)).toBe('4');
+    expect(nextFinger('3', false)).toBe('2');
+    expect(nextFinger('5', true)).toBeNull();
+    expect(nextFinger('1', false)).toBeNull();
+  });
+  it('finds the first step of the next or previous bar, not past the ends', () => {
+    const steps = [{ measure: 1 }, { measure: 1 }, { measure: 2 }, { measure: 3 }];
+    expect(stepOfBar(steps, 1, 1)).toBe(2);
+    expect(stepOfBar(steps, 3, -1)).toBe(2);
+    expect(stepOfBar(steps, 3, 1)).toBeNull();
+    expect(stepOfBar(steps, 1, -1)).toBeNull();
   });
 });
