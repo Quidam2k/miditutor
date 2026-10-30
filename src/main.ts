@@ -294,6 +294,7 @@ const pantheonCert = async () => {
 };
 
 let apiToken = '';
+let inviteSentAt = 0;
 const invite = new InviteTimer({
   idleMs: Number(process.env.MIDITUTOR_INVITE_IDLE_MS ?? 10 * 60_000),
   onIdle: () => {
@@ -414,7 +415,16 @@ const startTutorApi = () => {
   ipcMain.on('tutor:note', (_e, ev) => {
     tutorApi?.onNote(ev);
     recorder.noteEvent(ev);
-    if (ev?.kind === 'noteon') invite.noteOn();
+    if (ev?.kind === 'noteon') {
+      invite.noteOn();
+      // The button's "N min left" reads endsAt, which every note moves (#10171). It only
+      // changes by the minute, so once a second is plenty for fast passages.
+      const now = Date.now();
+      if (invite.state().active && now - inviteSentAt >= 1000) {
+        inviteSentAt = now;
+        mainWindow?.webContents.send('tutor:command', { type: 'invite', state: invite.state() });
+      }
+    }
   });
   ipcMain.on('tutor:event', (_e, ev) => {
     tutorApi?.onEvent(ev);

@@ -287,6 +287,26 @@ async function run() {
       (await buttonText())?.startsWith('Tutor on') ? state : null;
   }, 5_000, 'invite active and button updated');
 
+  // #10171: with IDLE_MS=125000 the label starts at "3 min left", drops to "2" once under
+  // two minutes, and a note puts it back to "3". Only this part runs at that length.
+  if (IDLE_MS >= 60_000) {
+    check((await buttonText())?.includes('3 min left'), 'label starts full', await buttonText());
+    await waitFor(
+      async () => (await buttonText())?.includes('2 min left'),
+      20_000,
+      'label counts down',
+    );
+    await api('POST', '/inject', { notes: [60], kind: 'chord', holdMs: 100 });
+    await waitFor(
+      async () => (await buttonText())?.includes('3 min left'),
+      3_000,
+      'a note puts the label back to full',
+    );
+    check(await clickTutor(), 'press button to end invite');
+    await waitFor(async () => (await api('GET', '/state')).invite?.active === false, 5_000, 'invite ended');
+    return;
+  }
+
   const previousEndsAt = active?.invite?.endsAt;
   const duration = active?.invite?.endsAt - active?.invite?.since;
   check(

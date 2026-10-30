@@ -15,7 +15,9 @@ export function TutorButton() {
     if (!bridge?.inviteStatus) return;
     void bridge.inviteStatus().then((r) => setState(r.state));
     return bridge.onCommand((cmd) => {
-      if (cmd.type === 'invite') setState(cmd.state);
+      if (cmd.type !== 'invite') return;
+      setState(cmd.state);
+      setNow(Date.now());
     });
   }, []);
 
