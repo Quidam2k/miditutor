@@ -33,6 +33,9 @@ interface TutorBridge {
   inviteToggle?: () => Promise<{ state: InviteState; error?: string }>;
   takePcm?: (id: string, data: Uint8Array) => void;
   takePcmDone?: (msg: { id: string; sampleRate?: number; channels?: number; error?: string }) => void;
+  /** #10236: the practice snapshot. force = this launch is a patch relaunch. Null in a hidden test copy. */
+  sessionLoad?: () => Promise<{ snapshot: unknown; force: boolean } | null>;
+  sessionSave?: (snapshot: unknown) => void;
   /** Scan review (#9664): null unless the desk app was started with a review library. */
   reviewInfo?: () => Promise<{ library: string } | null>;
 }

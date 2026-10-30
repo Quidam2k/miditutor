@@ -27,6 +27,10 @@ interface SettingsState {
   lastPiece: { id: string; label: string } | null;
   /** #10162: the tab he was on, so a restart reopens it. */
   lastView: string;
+  /** #5259: the last overall loop he set on each piece, by displayed title. */
+  pieceLoops: Record<string, { first: number; last: number }>;
+  /** #5259: the piece list shows only favorites (and the piece on screen). */
+  favoritesOnly: boolean;
 
   setClef: (clef: Clef) => void;
   setExerciseType: (type: ExerciseType) => void;
@@ -37,6 +41,8 @@ interface SettingsState {
   setBackwardTargets: (text: string) => void;
   setLastPiece: (piece: { id: string; label: string }) => void;
   setLastView: (view: string) => void;
+  setPieceLoop: (title: string, bars: { first: number; last: number }) => void;
+  setFavoritesOnly: (on: boolean) => void;
   toggleFavoritePiece: (title: string) => void;
   setPieceVersion: (slug: string, file: string) => void;
   countIntervalCorrect: () => void;
@@ -65,6 +71,8 @@ export const useSettingsStore = create<SettingsState>()(
       backwardTargets: '3,5',
       lastPiece: null,
       lastView: 'practice',
+      pieceLoops: {},
+      favoritesOnly: false,
 
       setClef: (clef) => set({ clef }),
       setShowKeyboard: (show) => set({ showKeyboard: show }),
@@ -75,6 +83,8 @@ export const useSettingsStore = create<SettingsState>()(
       setBackwardTargets: (text) => set({ backwardTargets: text }),
       setLastPiece: (piece) => set({ lastPiece: piece }),
       setLastView: (view) => set({ lastView: view }),
+      setPieceLoop: (title, bars) => set((s) => ({ pieceLoops: { ...s.pieceLoops, [title]: bars } })),
+      setFavoritesOnly: (on) => set({ favoritesOnly: on }),
       toggleFavoritePiece: (title) =>
         set((s) => ({
           favoritePieces: s.favoritePieces.includes(title)

@@ -15,8 +15,10 @@ import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { PedalCoach } from '../../engine/PedalCoach';
 import { rememberRef, resolvePieceId } from './lastPiece';
-import { nextFinger, stepOfBar } from './noteEdit';
-import { chunkLabel, lapDone, parseTargets, startChunk, type ChunkState } from '../../engine/BackwardChunk';
+import { nextFinger, prevPlayable, stepOfBar } from './noteEdit';
+import { chunkLabel, lapDone, parseTargets, rangeEdited, startChunk, type ChunkState } from '../../engine/BackwardChunk';
+import { BarInput } from './BarInput';
+import { loadStartupSnapshot, type SessionSnapshot } from './sessionSnapshot';
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustBadge, trustMark } from '../../../shared/trust';
@@ -440,6 +442,8 @@ export function ScoreView() {
   const [hoverKey, setHoverKey] = useState<number | null>(null);
   // Counts finished draws: a fingering save redraws without leaving 'ready'.
   const [drawn, setDrawn] = useState(0);
+  // The piece the follower is built on; null while one is loading.
+  const drawnPieceRef = useRef<string | null>(null);
   const [wheelLive, setWheelLive] = useState<{ x: number; y: number; target: FingerTarget; digit: Digit | null } | null>(null);
   const wheelPendingRef = useRef<{ pieceId: string; target: FingerTarget; digit: Digit | null } | null>(null);
   const wheelTimerRef = useRef<number | undefined>(undefined);
@@ -509,6 +513,8 @@ export function ScoreView() {
   const [chunk, setChunk] = useState<ChunkState | null>(null);
   const chunkRef = useRef<ChunkState | null>(null);
   chunkRef.current = chunk;
+  // The whole range he chose; with Build backwards the loop itself is only the end of it.
+  const overall = chunk ? { first: chunk.first, last: chunk.last } : loopBars;
   const lapWrongRef = useRef(0);
   const backwardTargets = useSettingsStore((s) => s.backwardTargets);
   const setBackwardTargets = useSettingsStore((s) => s.setBackwardTargets);
@@ -520,6 +526,31 @@ export function ScoreView() {
   const strip = scoreLayout === 'strip';
   const stripRef = useRef(strip);
   stripRef.current = strip;
+
+  // #10236 seamless relaunch: read what to put back before the first piece loads, since the
+  // hand decides the steps. Taken once, by the first load of that same piece; a tutor push
+  // or homework line in the meantime is a different piece and wins.
+  const restoreRef = useRef<SessionSnapshot | null>(null);
+  const [sessionRead, setSessionRead] = useState(false);
+  useEffect(() => {
+    let gone = false;
+    void loadStartupSnapshot().then((snap) => {
+      if (gone) return;
+      // A tutor push or homework line got here first: that's what he's on now.
+      const { selectPieceId, pieceRequest } = useTutorStore.getState();
+      if (snap && !selectPieceId && !pieceRequest) {
+        restoreRef.current = snap;
+        handRef.current = snap.hand;
+        setHand(snap.hand);
+        setFollowing(snap.following);
+        setShowOriginal(snap.showOriginal);
+      }
+      setSessionRead(true);
+    });
+    return () => {
+      gone = true;
+    };
+  }, []);
 
   // Built-in pieces, his Pieces folder on disk, then anything pushed this session.
   // The folder is re-read when the window regains focus, so a synced file shows up.
@@ -589,15 +620,25 @@ export function ScoreView() {
     .sort((a, b) => Number(favorites.includes(b.label)) - Number(favorites.includes(a.label)) || byTitle(a, b));
   const favoritePieces = pieces.filter((p) => favorites.includes(p.label));
   const otherPieces = pieces.filter((p) => !favorites.includes(p.label));
+  // #5259: "★ only" shortens the list to his favorites, plus the piece on screen so it stays selected.
+  const favoritesOnly = useSettingsStore((s) => s.favoritesOnly);
+  const setFavoritesOnly = useSettingsStore((s) => s.setFavoritesOnly);
+  const listedOthers = favoritesOnly && favoritePieces.length ? otherPieces.filter((p) => p.id === pieceId) : otherPieces;
   useEffect(() => {
     if (!selectPieceId) return;
     setPieceId(selectPieceId);
     setStartResolved(true);
   }, [selectPieceId]);
   // Missing (deleted or renamed): today's default, quietly.
+  const restoreSnap = restoreRef.current;
   const startChoice = startResolved
     ? pieceId
-    : resolvePieceId(useSettingsStore.getState().lastPiece, allPieces, folderLoaded, PIECES[0].id);
+    : !sessionRead
+      ? 'wait'
+      : resolvePieceId(
+          restoreSnap ? { id: restoreSnap.pieceId, label: restoreSnap.pieceLabel } : useSettingsStore.getState().lastPiece,
+          allPieces, folderLoaded, PIECES[0].id,
+        );
   useEffect(() => {
     if (startResolved || startChoice === 'wait') return;
     setPieceId(startChoice);
@@ -628,6 +669,22 @@ export function ScoreView() {
     setMixing(false);
   };
   const pieceName = piece.group ? `${piece.label} (${piece.group.label})` : piece.label;
+  // #5259: a homework line opens its piece and starts on the range he last set there.
+  const pieceRequest = useTutorStore((s) => s.pieceRequest);
+  const [pendingOpen, setPendingOpen] = useState<{ pieceId: string; backwards: boolean } | null>(null);
+  useEffect(() => {
+    if (!pieceRequest) return;
+    const found = allPieces.some((p) => p.id === pieceRequest.pieceId);
+    if (!found && !folderLoaded) return;
+    useTutorStore.getState().clearPieceRequest();
+    if (!found) {
+      setFingerMsg(`Couldn't find that piece's file (${pieceRequest.pieceId.replace(/^file:/, '')}).`);
+      return;
+    }
+    setPieceId(pieceRequest.pieceId);
+    setStartResolved(true);
+    setPendingOpen(pieceRequest);
+  }, [pieceRequest, folderLoaded, folder]);
   // #9988: the scanned original, for pieces with a scan layout (library slug = file stem).
   const scanSlug = piece.id.startsWith('file:')
     ? piece.id.slice(5).replace(/\.(musicxml|xml|mxl)$/i, '')
@@ -635,6 +692,8 @@ export function ScoreView() {
   const scanLayout = useScanLayout(scanSlug);
   const [showOriginal, setShowOriginal] = useState(false);
   const fifths = useMemo(() => fifthsOf(piece.xml), [piece.xml]);
+  const pieceLabelRef = useRef(piece.label);
+  pieceLabelRef.current = piece.label;
 
   // Name notes as the page spells them: the written notes at the cursor first, then
   // the key signature, so a 4-flat piece says "Db5", never "C#5".
@@ -972,6 +1031,8 @@ export function ScoreView() {
         if (!range) return;
         f.setRange(range.first, range.last);
         setLoopBars({ first, last });
+        // Build backwards moving its own loop isn't him choosing a range (#5259).
+        if (!keepChunk) useSettingsStore.getState().setPieceLoop(pieceLabelRef.current, { first, last });
         reportEvent('loop', { firstBar: first, lastBar: last });
       } else {
         f.clearRange();
@@ -996,6 +1057,7 @@ export function ScoreView() {
     const c = startChunk(bars.first, bars.last, parseTargets(useSettingsStore.getState().backwardTargets));
     setChunk(c);
     applyLoop({ first: c.start, last: c.last }, true);
+    useSettingsStore.getState().setPieceLoop(pieceLabelRef.current, { first: c.first, last: c.last });
     chunkEvent(c, { on: true });
   };
   const toggleBackwards = () => {
@@ -1003,6 +1065,37 @@ export function ScoreView() {
       chunkEvent(chunk, { on: false });
       applyLoop({ first: chunk.first, last: chunk.last });
     } else if (loopBars) startBackwards(loopBars);
+  };
+
+  // #10236: he typed a new overall range. The cursor only jumps if the loop itself changed.
+  const editRange = (next: { first: number; last: number }) => {
+    const f = followerRef.current;
+    if (!f || next.first > next.last || !stepRangeOf(f.steps, next.first, next.last)) return;
+    const c = chunkRef.current;
+    if (!c) {
+      applyLoop(next);
+      return;
+    }
+    const edited = rangeEdited(c, next.first, next.last, parseTargets(useSettingsStore.getState().backwardTargets));
+    setChunk(edited);
+    useSettingsStore.getState().setPieceLoop(pieceLabelRef.current, next);
+    if (edited.start !== c.start || edited.last !== c.last) applyLoop({ first: edited.start, last: edited.last }, true);
+    chunkEvent(edited, { edited: true });
+  };
+
+  // Typed instead of clicked: the same two steps as clicking the first bar and the last.
+  const typedFirst = (bar: number) => {
+    if (picking === 'off') {
+      if (overall) editRange({ first: bar, last: overall.last });
+    } else if (followerRef.current?.steps.some((st) => st.measure === bar)) {
+      setPickStart(bar);
+      setPicking('end');
+    }
+  };
+  const typedLast = (bar: number) => {
+    if (picking !== 'off') {
+      if (pickStart !== null) applyLoop({ first: pickStart, last: bar });
+    } else if (overall) editRange({ first: overall.first, last: bar });
   };
 
   // One lap wrapped. Clean (no wrong note in it) counts toward the chunk; enough of
@@ -1086,6 +1179,41 @@ export function ScoreView() {
     else if (loopRequest.backwards) startBackwards({ first: loopRequest.firstBar, last: loopRequest.lastBar });
     else applyLoop({ first: loopRequest.firstBar, last: loopRequest.lastBar });
   }, [loopRequest?.seq, ready]);
+
+  useEffect(() => {
+    if (!pendingOpen || drawnPieceRef.current !== pendingOpen.pieceId || pendingOpen.pieceId !== piece.id) return;
+    setPendingOpen(null);
+    const range = useSettingsStore.getState().pieceLoops[piece.label];
+    if (!range || !followerRef.current || !stepRangeOf(followerRef.current.steps, range.first, range.last)) {
+      setPickStart(null);
+      setPicking('start');
+    } else if (pendingOpen.backwards) startBackwards(range);
+    else applyLoop(range);
+  }, [pendingOpen, piece.id, drawn]);
+
+  // #10236: keep the snapshot current. Not while loading, when these describe the piece before.
+  useEffect(() => {
+    const save = window.tutorBridge?.sessionSave;
+    if (!save || status !== 'ready' || !onScreen || drawnPieceRef.current !== piece.id) return;
+    const timer = window.setTimeout(() => {
+      const snapshot: SessionSnapshot = {
+        at: Date.now(),
+        pieceId: rememberRef(onScreen.id, onScreen.label, !!onScreen.xml).id,
+        pieceLabel: onScreen.label,
+        loop: loopBars,
+        chunk,
+        lap,
+        wrongCount,
+        lapWrong: lapWrongRef.current,
+        step: cursorStep,
+        hand,
+        following,
+        showOriginal,
+      };
+      save(snapshot);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [status, piece.id, loopBars, chunk, lap, wrongCount, cursorStep, hand, following, showOriginal, drawn]);
 
   // Esc clears the loop (or cancels picking).
   useEffect(() => {
@@ -1180,8 +1308,11 @@ export function ScoreView() {
         setPickStart(null);
         restart();
         // After his fingering edit re-renders the score, put him back where he was.
-        const resume = resumeStepRef.current;
-        const resumeLoop = resumeLoopRef.current;
+        const snap = restoreRef.current;
+        restoreRef.current = null;
+        const restored = resumeStepRef.current === null && snap?.pieceId === piece.id ? snap : null;
+        const resume = restored ? restored.step : resumeStepRef.current;
+        const resumeLoop = restored ? restored.loop : resumeLoopRef.current;
         resumeStepRef.current = null;
         resumeLoopRef.current = null;
         // A real piece switch ends Build backwards; a fingering/hold reload keeps it with the loop.
@@ -1193,10 +1324,24 @@ export function ScoreView() {
             followerRef.current.setRange(range.first, range.last);
             setLoopBars(resumeLoop);
           }
-          followerRef.current.seek(resume);
+          if (restored) {
+            // After restart(), which zeroes these. A loop that no longer fits ends the drill quietly.
+            setChunk(range ? restored.chunk : null);
+            if (range) {
+              followerRef.current.restoreLap(restored.lap);
+              setLap(restored.lap);
+            }
+            setWrongCount(restored.wrongCount);
+            lapWrongRef.current = restored.lapWrong;
+            reportEvent('restore', { step: resume, loop: range ? resumeLoop : null, lap: restored.lap });
+          }
+          if (resume < followerRef.current.steps.length) followerRef.current.seek(resume);
           moveCursorTo(Math.min(followerRef.current.index, followerRef.current.steps.length - 1));
+          // Straight there: a relaunch should look like a flicker, not a slide across the piece.
+          if (restored) centerCursor('auto');
           syncUi();
         }
+        drawnPieceRef.current = piece.id;
         setStatus('ready');
         setDrawn((n) => n + 1);
         reportEvent('piece', {
@@ -1222,6 +1367,7 @@ export function ScoreView() {
       container.innerHTML = '';
       osmdRef.current = null;
       followerRef.current = null;
+      drawnPieceRef.current = null;
       exprRef.current = null;
     };
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
@@ -1636,6 +1782,13 @@ export function ScoreView() {
       .catch((err: unknown) => setFingerMsg(`${what}, but saving failed: ${err instanceof Error ? err.message : String(err)}`));
   };
 
+  const prevStep = () => {
+    const f = followerRef.current;
+    if (!f) return;
+    const target = prevPlayable(f.steps, cursorIndexRef.current);
+    if (target !== null) manualMove(target - cursorIndexRef.current);
+  };
+
   const manualMove = (delta: number) => {
     const f = followerRef.current;
     if (!f) return;
@@ -1647,6 +1800,13 @@ export function ScoreView() {
     moveCursorTo(Math.min(f.index, f.steps.length - 1));
     setFeedback({ kind: 'idle' });
     syncUi();
+  };
+
+  // The bar field: straight to that bar's first note. No such bar: the field goes back.
+  const jumpToBar = (bar: number) => {
+    const f = followerRef.current;
+    const step = f ? stepOfBar(f.steps, bar, 0) : null;
+    if (step !== null) manualMove(step - cursorIndexRef.current);
   };
 
   // The wheel's number lands once he stops, so a spin is one re-render and one file write.
@@ -1756,8 +1916,8 @@ export function ScoreView() {
               ))}
             </optgroup>
           )}
-          <optgroup label="All pieces">
-            {otherPieces.map((p) => (
+          <optgroup label={favoritesOnly && favoritePieces.length ? 'On screen' : 'All pieces'}>
+            {listedOthers.map((p) => (
               <option key={p.id} value={p.id}>
                 {`${trustMark(p.trust)} ${p.label}`}
               </option>
@@ -1773,6 +1933,16 @@ export function ScoreView() {
           }`}
         >
           {favorites.includes(piece.label) ? '★' : '☆'}
+        </button>
+        <button
+          onClick={() => setFavoritesOnly(!favoritesOnly)}
+          disabled={favoritePieces.length === 0}
+          aria-pressed={favoritesOnly}
+          title="List only your favorites"
+          data-testid="favorites-only"
+          className={`${btn} ${favoritesOnly && favoritePieces.length ? 'ring-2 ring-yellow-400' : ''}`}
+        >
+          ★ only
         </button>
         {/* Easy / Harder / My mix of the same song (#9627); his choice is remembered per song. */}
         {versions.length > 1 && (
@@ -1955,7 +2125,7 @@ export function ScoreView() {
             </label>
           )}
           {/* While it plays for him, the timer owns the cursor. */}
-          <button onClick={() => manualMove(-1)} disabled={status !== 'ready' || watching} className={btn}>
+          <button onClick={prevStep} disabled={status !== 'ready' || watching} className={btn}>
             ◀ Prev
           </button>
           <button onClick={() => manualMove(1)} disabled={status !== 'ready' || finished || watching} className={btn}>
@@ -1979,9 +2149,10 @@ export function ScoreView() {
       )}
       {status === 'ready' && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-md bg-gray-900/60 px-3 py-2 text-sm">
-          <span className="text-gray-400">
-            Bar <span className="font-mono text-gray-200">{measure}</span>
-          </span>
+          <label className="flex items-center gap-1 text-gray-400">
+            Bar
+            <BarInput testId="bar-now" value={measure} onCommit={jumpToBar} disabled={watching} title="Type a bar number to go there" />
+          </label>
           <span className="text-gray-400" data-testid="next-notes">
             Play:{' '}
             <span className="font-mono font-semibold text-indigo-300">
@@ -1992,10 +2163,33 @@ export function ScoreView() {
           <span className="text-gray-400">
             Wrong notes: <span className="font-mono text-gray-200">{wrongCount}</span>
           </span>
-          {loopBars && (
-            <span className="text-yellow-300" data-testid="loop-status">
-              Loop bars {loopBars.first}–{loopBars.last} · Lap <span className="font-mono">{lap}</span>
-              {lapBpm && <span className="text-yellow-200/80"> (last lap ♩ = {lapBpm})</span>}
+          {(overall || picking !== 'off') && (
+            <span className="flex flex-wrap items-center gap-1 text-yellow-300" data-testid="loop-status">
+              Selected
+              <BarInput
+                testId="loop-first"
+                value={picking === 'off' ? overall?.first ?? null : pickStart}
+                onCommit={typedFirst}
+                disabled={watching}
+                focus={picking === 'start'}
+                title="First bar of the range"
+              />
+              –
+              <BarInput
+                testId="loop-last"
+                value={picking === 'off' ? overall?.last ?? null : null}
+                onCommit={typedLast}
+                disabled={watching}
+                focus={picking === 'end'}
+                title="Last bar of the range"
+              />
+              {picking === 'off' && loopBars && (
+                <>
+                  {chunk && <span data-testid="loop-now">· now looping {loopBars.first}–{loopBars.last}</span>}
+                  <span>· Lap <span className="font-mono" data-testid="loop-lap">{lap}</span></span>
+                  {lapBpm && <span className="text-yellow-200/80">(last lap ♩ = {lapBpm})</span>}
+                </>
+              )}
             </span>
           )}
           {chunk && (

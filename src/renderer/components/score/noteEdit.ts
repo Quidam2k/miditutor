@@ -14,3 +14,20 @@ export function stepOfBar(steps: readonly { measure: number }[], measure: number
   const hit = steps.findIndex((s) => s.measure === measure + delta);
   return hit >= 0 ? hit : null;
 }
+
+/** A typed bar number, or null when it isn't one. */
+export function parseBar(text: string): number | null {
+  const t = text.trim();
+  return /^[1-9]\d{0,3}$/.test(t) ? Number(t) : null;
+}
+
+/**
+ * #10245: where Prev goes. The nearest earlier step with something to play: a tie-only
+ * step behind him would seek forward again, straight back to where he was. Null at the start.
+ */
+export function prevPlayable(steps: readonly { notes: readonly number[] }[], from: number): number | null {
+  for (let i = Math.min(from, steps.length) - 1; i >= 0; i--) {
+    if (steps[i].notes.length > 0) return i;
+  }
+  return null;
+}

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, OpenDialogOptions, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, OpenDialogOptions, screen, session } from 'electron';
 import { createHash } from 'node:crypto';
 import { createWriteStream, WriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -8,6 +8,7 @@ import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
 import { Recorder, outputSize } from './main/recorder';
 import { InviteTimer, postLive } from './main/invite';
+import { onSomeDisplay, sessionFiles, WindowState } from './main/sessionFiles';
 import { Review, mirrorConfig, reviewConfig, sshRemote } from './main/review';
 import {
   MUSICXML_EXTENSIONS,
@@ -453,13 +454,26 @@ const startTutorApi = () => {
 };
 
 const hidden = process.env.MIDITUTOR_HIDDEN === '1';
+// #10236: a hidden copy (deploy check, tests) must not touch his place. MIDITUTOR_TEST_SESSION=1
+// lets the relaunch e2e use it, on its own user data.
+const useSession = !hidden || process.env.MIDITUTOR_TEST_SESSION === '1';
+const files = () => sessionFiles(app.getPath('userData'));
+
+ipcMain.handle('session:load', () => (useSession ? files().loadSession() : null));
+ipcMain.on('session:save', (_e, snapshot: unknown) => {
+  if (useSession) files().saveSession(snapshot).catch((err) => console.error('[session] save failed:', err));
+});
 // MIDITUTOR_WINDOW_SIZE=1920x1080: test a TV-shaped window without showing one (#5153).
 const [winW, winH] = (process.env.MIDITUTOR_WINDOW_SIZE ?? '').split('x').map(Number);
 
-const createWindow = () => {
+const createWindow = async () => {
+  // Where he left it, unless that display is gone. A test's own size wins.
+  const saved = hidden || winW ? null : await files().loadWindow();
+  const place = saved && onSomeDisplay(saved, screen.getAllDisplays().map((d) => d.workArea)) ? saved : null;
   mainWindow = new BrowserWindow({
-    width: winW || 1200,
-    height: winH || 800,
+    width: place?.width ?? (winW || 1200),
+    height: place?.height ?? (winH || 800),
+    ...(place ? { x: place.x, y: place.y, fullscreen: place.fullScreen } : {}),
     minWidth: 900,
     minHeight: 600,
     title: 'MidiTutor',
@@ -477,6 +491,23 @@ const createWindow = () => {
     mainWindow.loadFile(
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
+  }
+
+  if (!hidden) {
+    const win = mainWindow;
+    let timer: NodeJS.Timeout | undefined;
+    const saveSoon = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (win.isDestroyed()) return;
+        // Normal bounds: the size to come back to when he leaves full screen.
+        const state: WindowState = { ...win.getNormalBounds(), fullScreen: win.isFullScreen() };
+        files().saveWindow(state).catch((err) => console.error('[session] window save failed:', err));
+      }, 500);
+    };
+    for (const ev of ['resize', 'move', 'enter-full-screen', 'leave-full-screen'] as const) {
+      win.on(ev as 'resize', saveSoon);
+    }
   }
 
   // A take outliving its window (closing it on macOS) saves what it has.
@@ -503,7 +534,7 @@ const createWindow = () => {
 app.on('ready', async () => {
   grantMidiPermissions();
   if (!(await startTutorApi())) return; // #9926 a second copy: exit before any window exists
-  createWindow();
+  await createWindow();
 });
 
 app.on('will-quit', () => {
@@ -520,6 +551,6 @@ app.on('window-all-closed', () => {
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
+    void createWindow();
   }
 });

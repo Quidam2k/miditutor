@@ -9,7 +9,10 @@ import { useTutorBridge } from './components/tutor/useTutorBridge';
 import { RecordButton, PIANO_CREDIT } from './components/tutor/RecordButton';
 import { TutorButton } from './components/tutor/TutorButton';
 import { ReviewView } from './components/review/ReviewView';
+import { TopClock } from './components/TopClock';
+import { readStartupSnapshot } from './components/score/sessionSnapshot';
 import { useSettingsStore } from './store/useSettingsStore';
+import { useTutorStore } from './store/useTutorStore';
 
 type View = 'practice' | 'monitor' | 'score' | 'review';
 
@@ -47,6 +50,15 @@ export function App() {
   const tabs = reviewOn ? [...TABS, REVIEW_TAB] : TABS;
   // A persona pushing a task or piece brings the Score tab forward.
   useTutorBridge(useCallback(() => setView('score'), []));
+  useEffect(() => {
+    document.title = `MidiTutor ${__APP_VERSION__}`;
+    void readStartupSnapshot();
+  }, []);
+  // #5259: a homework line opens its piece there too.
+  const pieceRequested = useTutorStore((s) => s.pieceRequest !== null);
+  useEffect(() => {
+    if (pieceRequested) setView('score');
+  }, [pieceRequested]);
 
   // Every tab click does something visible: switch, back to the top, and Practice restarts (#5058).
   const go = (next: View) => {
@@ -60,7 +72,7 @@ export function App() {
     // however far down a score he has gone (#5058).
     <div className="h-screen bg-gray-950 text-white flex flex-col">
       {/* Header */}
-      <header className="flex items-center justify-between px-6 py-3 border-b border-gray-800/50">
+      <header className="flex items-center justify-between gap-4 px-6 py-3 border-b border-gray-800/50">
         <div className="flex items-center gap-6">
           <h1>
             <button
@@ -87,6 +99,7 @@ export function App() {
             ))}
           </nav>
         </div>
+        <TopClock />
         <div className="flex items-center gap-4">
           <TutorButton />
           <RecordButton />
@@ -116,7 +129,11 @@ export function App() {
           </div>
         )}
       </main>
-      <footer className="px-6 py-1 text-[10px] text-gray-600">{PIANO_CREDIT}</footer>
+      <footer className="flex justify-between gap-4 px-6 py-1 text-[10px] text-gray-600">
+        <span>{PIANO_CREDIT}</span>
+        {/* The title bar can't be seen in full screen. */}
+        <span data-testid="app-version">MidiTutor {__APP_VERSION__}</span>
+      </footer>
     </div>
   );
 }

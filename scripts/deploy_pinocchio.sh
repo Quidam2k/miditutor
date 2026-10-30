@@ -50,6 +50,11 @@ if [[ -n "${PANTHEON_URL:-}" ]]; then
   printf '%s\n' "$PANTHEON_URL" | ssh "$PINOCCHIO_HOST" "cat > \"\$HOME/$support/pantheon-url\""
 fi
 
+# Tell the next launch this is a patch: it puts his loop and progress back however long the wait was.
+if [[ "$was_running" == yes ]]; then
+  ssh "$PINOCCHIO_HOST" "touch \"\$HOME/$support/restore-next\""
+fi
+
 ssh "$PINOCCHIO_HOST" 'bash -s' <<'REMOTE'
 set -euo pipefail
 # Stop the app before replacing its bundle.

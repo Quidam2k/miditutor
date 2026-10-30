@@ -20,8 +20,7 @@ def check(cond, label, detail=""):
 
 
 def bar(page):
-    t = page.locator("text=/^Bar \\d+/").first.inner_text()
-    return int(re.search(r"\d+", t).group(0))
+    return int(page.get_by_test_id("bar-now").input_value())
 
 
 def measure_centers(page):
@@ -45,6 +44,9 @@ with sync_playwright() as p:
     page.get_by_role("button", name="Score", exact=True).click()
     page.wait_for_selector("[data-testid=loop-bars]", timeout=30000)
     page.wait_for_timeout(2500)
+    # Before measuring: its range fields can push the score down a row.
+    page.click("[data-testid=loop-bars]")
+    page.wait_for_timeout(1000)
     # Pages layout, so bars are laid out on pages and clickable.
     boxes = measure_centers(page)
     print("measure groups:", len(boxes))
@@ -53,7 +55,6 @@ with sync_playwright() as p:
     for b in boxes:
         seen.setdefault(b["id"], b)
     top_row = list(seen.values())
-    page.click("[data-testid=loop-bars]")
     page.mouse.click(top_row[2]["x"], top_row[2]["y"])
     page.mouse.click(top_row[3]["x"], top_row[3]["y"])
     page.wait_for_timeout(500)
@@ -61,7 +62,7 @@ with sync_playwright() as p:
     check(status.count() == 1, "loop set", page.locator("body").inner_text()[:400])
     loop_text = status.inner_text() if status.count() else ""
     print("loop:", loop_text)
-    first = int(re.search(r"(\d+)\D+(\d+)", loop_text).group(1)) if loop_text else 3
+    first = int(page.get_by_test_id("loop-first").input_value()) if loop_text else 3
     check(bar(page) == first, f"cursor at loop start bar {first}", bar(page))
 
     # Tap a notehead inside the loop, give it finger 2: the score re-renders.

@@ -8,7 +8,7 @@ import {
   type FingerTarget,
   type XmlImpl,
 } from '../src/shared/fingering';
-import { nextFinger, stepOfBar } from '../src/renderer/components/score/noteEdit';
+import { nextFinger, prevPlayable, stepOfBar } from '../src/renderer/components/score/noteEdit';
 
 const impl: XmlImpl = {
   parse: s => new DOMParser().parseFromString(s, 'text/xml') as unknown as Document,
@@ -255,5 +255,14 @@ describe('wheel steps (#10237)', () => {
     expect(stepOfBar(steps, 3, -1)).toBe(2);
     expect(stepOfBar(steps, 3, 1)).toBeNull();
     expect(stepOfBar(steps, 1, -1)).toBeNull();
+  });
+  it('Prev steps over a tie-only step instead of landing on it (#10245)', () => {
+    const steps = [{ notes: [47, 49] }, { notes: [] }, { notes: [60] }, { notes: [] }, { notes: [62] }];
+    expect(prevPlayable(steps, 2)).toBe(0);
+    expect(prevPlayable(steps, 4)).toBe(2);
+    expect(prevPlayable(steps, 1)).toBe(0);
+    expect(prevPlayable(steps, 0)).toBeNull();
+    expect(prevPlayable([{ notes: [] }, { notes: [60] }], 1)).toBeNull();
+    expect(prevPlayable(steps, 99)).toBe(4);
   });
 });

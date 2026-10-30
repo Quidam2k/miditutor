@@ -10,13 +10,14 @@ Uses bar 25's left-hand chord (D-flat 3 over B 2), which starts with Db3 = 3 and
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-CDP = "http://127.0.0.1:9333"
+CDP = os.environ.get("MIDITUTOR_CDP", "http://127.0.0.1:9333")
 FAILS: list[str] = []
 DB3, B2 = 49, 47
 YELLOW = "rgb(255, 230, 0)"
@@ -61,7 +62,7 @@ def yellow_heads(page) -> int:
 
 
 def bar(page) -> int:
-    return int(re.search(r"\d+", page.locator("text=/^Bar \\d+/").first.inner_text()).group(0))
+    return int(page.get_by_test_id("bar-now").input_value())
 
 
 def go_to_bar(page, wanted: int) -> None:
@@ -252,13 +253,16 @@ def main() -> int:
         page.wait_for_timeout(300)
         check(page.locator(f"[data-midi='{B2}']").get_attribute("data-yellow") is None,
               "cursor moves off: key not yellow")
-        # Back to the bar's first step: Prev can't step back over an empty step, a bar-wheel can.
-        page.locator("[data-midi='100']").hover()
+        # #10245: Prev steps back over the tie-only step to the bar's first chord.
+        page.get_by_role("button", name="◀ Prev").click()
+        page.wait_for_timeout(300)
+        check(bar(page) == 25, "Prev stays in bar 25", bar(page))
+        key = page.locator(f"[data-midi='{B2}']")
+        key.hover()
         page.wait_for_timeout(200)
-        page.mouse.wheel(0, 100)
-        page.wait_for_timeout(300)
-        page.mouse.wheel(0, -100)
-        page.wait_for_timeout(300)
+        check(key.get_attribute("data-yellow") == "true", "Prev came back to the bar's first chord (#10245)")
+        page.mouse.move(5, 400)
+        page.wait_for_timeout(200)
 
         # (c) key click opens the same picker.
         page.locator(f"[data-midi='{DB3}']").click()

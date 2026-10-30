@@ -35,6 +35,9 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   reviewAccept: (slug: string, proposal: string) => ipcRenderer.invoke('review:accept', slug, proposal),
   reviewRecheck: (slug: string, mark: string) => ipcRenderer.invoke('review:recheck', slug, mark),
   reviewProposal: (slug: string, proposal: string) => ipcRenderer.invoke('review:proposal', slug, proposal),
+  // Seamless relaunch (#10236): the practice snapshot in session.json.
+  sessionLoad: () => ipcRenderer.invoke('session:load'),
+  sessionSave: (snapshot: unknown) => ipcRenderer.send('session:save', snapshot),
   // "Bring in the tutor" (#5154): { state, error? }.
   inviteStatus: () => ipcRenderer.invoke('invite:status'),
   inviteToggle: () => ipcRenderer.invoke('invite:toggle'),

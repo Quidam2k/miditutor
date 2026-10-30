@@ -47,6 +47,17 @@ export function lapDone(s: ChunkState, wrongInLap: number, targets: number[]): {
   return { state: { ...s, start, clean: 0, need: targetFor(targets, s.last - start) }, grew: true };
 }
 
+/**
+ * #10236: he typed a new overall range. A new first bar keeps his progress (the chunk only
+ * moves if it now starts before the range does). A new last bar is music he hasn't built
+ * yet, so it starts over from there.
+ */
+export function rangeEdited(s: ChunkState, first: number, last: number, targets: number[]): ChunkState {
+  if (last !== s.last) return startChunk(first, last, targets);
+  if (s.start >= first) return { ...s, first, done: s.done && s.start === first };
+  return { ...s, first, start: first, clean: 0, need: targetFor(targets, last - first), done: false };
+}
+
 /** The status line: "Backwards: bars 33–35 · clean 2/5", or the whole-range tally. */
 export function chunkLabel(s: ChunkState): string {
   if (s.done) return `Backwards: whole range ${s.first}–${s.last} · ${s.clean} clean laps`;

@@ -19,6 +19,10 @@ interface TutorState {
   selectPieceId: string | null;
   /** A loop the API asked for (bars, 1-based); null = clear. `seq` makes repeats distinct. */
   loopRequest: { seq: number; firstBar: number; lastBar: number; backwards?: boolean } | { seq: number; clear: true } | null;
+  /** #5259: a homework line asked for this piece; the Score view takes it and clears it. */
+  pieceRequest: { pieceId: string; backwards: boolean } | null;
+  requestPiece: (pieceId: string, backwards: boolean) => void;
+  clearPieceRequest: () => void;
   setTask: (task: Task | null) => void;
   requestLoop: (bars: { firstBar: number; lastBar: number; backwards?: boolean } | null) => void;
   addPiece: (p: Omit<PushedPiece, 'id'>) => void;
@@ -32,6 +36,9 @@ export const useTutorStore = create<TutorState>((set) => ({
   pieces: [],
   selectPieceId: null,
   loopRequest: null,
+  pieceRequest: null,
+  requestPiece: (pieceId, backwards) => set({ pieceRequest: { pieceId, backwards } }),
+  clearPieceRequest: () => set({ pieceRequest: null }),
   setTask: (task) => set({ task }),
   requestLoop: (bars) => set({ loopRequest: bars ? { seq: ++loopSeq, ...bars } : { seq: ++loopSeq, clear: true } }),
   addPiece: (p) =>

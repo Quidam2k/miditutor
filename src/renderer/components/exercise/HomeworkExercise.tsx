@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { PianoKeyboard88 } from '../homework/PianoKeyboard88';
 import { useMidiStore } from '../../store/useMidiStore';
 import { useSettingsStore, localDay } from '../../store/useSettingsStore';
+import { useTutorStore } from '../../store/useTutorStore';
 import {
   Homework, HomeworkItem, ScaleType, SequenceState, TriadTarget,
   arpeggioOffsets, backwardsHint, expectedNext, keyPitchClass, matchesTriad, noteNames, orderUnpracticed,
@@ -60,18 +61,26 @@ export function HomeworkExercise() {
       <h2 className="text-xl font-bold text-white">Homework from JP's {homework.date} lesson</h2>
       {ordered.map((item) => {
         const last = practiced[item.id];
-        const playable = ['scale', 'arpeggio', 'triads', 'intervals'].includes(item.kind);
+        const drill = ['scale', 'arpeggio', 'triads', 'intervals'].includes(item.kind);
+        // #5259: a piece line opens the piece in the Score tab, one click.
+        const piece = item.kind === 'piece' && !!item.file;
+        const playable = drill || piece;
         return (
           <button
             key={item.id}
             disabled={!playable}
-            onClick={() => (item.kind === 'intervals' ? setExerciseType('interval') : setActive(item))}
+            data-testid={piece ? 'homework-piece' : undefined}
+            onClick={() => {
+              if (piece) useTutorStore.getState().requestPiece(`file:${item.file}`, !!backwardsHint(item));
+              else if (item.kind === 'intervals') setExerciseType('interval');
+              else setActive(item);
+            }}
             className={`flex items-center justify-between text-left px-4 py-3 rounded-lg ${
               playable ? 'bg-gray-800 hover:bg-gray-700' : 'bg-gray-900 cursor-default'
             }`}
           >
             <span className="text-gray-100">
-              {item.kind === 'piece' ? `Piece: ${item.title ?? item.label} (open it in the Score tab)` : item.label}
+              {item.kind === 'piece' ? `Piece: ${item.title ?? item.label}${piece ? '' : ' (open it in the Score tab)'}` : item.label}
               {backwardsHint(item) && (
                 <span className="block text-sm text-yellow-300/90" data-testid="backwards-hint">
                   {backwardsHint(item)}
@@ -79,7 +88,7 @@ export function HomeworkExercise() {
               )}
             </span>
             <span className={`text-sm ${last === today ? 'text-emerald-400' : 'text-gray-400'}`}>
-              {last === today ? '✓ today' : last ? `last ${last}` : playable ? 'not yet' : ''}
+              {last === today ? '✓ today' : last ? `last ${last}` : drill ? 'not yet' : ''}
             </span>
           </button>
         );

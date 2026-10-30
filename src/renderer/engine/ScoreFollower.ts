@@ -117,6 +117,11 @@ export class ScoreFollower {
     if (this.currentIndex > this.loopRange.last) this.currentIndex = this.steps.length;
   }
 
+  /** #10236: a relaunch puts him back on the lap he was on. */
+  restoreLap(lap: number): void {
+    this.currentLap = lap;
+  }
+
   clearRange(): void {
     this.loopRange = null;
     this.currentLap = 1;
