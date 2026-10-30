@@ -125,6 +125,8 @@ REMOTE
 fi
 if [[ "$was_running" == yes && "${RELAUNCH:-1}" != 0 ]]; then
   ssh "$PINOCCHIO_HOST" 'open -a "$HOME/Applications/MidiTutor.app"'
+  # Opened over ssh it comes up behind whatever is in front. The gate means he isn't using the Mac.
+  ssh "$PINOCCHIO_HOST" "osascript -e 'tell application \"MidiTutor\" to activate'" || true
   printf 'MidiTutor reopened on %s\n' "$PINOCCHIO_HOST"
 else
   printf 'MidiTutor left closed on %s (it was running: %s)\n' "$PINOCCHIO_HOST" "$was_running"
