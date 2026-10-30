@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { OpenSheetMusicDisplay, TechnicalInstructionType } from 'opensheetmusicdisplay';
+import { OpenSheetMusicDisplay, TechnicalInstruction, TechnicalInstructionType } from 'opensheetmusicdisplay';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import sampleXml from '../../assets/sample-score.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
@@ -15,7 +15,7 @@ import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { PedalCoach } from '../../engine/PedalCoach';
 import { rememberRef, resolvePieceId } from './lastPiece';
-import { fingersLowToHigh, nextFinger, prevPlayable, stepOfBar } from './noteEdit';
+import { fingersLowToHigh, nextFinger, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, lapDone, parseTargets, rangeEdited, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { BarInput } from './BarInput';
 import { loadStartupSnapshot, type SessionSnapshot } from './sessionSnapshot';
@@ -86,7 +86,7 @@ interface OsmdNote {
   Pitch?: { FundamentalNote: number; Octave: number; AccidentalHalfTones: number };
   ParentStaff?: { idInMusicSheet: number };
   /** Its voice entry; Timestamp is from the start of its measure (whole notes). */
-  ParentVoiceEntry?: { Timestamp?: { RealValue: number } };
+  ParentVoiceEntry?: { Timestamp?: { RealValue: number }; TechnicalInstructions?: unknown[] };
   Length?: { RealValue: number };
   /** Its own <fingering>, when the score gives one. */
   Fingering?: { value?: string } | null;
@@ -111,6 +111,7 @@ interface OsmdGraphicalNote {
   getNoteheadSVGs?: () => Element[];
   /** [the VexFlow note, this note's place in its chord]. */
   vfnote?: [unknown, number];
+  parentVoiceEntry?: { parentStaffEntry?: OsmdStaffEntry };
 }
 type OsmdPitch = { FundamentalNote: number; AccidentalHalfTones: number };
 interface OsmdChordContainer {
@@ -122,7 +123,7 @@ interface OsmdVoiceEntry {
   ParentSourceStaffEntry?: { ChordContainers?: OsmdChordContainer[] };
 }
 interface OsmdStaffEntry {
-  FingeringEntries?: { SVGNode?: Node }[];
+  FingeringEntries?: { SVGNode?: Node; Label?: { text: string } }[];
   graphicalChordContainers?: { GetChordSymbolContainer: unknown; GraphicalLabel?: { SVGNode?: Node } }[];
 }
 
@@ -219,6 +220,18 @@ const sameTarget = (a: FingerTarget, b: FingerTarget) =>
   a.measure === b.measure && a.staff === b.staff && Math.abs(a.onset - b.onset) < 1e-6 && a.midi === b.midi;
 const gNoteOf = (osmd: OpenSheetMusicDisplay, n: OsmdNote) =>
   osmd.EngravingRules.GNote(n as never) as unknown as OsmdGraphicalNote | undefined;
+/** #10258: a mark that only changes number stays where it is: swap the text, draw nothing. */
+function swapFingerLabel(osmd: OpenSheetMusicDisplay, note: OsmdNote, was: string | undefined, digit: string): boolean {
+  const labels = gNoteOf(osmd, note)?.parentVoiceEntry?.parentStaffEntry?.FingeringEntries ?? [];
+  const same = labels.filter((l) => l.Label?.text === was);
+  const node = same[0]?.SVGNode;
+  if (same.length !== 1 || !same[0].Label || !(node instanceof SVGElement)) return false;
+  const text = node.matches('text') ? node : node.querySelector('text');
+  if (!text) return false;
+  text.textContent = digit;
+  same[0].Label.text = digit;
+  return true;
+}
 const headOf = (g: OsmdGraphicalNote | undefined) => g?.getNoteheadSVGs?.()[g.vfnote?.[1] ?? 0];
 
 // The note being edited, or the one the wheel would edit (#10236). No note drawn uses it.
@@ -474,7 +487,7 @@ export function ScoreView() {
   const [wheelLive, setWheelLive] = useState<{ x: number; y: number; target: FingerTarget; digit: Digit | null } | null>(null);
   const wheelPendingRef = useRef<{ pieceId: string; target: FingerTarget; digit: Digit | null } | null>(null);
   const wheelTimerRef = useRef<number | undefined>(undefined);
-  const wheelAccRef = useRef({ at: 0, delta: 0 });
+  const wheelAccRef = useRef({ at: 0, delta: 0, dir: 0 });
   const keyStripRef = useRef<HTMLDivElement>(null);
   const [fingerMsg, setFingerMsg] = useState('');
   const resumeStepRef = useRef<number | null>(null);
@@ -718,6 +731,18 @@ export function ScoreView() {
     : /^[a-z0-9][a-z0-9-]*$/.test(piece.label) ? piece.label : null;
   const scanLayout = useScanLayout(scanSlug);
   const [showOriginal, setShowOriginal] = useState(false);
+  // #10258: what's drawn. A finger edit changes piece.xml but has already changed the drawing in
+  // place, so it leaves this alone and nothing downstream reloads the score.
+  const quietXmlRef = useRef<string | null>(null);
+  const drawnXmlRef = useRef(piece.xml);
+  if (piece.xml !== quietXmlRef.current) {
+    quietXmlRef.current = null;
+    drawnXmlRef.current = piece.xml;
+  }
+  const drawnXml = drawnXmlRef.current;
+  // Any reload (a new layout, say) must load his latest marks, not the ones it was drawn with.
+  const latestXmlRef = useRef(piece.xml);
+  latestXmlRef.current = piece.xml;
   const fifths = useMemo(() => fifthsOf(piece.xml), [piece.xml]);
   const pieceLabelRef = useRef(piece.label);
   pieceLabelRef.current = piece.label;
@@ -972,7 +997,7 @@ export function ScoreView() {
   }, [moveCursorTo, centerCursor, syncUi, trackChord]);
 
   const buildFollower = useCallback((osmd: OpenSheetMusicDisplay) => {
-    const { steps, notes, ringing, ties, chords, restBefore } = extractSteps(osmd, handRef.current, holdsOf(piece.xml));
+    const { steps, notes, ringing, ties, chords, restBefore } = extractSteps(osmd, handRef.current, holdsOf(drawnXml));
     stepRestRef.current = restBefore;
     pedalCoachRef.current.reset();
     stepNotesRef.current = notes;
@@ -982,11 +1007,11 @@ export function ScoreView() {
     trackChord(null, []);
     chordLitRef.current = noChord();
     followerRef.current = new ScoreFollower(steps);
-    const exprMarksParsed = parseExpression(piece.xml);
+    const exprMarksParsed = parseExpression(drawnXml);
     exprRef.current = new ExpressionTracker(exprMarksParsed, steps);
     setExprMarks(exprMarksParsed.map(describeMark));
     return { steps, exprMarksParsed };
-  }, [piece.xml, trackChord]);
+  }, [drawnXml, trackChord]);
 
   const toggleWatch = async () => {
     if (watching) {
@@ -1042,7 +1067,7 @@ export function ScoreView() {
       watchBpmRef.current = null;
       if (bpm !== null) reportEvent('watch', { on: false, bpm });
     };
-  }, [piece.id, piece.xml]);
+  }, [piece.id, drawnXml]);
 
   // --- loop range (#5004) ---
   // keepChunk: Build backwards moving its own loop. Any other loop change ends it.
@@ -1271,7 +1296,7 @@ export function ScoreView() {
   useEffect(() => {
     // The photo view is the default when there is no score to show.
     setView(piece.xml ? 'score' : 'photo');
-  }, [piece.id, piece.xml]);
+  }, [piece.id, drawnXml]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -1324,7 +1349,7 @@ export function ScoreView() {
     const cursorObs = keepCursorHeight(container);
 
     osmd
-      .load(piece.xml)
+      .load(latestXmlRef.current)
       .then(() => {
         if (disposed) return;
         osmd.render();
@@ -1399,7 +1424,7 @@ export function ScoreView() {
       exprRef.current = null;
     };
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
-  }, [piece.id, piece.xml, scoreLayout, strip, restart, buildFollower, centerCursor, startResolved]);
+  }, [piece.id, drawnXml, scoreLayout, strip, restart, buildFollower, centerCursor, startResolved]);
 
   // #9976: pedal lifts, with what was ringing only on the pedal just before.
   useEffect(
@@ -1786,13 +1811,50 @@ export function ScoreView() {
     if (pick) writeFinger(pick, digit);
   };
 
+  // #10258: change the mark in OSMD's own score and lay it out again, in one go: nothing paints
+  // until it's done, and the follower, cursor and loop are never rebuilt. False: do a full reload.
+  const setFingerInPlace = (target: FingerTarget, digit: Digit | null): boolean => {
+    const osmd = osmdRef.current;
+    const note = noteOf(target);
+    const marks = note?.ParentVoiceEntry?.TechnicalInstructions;
+    if (!osmd || !note || !marks) return false;
+    const mark = note.Fingering as TechnicalInstruction | null | undefined;
+    if (mark && digit) {
+      const was = mark.value;
+      mark.value = digit;
+      if (swapFingerLabel(osmd, note, was, digit)) return true;
+    } else if (mark) {
+      marks.splice(marks.indexOf(mark), 1);
+      note.Fingering = null;
+    } else if (digit) {
+      const added = new TechnicalInstruction();
+      added.type = TechnicalInstructionType.Fingering;
+      added.value = digit;
+      added.sourceNote = note as unknown as TechnicalInstruction['sourceNote'];
+      marks.push(added);
+      note.Fingering = added;
+    }
+    const began = performance.now();
+    osmd.render();
+    performance.measure('finger-render', { start: began, end: performance.now() });
+    // The symbols were drawn afresh, uncoloured, as on a resize.
+    chordLitRef.current = noChord();
+    setLayoutTick((t) => t + 1);
+    return true;
+  };
+
   const writeFinger = (pick: { target: FingerTarget; name: string }, digit: Digit | null) => {
     const result = setFingering(piece.xml, pick.target, digit);
     if (!result.ok) {
       setFingerMsg(`Couldn't change that note's finger: ${result.reason}`);
       return;
     }
-    showEditedXml(result.xml);
+    if (setFingerInPlace(pick.target, digit)) {
+      quietXmlRef.current = result.xml;
+      setXmlEdits((e) => ({ ...e, [piece.id]: result.xml }));
+    } else {
+      showEditedXml(result.xml);
+    }
     const what = digit ? `Finger ${digit} on ${pick.name}` : `Finger removed from ${pick.name}`;
     reportEvent('fingering', { ...pick.target, digit, name: pick.name });
     const bridge = window.tutorBridge;
@@ -1858,18 +1920,21 @@ export function ScoreView() {
     const target = wheelTarget;
     if (!target && !strip) return;
     ev.preventDefault();
-    // A mouse notch is about 100; a trackpad sends many small deltas.
-    const acc = wheelAccRef.current;
-    const now = performance.now();
-    acc.delta = (now - acc.at > 300 ? 0 : acc.delta) + (ev.deltaMode === 1 ? ev.deltaY * 40 : ev.deltaY);
-    acc.at = now;
-    if (Math.abs(acc.delta) < 50) return;
-    const up = acc.delta < 0;
-    acc.delta = 0;
+    // macOS turns a Shift+wheel into a sideways scroll: the notch arrives as deltaX.
+    const delta = ev.shiftKey && !ev.deltaY ? ev.deltaX : ev.deltaY;
+    const notch = wheelNotch(wheelAccRef.current, ev.deltaMode === 1 ? delta * 40 : delta, performance.now());
+    if (notch === 0) return;
+    const up = notch < 0;
     if (!target) {
+      // #10259: one note per notch. The loop itself never changes; the wheel stops at its edges,
+      // and Shift+wheel goes past them to tag notes outside it.
       if (watching || picking !== 'off') return;
-      const step = stepOfBar(f.steps, f.steps[cursorStep]?.measure ?? 1, up ? -1 : 1);
-      if (step !== null) manualMove(step - cursorIndexRef.current);
+      const range = !ev.shiftKey && loopBars ? stepRangeOf(f.steps, loopBars.first, loopBars.last) : null;
+      const step = stepForWheel(f.steps, cursorIndexRef.current, notch, range || null);
+      if (step === null) return;
+      // Notes skipped by scrolling mustn't earn a clean lap in Build backwards.
+      if (chunk) lapWrongRef.current++;
+      manualMove(step - cursorIndexRef.current);
       return;
     }
     if (wheelPendingRef.current && !sameTarget(wheelPendingRef.current.target, target)) commitWheel();

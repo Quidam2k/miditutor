@@ -45,3 +45,47 @@ export function prevPlayable(steps: readonly { notes: readonly number[] }[], fro
   }
   return null;
 }
+
+export interface WheelRun {
+  at: number;
+  delta: number;
+  dir: number;
+}
+
+/**
+ * #10259: which way this wheel event moves, if at all. A pause or a change of direction starts a
+ * new gesture, which moves at once however small the delta, so one mouse notch is one step. Within
+ * a gesture it takes 100 more: a fast spin steps per notch, a trackpad's stream doesn't race.
+ */
+export function wheelNotch(run: WheelRun, delta: number, now: number): -1 | 0 | 1 {
+  const dir = Math.sign(delta);
+  const gap = now - run.at;
+  run.at = now;
+  if (dir === 0) return 0;
+  if (gap > 50 || dir !== run.dir) {
+    run.dir = dir;
+    run.delta = 0;
+    return dir as -1 | 1;
+  }
+  run.delta += Math.abs(delta);
+  if (run.delta < 100) return 0;
+  run.delta = 0;
+  return dir as -1 | 1;
+}
+
+/** #10259: the next note to play that way, inside the loop if there is one. Null: stay put. */
+export function stepForWheel(
+  steps: readonly { notes: readonly number[] }[],
+  from: number,
+  dir: -1 | 1,
+  range: { first: number; last: number } | null,
+): number | null {
+  // Already outside it (Shift+wheel went past) the loop doesn't hold him there.
+  const within = range && from >= range.first && from <= range.last ? range : null;
+  const first = within ? within.first : 0;
+  const last = within ? within.last : steps.length - 1;
+  for (let i = Math.min(from, steps.length) + dir; i >= first && i <= last; i += dir) {
+    if (steps[i].notes.length > 0) return i;
+  }
+  return null;
+}

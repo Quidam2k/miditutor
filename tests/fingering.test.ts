@@ -8,7 +8,80 @@ import {
   type FingerTarget,
   type XmlImpl,
 } from '../src/shared/fingering';
-import { fingersLowToHigh, nextFinger, prevPlayable, stepOfBar } from '../src/renderer/components/score/noteEdit';
+import {
+  fingersLowToHigh, nextFinger, prevPlayable, stepForWheel, stepOfBar, wheelNotch, type WheelRun,
+} from '../src/renderer/components/score/noteEdit';
+
+describe('wheelNotch (#10259)', () => {
+  const run = (events: [number, number][]) => {
+    const w: WheelRun = { at: -Infinity, delta: 0, dir: 0 };
+    return events.map(([delta, at]) => wheelNotch(w, delta, at));
+  };
+
+  it('one mouse notch moves once, however small or large', () => {
+    for (const d of [1, 4, 100, 120, 500]) {
+      expect(run([[d, 0]])).toEqual([1]);
+      expect(run([[-d, 0]])).toEqual([-1]);
+    }
+  });
+
+  it('separate slow notches each move', () => {
+    expect(run([[4, 0], [4, 200], [4, 400]])).toEqual([1, 1, 1]);
+  });
+
+  it('a fast spin moves per notch', () => {
+    expect(run([[100, 0], [100, 20], [100, 40]])).toEqual([1, 1, 1]);
+  });
+
+  it("a trackpad's stream of small deltas moves once per 100, not per event", () => {
+    const moved = run(Array.from({ length: 61 }, (_, i): [number, number] => [5, i * 16])).filter(Boolean);
+    expect(moved.length).toBe(4);
+  });
+
+  it('a burst from one notch does not overshoot', () => {
+    expect(run([[10, 0], [10, 8], [10, 16]])).toEqual([1, 0, 0]);
+  });
+
+  it('turning around moves at once', () => {
+    expect(run([[100, 0], [-1, 10]])).toEqual([1, -1]);
+  });
+
+  it('a zero delta moves nothing', () => {
+    expect(run([[0, 0]])).toEqual([0]);
+  });
+});
+
+describe('stepForWheel (#10259)', () => {
+  const n = (...keys: number[]) => ({ notes: keys });
+  const steps = [n(60), n(), n(62), n(64), n()];
+
+  it('moves one playable note each way, skipping a tie-only step', () => {
+    expect(stepForWheel(steps, 2, 1, null)).toBe(3);
+    expect(stepForWheel(steps, 2, -1, null)).toBe(0);
+    expect(stepForWheel(steps, 0, 1, null)).toBe(2);
+  });
+
+  it('stays put at the ends', () => {
+    expect(stepForWheel(steps, 0, -1, null)).toBeNull();
+    expect(stepForWheel(steps, 3, 1, null)).toBeNull();
+  });
+
+  it('comes back from past the end of the piece', () => {
+    expect(stepForWheel(steps, 5, -1, null)).toBe(3);
+  });
+
+  it('stops at the edges of a loop', () => {
+    const loop = { first: 2, last: 3 };
+    expect(stepForWheel(steps, 2, -1, loop)).toBeNull();
+    expect(stepForWheel(steps, 3, 1, loop)).toBeNull();
+    expect(stepForWheel(steps, 2, 1, loop)).toBe(3);
+  });
+
+  it('moves freely once outside the loop', () => {
+    expect(stepForWheel(steps, 0, 1, { first: 2, last: 3 })).toBe(2);
+    expect(stepForWheel([...steps, n(65), n(67)], 5, 1, { first: 2, last: 3 })).toBe(6);
+  });
+});
 
 describe('fingersLowToHigh (#10256)', () => {
   type Mark = { finger: boolean; pitch?: number; label: string };

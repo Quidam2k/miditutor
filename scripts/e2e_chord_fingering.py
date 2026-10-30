@@ -61,6 +61,10 @@ def yellow_heads(page) -> int:
     )
 
 
+def cursor_left(page) -> str:
+    return page.evaluate("() => document.querySelector('img[id^=cursorImg]').style.left")
+
+
 def bar(page) -> int:
     return int(page.get_by_test_id("bar-now").input_value())
 
@@ -205,13 +209,13 @@ def main() -> int:
         )
         page.mouse.move(panel["x"], panel["y"])
         page.wait_for_timeout(200)
-        at = bar(page)
+        at = cursor_left(page)
         page.mouse.wheel(0, 100)
         page.wait_for_timeout(300)
-        check(bar(page) == at + 1, "off a note: wheel down goes one bar on", bar(page))
+        check(cursor_left(page) != at, "off a note: wheel down moves a note on (#10259)", cursor_left(page))
         page.mouse.wheel(0, -100)
         page.wait_for_timeout(300)
-        check(bar(page) == at, "off a note: wheel up comes one bar back", bar(page))
+        check(cursor_left(page) == at, "off a note: wheel up comes a note back (#10259)", cursor_left(page))
 
         # #10238: keys. In the step: yellow, and the wheel edits. Not in it: neither.
         check(bar(page) == 25, "back on bar 25", bar(page))
@@ -237,10 +241,10 @@ def main() -> int:
         page.wait_for_timeout(200)
         check(other.get_attribute("data-yellow") is None and yellow_heads(page) == 0,
               "hover out-of-step key: no yellow", yellow_heads(page))
-        at = bar(page)
+        at = cursor_left(page)
         page.mouse.wheel(0, 100)
         page.wait_for_timeout(300)
-        check(bar(page) == at + 1, "wheel on out-of-step key scrolls", bar(page))
+        check(cursor_left(page) != at, "wheel on out-of-step key moves a note (#10259)", cursor_left(page))
         page.mouse.wheel(0, -100)
         page.wait_for_timeout(300)
 
