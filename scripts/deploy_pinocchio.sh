@@ -12,6 +12,7 @@ Environment:
   RUN_ID         GitHub Actions run ID (default: latest successful macos.yml)
   PANTHEON_CERT  Solace's WebUI cert, pinned by "Bring in the tutor" (default: Q:/Pantheon/certs/cert.pem)
   PANTHEON_URL   written to the app's pantheon-url when set (the app defaults to https://192.168.50.139:7861)
+  RELAUNCH=0     leave the app closed even if it was running (default: reopen it if it was)
 USAGE
 }
 verify=true
@@ -33,6 +34,9 @@ shopt -s nullglob globstar
 zips=("$tmpdir"/**/*.zip)
 (( ${#zips[@]} == 1 )) || { echo "Expected exactly one .zip artifact." >&2; exit 1; }
 scp "${zips[0]}" "${PINOCCHIO_HOST}:miditutor-deploy.zip"
+
+# #10236: a patch puts him back where he was, so note whether the app is open before it stops.
+was_running=$(ssh "$PINOCCHIO_HOST" 'pgrep -x MidiTutor >/dev/null && echo yes || echo no')
 
 # "Bring in the tutor" (#5154): the app pins Solace's self-signed WebUI cert (public, not a secret).
 PANTHEON_CERT=${PANTHEON_CERT:-/q/Pantheon/certs/cert.pem}
@@ -72,6 +76,7 @@ set +x
 set -euo pipefail
 quit_app() {
   rm -f /tmp/mt_state.json
+  rm -rf "$verify_data"
   pgrep -x MidiTutor >/dev/null || return 0
   osascript -e 'tell application "MidiTutor" to quit' >/dev/null 2>&1 || true
   for ((j=0; j<10; j++)); do
@@ -80,10 +85,12 @@ quit_app() {
   done
   pgrep -x MidiTutor >/dev/null && pkill -x MidiTutor || true
 }
+# The check runs on its own user data: it must not touch his tab, piece or session (#10236).
+verify_data=$(mktemp -d /tmp/miditutor-verify.XXXXXX)
 # Cleanup also runs if launch or verification fails.
 trap quit_app EXIT
-open -n -g -j --env MIDITUTOR_HIDDEN=1 -a "$HOME/Applications/MidiTutor.app"
-token_file="$HOME/Library/Application Support/MidiTutor/api-token"
+open -n -g -j --env MIDITUTOR_HIDDEN=1 -a "$HOME/Applications/MidiTutor.app" --args "--user-data-dir=$verify_data"
+token_file="$verify_data/api-token"
 for ((i=0; i<60; i++)); do
   test -s "$token_file" && break
   sleep 1
@@ -110,5 +117,11 @@ code=$(curl -s --max-time 2 -o /dev/null -w '%{http_code}' http://127.0.0.1:4780
 test "$code" = 401
 printf 'unauth /state: 401\n'
 REMOTE
+fi
+if [[ "$was_running" == yes && "${RELAUNCH:-1}" != 0 ]]; then
+  ssh "$PINOCCHIO_HOST" 'open -a "$HOME/Applications/MidiTutor.app"'
+  printf 'MidiTutor reopened on %s\n' "$PINOCCHIO_HOST"
+else
+  printf 'MidiTutor left closed on %s (it was running: %s)\n' "$PINOCCHIO_HOST" "$was_running"
 fi
 printf 'PASS: MidiTutor deployed to %s\n' "$PINOCCHIO_HOST"
