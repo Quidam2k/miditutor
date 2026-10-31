@@ -65,6 +65,14 @@ check("triad groups, # unescaped", tri["groups"]["WWW"][-1] == "Am" and tri["gro
 check("unique chord colour", tri["groups"]["Bbm"] == "BBW")
 check("pieces", "piece:sorcerers-apprentice" in items and "piece:o" in items)
 
+# 1b. A date range is a lesson header too: otherwise the newest entry is skipped for the older one.
+date, items, _, _ = parse("10/28-10/30\n\nScales/Arpeggios - G major\n\n10/23\n\nScales/Arpeggios - A major\n")
+check("date range is newest entry", date == "10/28-10/30" and "scale:G-major" in items and "scale:A-major" not in items)
+date, _, _, _ = parse("10/28 - 10/30\n\nScales/Arpeggios - G major\n")
+check("date range, spaces kept verbatim", date == "10/28 - 10/30")
+date, items, _, _ = parse("10/23\n\nScales/Arpeggios - A major\n\n10/9-10/16\n\nScales/Arpeggios - G major\n")
+check("older range ends the entry", date == "10/23" and "scale:G-major" not in items)
+
 # 2. Types come from the entry's own bullets.
 _, items, _, flags = parse(DOC.split("10/23")[0] + DOC[DOC.index("10/9"):])
 check("A minor natural + harmonic", items["scale:A-minor"]["types"] == ["natural", "harmonic"] and not flags)

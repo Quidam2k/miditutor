@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any
 
 Item = dict[str, Any]
-DATE = re.compile(r"^\s*(\d{1,2}/\d{1,2})\s*$")
+DATE = re.compile(r"^\s*(\d{1,2}/\d{1,2}(?:\s*-\s*\d{1,2}/\d{1,2})?)\s*$")
 
 
 def unescape(text: str) -> str:
