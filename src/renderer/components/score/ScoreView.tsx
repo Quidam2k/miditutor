@@ -535,6 +535,8 @@ export function ScoreView() {
   const held = useMidiStore((s) => s.held);
   const showKeyboard = useSettingsStore((s) => s.showKeyboard);
   const setShowKeyboard = useSettingsStore((s) => s.setShowKeyboard);
+  const reverseWheel = useSettingsStore((s) => s.reverseWheel);
+  const setReverseWheel = useSettingsStore((s) => s.setReverseWheel);
   const [remaining, setRemaining] = useState<number[]>([]);
   const [playHint, setPlayHint] = useState('');
   // Every key of the step stays lit on the strip, credited or not (#9993).
@@ -2002,6 +2004,18 @@ export function ScoreView() {
   const onWheel = (ev: WheelEvent) => {
     const f = followerRef.current;
     if (!f || status !== 'ready') return;
+    // #10254: a bar he typed and hasn't landed goes now, or leaving the box later would jump him
+    // back to it. If that moved him, this notch is spent: the note under the pointer has gone.
+    const typing = document.activeElement;
+    if (typing instanceof HTMLInputElement && typing.dataset.barInput !== undefined) {
+      const at = cursorIndexRef.current;
+      typing.blur();
+      if (cursorIndexRef.current !== at) {
+        ev.preventDefault();
+        setHoverTarget(null);
+        return;
+      }
+    }
     const target = wheelTarget;
     if (!target && !strip) return;
     ev.preventDefault();
@@ -2015,7 +2029,8 @@ export function ScoreView() {
       // and Shift+wheel goes past them to tag notes outside it.
       if (watching || picking !== 'off') return;
       const range = !ev.shiftKey && loopBars ? stepRangeOf(f.steps, loopBars.first, loopBars.last) : null;
-      const step = stepForWheel(f.steps, cursorIndexRef.current, notch, range || null);
+      const way = reverseWheel ? (-notch as -1 | 1) : notch;
+      const step = stepForWheel(f.steps, cursorIndexRef.current, way, range || null);
       if (step === null) return;
       // Notes skipped by scrolling mustn't earn a clean lap in Build backwards.
       if (chunk) lapWrongRef.current++;
@@ -2051,6 +2066,7 @@ export function ScoreView() {
     ),
   );
   const finished = feedback.kind === 'complete';
+  const lastBar = followerRef.current?.steps.at(-1)?.measure;
   const keyLabels = fingersOf(stepNotesRef.current[cursorStep]);
   if (wheelLive && hoverKey === wheelLive.target.midi) {
     if (wheelLive.digit) keyLabels.set(hoverKey, wheelLive.digit);
@@ -2291,6 +2307,12 @@ export function ScoreView() {
           <input type="checkbox" checked={showKeyboard} onChange={(e) => setShowKeyboard(e.target.checked)} />
           Keyboard
         </label>
+        {strip && (
+          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Turn the wheel the other way to move along the score">
+            <input type="checkbox" data-testid="reverse-wheel" checked={reverseWheel} onChange={(e) => setReverseWheel(e.target.checked)} />
+            Reverse wheel
+          </label>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <button
             onClick={() => {
@@ -2357,7 +2379,7 @@ export function ScoreView() {
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-md bg-gray-900/60 px-3 py-2 text-sm">
           <label className="flex items-center gap-1 text-gray-400">
             Bar
-            <BarInput testId="bar-now" value={measure} onCommit={jumpToBar} disabled={watching} title="Type a bar number to go there" />
+            <BarInput testId="bar-now" value={measure} last={lastBar} onCommit={jumpToBar} disabled={watching} title="Type a bar number to go there" />
           </label>
           <span className="text-gray-400" data-testid="next-notes">
             Play:{' '}
@@ -2375,6 +2397,8 @@ export function ScoreView() {
               <BarInput
                 testId="loop-first"
                 value={picking === 'off' ? overall?.first ?? null : pickStart}
+                from={measure}
+                last={lastBar}
                 onCommit={typedFirst}
                 disabled={watching}
                 focus={picking === 'start'}
@@ -2384,6 +2408,8 @@ export function ScoreView() {
               <BarInput
                 testId="loop-last"
                 value={picking === 'off' ? overall?.last ?? null : null}
+                from={pickStart ?? measure}
+                last={lastBar}
                 onCommit={typedLast}
                 disabled={watching}
                 focus={picking === 'end'}

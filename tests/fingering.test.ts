@@ -9,7 +9,7 @@ import {
   type XmlImpl,
 } from '../src/shared/fingering';
 import {
-  fingersLowToHigh, nextFinger, prevPlayable, stepForWheel, stepOfBar, wheelNotch, type WheelRun,
+  fingersLowToHigh, nextFinger, prevPlayable, stepBar, stepForWheel, stepOfBar, wheelNotch, type WheelRun,
 } from '../src/renderer/components/score/noteEdit';
 
 describe('wheelNotch (#10259)', () => {
@@ -48,6 +48,20 @@ describe('wheelNotch (#10259)', () => {
 
   it('a zero delta moves nothing', () => {
     expect(run([[0, 0]])).toEqual([0]);
+  });
+});
+
+describe('stepBar (#10254)', () => {
+  it('goes higher on the way up, lower on the way down', () => {
+    expect(stepBar(20, -1)).toBe(21);
+    expect(stepBar(20, 1)).toBe(19);
+  });
+  it('stops at the first and last bars', () => {
+    expect(stepBar(1, 1, 30)).toBe(1);
+    expect(stepBar(30, -1, 30)).toBe(30);
+  });
+  it('has nothing to step from an empty box', () => {
+    expect(stepBar(null, -1, 30)).toBeNull();
   });
 });
 

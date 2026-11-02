@@ -35,6 +35,12 @@ export function parseBar(text: string): number | null {
   return /^[1-9]\d{0,3}$/.test(t) ? Number(t) : null;
 }
 
+/** #10254: the bar one wheel notch away, up being higher, held to 1..last. Null: nothing to step from. */
+export function stepBar(from: number | null, notch: -1 | 1, last?: number): number | null {
+  if (from === null) return null;
+  return Math.max(1, Math.min(last ?? Infinity, from - notch));
+}
+
 /**
  * #10245: where Prev goes. The nearest earlier step with something to play: a tie-only
  * step behind him would seek forward again, straight back to where he was. Null at the start.

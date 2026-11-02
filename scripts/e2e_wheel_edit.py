@@ -4,7 +4,9 @@
     MIDITUTOR_HIDDEN=1 MIDITUTOR_WINDOW_SIZE=1600x900 MIDITUTOR_PORT=47812 MIDITUTOR_VITE_PORT=5183 \
       MIDITUTOR_PIECES_DIR=<copy> npx electron-forge start -- --remote-debugging-port=9346 --user-data-dir=<scratch>
     MIDITUTOR_URL=http://127.0.0.1:47812 MIDITUTOR_TOKEN_FILE=<scratch>/api-token MIDITUTOR_CDP=http://127.0.0.1:9346 \
-      python scripts/e2e_wheel_edit.py <copy>/sorcerers-apprentice.musicxml
+      python scripts/e2e_wheel_edit.py <copy>/sorcerers-apprentice.musicxml [box]
+
+"box" runs only the #10254 bar box checks (the wheel with a bar box in play, and Reverse wheel).
 
 Every mark it changes it puts back, and it checks the file's marks match at the end.
 """
@@ -400,6 +402,150 @@ def loop_checks(page) -> None:
     page.wait_for_timeout(300)
 
 
+def box_checks(page) -> None:
+    """#10254: the wheel with a bar box in play."""
+    scroll_tops = "() => { const s = [...document.querySelectorAll('*')].filter((e) => e.scrollTop > 0); return s.map((e) => e.scrollTop); }"
+    box = page.get_by_test_id("bar-now")
+
+    def over(testid: str) -> None:
+        r = page.get_by_test_id(testid).bounding_box()
+        page.mouse.move(r["x"] + r["width"] / 2, r["y"] + r["height"] / 2)
+        page.wait_for_timeout(80)
+
+    type_bar(page, "bar-now", 20)
+    over("bar-now")
+    tops = page.evaluate(scroll_tops)
+    box.click()
+    # In the page, so the gaps are what they say: a hidden window's mouse.wheel takes longer than the wait.
+    seen = page.evaluate(
+        """async () => {
+          const el = document.querySelector('[data-testid=bar-now]');
+          const send = (deltaY) => el.dispatchEvent(new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true }));
+          const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+          send(-100);
+          await pause(120);
+          send(-100);
+          await pause(120);
+          return el.value;
+        }"""
+    )
+    check(seen == "22" and screen()["measure"] == 20, "over the box, a spin steps the number and waits", (seen, screen()["measure"]))
+    page.wait_for_timeout(500)
+    check(screen()["measure"] == 22, "it lands once he stops", screen()["measure"])
+    check(page.evaluate(scroll_tops) == tops, "nothing scrolled under the box")
+    page.mouse.wheel(0, 100)
+    page.wait_for_timeout(500)
+    check(screen()["measure"] == 21, "wheel down is a lower bar", screen()["measure"])
+
+    # Bar numbers aren't invented at the ends.
+    type_bar(page, "bar-now", 1)
+    over("bar-now")
+    page.mouse.wheel(0, 100)
+    page.wait_for_timeout(500)
+    check(box.input_value() == "1" and screen()["measure"] == 1, "stops at bar 1", box.input_value())
+
+    # A half-typed number is his: a pause doesn't land it or overwrite it, even after a wheel.
+    type_bar(page, "bar-now", 20)
+    box.click()
+    box.fill("3")
+    page.wait_for_timeout(900)
+    check(box.input_value() == "3" and screen()["measure"] == 20, "a half-typed number just sits there", (box.input_value(), screen()["measure"]))
+    box.fill("20")
+    box.press("Enter")
+    page.wait_for_timeout(200)
+    page.evaluate(
+        """() => {
+          const el = document.querySelector('[data-testid=bar-now]');
+          el.focus();
+          el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true }));
+        }"""
+    )
+    box.fill("3")
+    page.wait_for_timeout(900)
+    check(box.input_value() == "3" and screen()["measure"] == 20, "typing over a wheel's wait cancels it", (box.input_value(), screen()["measure"]))
+    box.press("Escape")
+    page.wait_for_timeout(200)
+    check(screen()["measure"] == 20, "Esc drops it", screen()["measure"])
+
+    # Focused with nothing typed, the wheel on the score just moves.
+    box.click()
+    off_note(page)
+    was = where()
+    page.mouse.wheel(0, 100)
+    page.wait_for_timeout(250)
+    check(where() != was and screen()["measure"] == 20, "focused box, wheel on the score moves a note", where())
+
+    # Typed 30, then the wheel on the score: he goes to 30 and leaving the box doesn't jump him back.
+    box.click()
+    box.fill("30")
+    off_note(page)
+    page.mouse.wheel(0, 100)
+    page.wait_for_timeout(300)
+    check(screen()["measure"] == 30, "typed then wheel: he goes to the typed bar", screen()["measure"])
+    at30 = where()
+    page.mouse.wheel(0, 100)
+    page.wait_for_timeout(250)
+    moved = where()
+    check(moved != at30, "the next notch moves on from there", moved)
+    page.evaluate("document.activeElement.blur()")
+    page.wait_for_timeout(300)
+    check(where() == moved, "and nothing jumps him back", where())
+
+    # Typed, with the pointer on a note: that notch only lands the bar. No finger may change on the
+    # note that just scrolled away. (A further notch edits whatever note is under the pointer now.)
+    type_bar(page, "bar-now", 23)
+    page.wait_for_timeout(400)
+    low, _high = chord_heads(page)
+    page.mouse.move(low["x"], low["y"])
+    page.wait_for_timeout(200)
+    before = marks_of(Path(sys.argv[1]))
+    box.focus()
+    box.fill("30")
+    page.mouse.wheel(0, -100)
+    page.wait_for_timeout(900)
+    check(marks_of(Path(sys.argv[1])) == before and screen()["measure"] == 30, "typed, pointer on a note: no finger changed", screen()["measure"])
+
+    # The loop's boxes.
+    page.get_by_test_id("loop-bars").click()
+    page.wait_for_timeout(200)
+    type_bar(page, "loop-first", 22)
+    type_bar(page, "loop-last", 25)
+    over("loop-last")
+    page.mouse.wheel(0, 100)
+    page.wait_for_timeout(500)
+    check(screen()["loop"]["lastBar"] == 24, "the wheel moves the loop's last bar", screen()["loop"])
+    over("loop-first")
+    page.mouse.wheel(0, -100)
+    page.wait_for_timeout(500)
+    check(screen()["loop"]["firstBar"] == 23, "and its first bar", screen()["loop"])
+    page.get_by_test_id("clear-loop").click()
+    page.wait_for_timeout(300)
+
+    # Reverse: only the off-note move in Strip.
+    type_bar(page, "bar-now", 20)
+    page.get_by_test_id("reverse-wheel").check()
+    off_note(page)
+    was = where()
+    page.mouse.wheel(0, 100)
+    page.wait_for_timeout(250)
+    back = where()
+    page.mouse.wheel(0, -100)
+    page.wait_for_timeout(250)
+    check(where() == was and back != was and back[0] <= was[0], "reversed: down goes back, up comes forward", (was, back, where()))
+    over("bar-now")
+    page.mouse.wheel(0, -100)
+    page.wait_for_timeout(500)
+    check(screen()["measure"] == was[0] + 1, "reversed: the bar box still goes up on up", screen()["measure"])
+    page.reload()
+    page.wait_for_timeout(1500)
+    page.get_by_role("button", name="Score", exact=True).click()
+    page.wait_for_selector("[data-testid=reverse-wheel]", timeout=30000)
+    check(page.get_by_test_id("reverse-wheel").is_checked(), "the setting survives a reload")
+    page.get_by_test_id("reverse-wheel").uncheck()
+    page.wait_for_function("() => document.querySelectorAll('.vf-notehead').length > 50", timeout=60000)
+    page.wait_for_timeout(2500)
+
+
 def main() -> int:
     score = Path(sys.argv[1])
     original = marks_of(score)
@@ -423,10 +569,16 @@ def main() -> int:
             }"""
         )
         page.wait_for_timeout(2500)
-        edit_checks(page, score, original)
-        reload_keeps_edit(page, score, original)
-        wheel_checks(page)
-        loop_checks(page)
+        page.get_by_role("button", name="Strip", exact=True).click()
+        page.wait_for_function("() => document.querySelectorAll('.vf-notehead').length > 50", timeout=60000)
+        page.wait_for_timeout(2500)
+        if "box" not in sys.argv[2:]:
+            edit_checks(page, score, original)
+            reload_keeps_edit(page, score, original)
+            wheel_checks(page)
+            loop_checks(page)
+        # Last: it reloads the page, which drops the scrollTo patch above.
+        box_checks(page)
         times = renders(page)
         if times:
             print(f"finger-render ms: {[round(t) for t in times]} median {round(statistics.median(times))}")

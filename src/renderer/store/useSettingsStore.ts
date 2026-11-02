@@ -44,7 +44,10 @@ interface SettingsState {
   sightReadPiece: string | null;
   /** The drill he left for Sight-read, by piece id; going back to the piece puts it back. */
   parkedDrills: Record<string, SessionSnapshot>;
+  /** #10254: the wheel off a note in Strip moves the other way. */
+  reverseWheel: boolean;
 
+  setReverseWheel: (on: boolean) => void;
   toggleSimplePiece: (title: string) => void;
   markSightRead: (id: string, title: string) => void;
   clearSightRead: () => void;
@@ -99,6 +102,8 @@ export const useSettingsStore = create<SettingsState>()(
       sightDrilled: {},
       sightReadPiece: null,
       parkedDrills: {},
+      reverseWheel: false,
+      setReverseWheel: (on) => set({ reverseWheel: on }),
 
       toggleSimplePiece: (title) =>
         set((s) => ({
