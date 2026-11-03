@@ -1,16 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { chunkLabel, lapDone, parseTargets, startChunk, targetFor } from '../src/renderer/engine/BackwardChunk';
+import { chunkLabel, grewLabel, lapDone, parseTargets, reachedLabel, startChunk, targetFor } from '../src/renderer/engine/BackwardChunk';
 
 const T = [3, 5];
 
 function laps(s: ReturnType<typeof startChunk>, wrongs: number[], targets = T) {
   const grew: boolean[] = [];
+  const reached: boolean[] = [];
   for (const w of wrongs) {
     const r = lapDone(s, w, targets);
     s = r.state;
     grew.push(r.grew);
+    reached.push(r.reached);
   }
-  return { s, grew };
+  return { s, grew, reached };
 }
 
 describe('BackwardChunk', () => {
@@ -65,5 +67,26 @@ describe('BackwardChunk', () => {
   it('a one-bar section is done after its first target', () => {
     const { s } = laps(startChunk(5, 5, T), [0, 0, 0]);
     expect(s).toMatchObject({ start: 5, done: true, clean: 3 });
+  });
+
+  it('#5382: says reached on exactly the lap that finishes the whole range', () => {
+    const { s, reached } = laps(startChunk(34, 35, T), [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]);
+    // 3 clean on bar 35, grow; then 5 clean (one wrong lap in between) on 34–35.
+    expect(reached).toEqual([false, false, false, false, false, false, false, false, true, false, false]);
+    expect(s).toMatchObject({ done: true, clean: 7 });
+    expect(reachedLabel({ ...s, clean: 5 })).toBe('Clean-lap target reached: bars 34–35, 5 clean laps.');
+  });
+
+  it('#5382: a wrong lap at the end does not reach; a one-bar section reaches on its target', () => {
+    let r = laps(startChunk(5, 5, T), [0, 0, 1]);
+    expect(r.reached).toEqual([false, false, false]);
+    r = laps(r.s, [0]);
+    expect(r.reached).toEqual([true]);
+    expect(reachedLabel(r.s)).toBe('Clean-lap target reached: bar 5, 3 clean laps.');
+  });
+
+  it('#5382: names the bar it just added', () => {
+    const { s } = laps(startChunk(33, 35, T), [0, 0, 0]);
+    expect(grewLabel(s)).toBe('Added bar 34: now looping 34–35, 5 clean laps to go');
   });
 });

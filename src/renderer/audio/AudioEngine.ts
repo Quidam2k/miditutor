@@ -45,6 +45,22 @@ export function playChord(midiNumbers: number[], duration: string | number = '4n
   synth.triggerAttackRelease(notes, duration);
 }
 
+/**
+ * #5382: a soft two-note chime (G5 then C6) for "you're done", heard with his eyes on
+ * the keys. Opens audio if it isn't yet; stays quiet if the browser won't allow it.
+ */
+export async function playChime(): Promise<void> {
+  try {
+    await initAudio();
+    if (!synth) return;
+    const now = Tone.now();
+    synth.triggerAttackRelease('G5', '8n', now, 0.35);
+    synth.triggerAttackRelease('C6', '4n', now + 0.18, 0.35);
+  } catch (err) {
+    console.warn('[chime] could not play:', err);
+  }
+}
+
 export function isInitialized(): boolean {
   return initialized;
 }

@@ -34,17 +34,33 @@ export function startChunk(first: number, last: number, targets: number[]): Chun
 }
 
 /**
- * One lap finished. Returns the new state and whether the chunk grew a bar. The target
- * comes from `targets` now, so an edit to it applies to the chunk he is on.
+ * One lap finished. Returns the new state, whether the chunk grew a bar, and whether this
+ * lap was the one that hit the whole range's target (#5382: he is done; tell him). The
+ * target comes from `targets` now, so an edit to it applies to the chunk he is on.
  */
-export function lapDone(s: ChunkState, wrongInLap: number, targets: number[]): { state: ChunkState; grew: boolean } {
-  if (wrongInLap > 0) return { state: s, grew: false };
+export function lapDone(
+  s: ChunkState,
+  wrongInLap: number,
+  targets: number[],
+): { state: ChunkState; grew: boolean; reached: boolean } {
+  if (wrongInLap > 0) return { state: s, grew: false, reached: false };
   const clean = s.clean + 1;
   const need = targetFor(targets, s.last - s.start);
-  if (s.done || clean < need) return { state: { ...s, clean, need }, grew: false };
-  if (s.start <= s.first) return { state: { ...s, clean, need, done: true }, grew: false };
+  if (s.done || clean < need) return { state: { ...s, clean, need }, grew: false, reached: false };
+  if (s.start <= s.first) return { state: { ...s, clean, need, done: true }, grew: false, reached: true };
   const start = s.start - 1;
-  return { state: { ...s, start, clean: 0, need: targetFor(targets, s.last - start) }, grew: true };
+  return { state: { ...s, start, clean: 0, need: targetFor(targets, s.last - start) }, grew: true, reached: false };
+}
+
+/** #5382: the line that tells him he's done. */
+export function reachedLabel(s: ChunkState): string {
+  const bars = s.first === s.last ? `bar ${s.first}` : `bars ${s.first}–${s.last}`;
+  return `Clean-lap target reached: ${bars}, ${s.clean} clean laps.`;
+}
+
+/** #5382: the quiet note when the loop takes in one more bar. */
+export function grewLabel(s: ChunkState): string {
+  return `Added bar ${s.start}: now looping ${s.start}–${s.last}, ${s.need} clean laps to go`;
 }
 
 /**

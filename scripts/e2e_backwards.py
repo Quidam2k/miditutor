@@ -9,9 +9,15 @@ Loads the Minuet in G, asks for bars 2-3 backwards (POST /loop backwards=true) a
 through /inject with the default clean-lap targets "3,5": bar 3 alone for 3 clean laps,
 then bars 2-3. A lap with a wrong note must not count (and must not shrink the chunk);
 5 clean laps on bars 2-3 finish it ("whole range").
+
+#5382: the lap that finishes it stops the loop and says so (banner, chime, chunk event
+reached:true); notes after that don't count. With MIDITUTOR_CDP set (the app started with
+--remote-debugging-port on a spare port, not 9333), it also clicks the banner's "Go again"
+and checks the whole range loops again.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 import time
@@ -137,10 +143,36 @@ def main() -> int:
     for _ in range(3):
         play_lap()
     b = screen()["backwards"]
-    check(b["done"] is True and b["clean"] == 5, "whole range after 5 clean laps", b)
-    s = play_lap()
+    s = screen()
     b = s["backwards"]
-    check(b["done"] is True and b["clean"] == 6 and s["loop"]["firstBar"] == 2, "keeps looping the whole range", b)
+    check(b["done"] is True and b["clean"] == 5, "whole range after 5 clean laps", b)
+    check(b.get("reached") is True, "#5382 target reached shows", b)
+    check(s.get("remaining") == [], "#5382 the loop stopped: nothing left to play", s.get("remaining"))
+    lap = s["loop"]["lap"]
+    strike([midi_of("G4")])
+    time.sleep(0.5)
+    s = screen()
+    check(s["loop"]["lap"] == lap and s["backwards"]["clean"] == 5, "#5382 notes after it don't count", s["backwards"])
+
+    cdp = os.environ.get("MIDITUTOR_CDP")
+    if cdp:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(cdp)
+            page = next(pg for ctx in browser.contexts for pg in ctx.pages if "devtools" not in pg.url)
+            check(page.get_by_test_id("target-reached").is_visible(), "#5382 banner on screen")
+            check(page.evaluate("document.activeElement?.dataset?.testid") == "target-reached-restart",
+                  "#5382 Go again has focus (Enter works)")
+            page.get_by_test_id("target-reached-restart").click()
+            time.sleep(0.8)
+            s = screen()
+            check(not s["backwards"].get("reached") and s.get("measure") == 2 and s["loop"]["firstBar"] == 2,
+                  "#5382 Go again loops the whole range from bar 2", s.get("loop"))
+            s = play_lap()
+            check(s["backwards"]["clean"] == 6 and not s["backwards"].get("reached"), "extra laps keep counting", s["backwards"])
+    else:
+        print("SKIP Go again click (set MIDITUTOR_CDP to check it)")
 
     tc.request("DELETE", "/loop")
     time.sleep(0.8)
@@ -149,6 +181,7 @@ def main() -> int:
     events = tc.request("GET", f"/events?since={seq}&limit=5000")["events"]
     chunks = [e for e in events if e.get("kind") == "chunk"]
     check(any(e.get("grew") for e in chunks), "a chunk event reports the growth", len(chunks))
+    check(sum(1 for e in chunks if e.get("reached")) == 1, "#5382 exactly one chunk event says reached", len(chunks))
     print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")
     return 1 if FAILS else 0
 

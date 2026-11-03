@@ -8,7 +8,7 @@ import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import expressionXml from '../../assets/expression-test.musicxml?raw';
-import { initAudio, playChord } from '../../audio/AudioEngine';
+import { initAudio, playChime, playChord } from '../../audio/AudioEngine';
 import { PianoKeyboard88 } from '../homework/PianoKeyboard88';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
@@ -16,7 +16,7 @@ import { ExpressionTracker, describeMark, parseExpression, type ExpressionFindin
 import { PedalCoach } from '../../engine/PedalCoach';
 import { rememberRef, resolvePieceId } from './lastPiece';
 import { fingersLowToHigh, nextFinger, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
-import { chunkLabel, lapDone, parseTargets, rangeEdited, startChunk, type ChunkState } from '../../engine/BackwardChunk';
+import { chunkLabel, grewLabel, lapDone, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { BarInput } from './BarInput';
 import { loadStartupSnapshot, restorable, type SessionSnapshot } from './sessionSnapshot';
 import { pickBars, pickHand, pickSightPiece } from '../../engine/SightRead';
@@ -556,6 +556,11 @@ export function ScoreView() {
   const [chunk, setChunk] = useState<ChunkState | null>(null);
   const chunkRef = useRef<ChunkState | null>(null);
   chunkRef.current = chunk;
+  // #5382: the whole range hit its clean-lap target. The loop stops until he restarts.
+  const [reached, setReached] = useState<string | null>(null);
+  const [grewTip, setGrewTip] = useState('');
+  const grewTipTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(grewTipTimerRef.current), []);
   // The whole range he chose; with Build backwards the loop itself is only the end of it.
   const overall = chunk ? { first: chunk.first, last: chunk.last } : loopBars;
   const lapWrongRef = useRef(0);
@@ -787,7 +792,7 @@ export function ScoreView() {
       paceBpm: pace,
       loop: loopBars ? { firstBar: loopBars.first, lastBar: loopBars.last, lap, lastLapBpm: lapBpm } : null,
       backwards: chunk
-        ? { firstBar: chunk.first, lastBar: chunk.last, startBar: chunk.start, clean: chunk.clean, need: chunk.need, done: chunk.done }
+        ? { firstBar: chunk.first, lastBar: chunk.last, startBar: chunk.start, clean: chunk.clean, need: chunk.need, done: chunk.done, reached: reached !== null }
         : null,
       pickingLoop: picking === 'off' ? null : picking,
       playedMarks: marks.length,
@@ -796,7 +801,7 @@ export function ScoreView() {
       expressionMarks: exprMarks.slice(0, 40),
       expression: exprFindings,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk]);
+  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -963,9 +968,12 @@ export function ScoreView() {
     setRemaining(left);
     setStepKeys(f.expected);
     setPlayHint(hintFor(osmdRef.current, stepNotesRef.current[f.index] ?? [], left));
-    const step = f.steps[Math.min(f.index, f.steps.length - 1)];
+    // Parked past the end of a loop (#5382 target reached): stay on the loop's last bar.
+    const step = f.steps[Math.min(f.index, f.range?.last ?? f.steps.length - 1)];
     setMeasure(step?.measure ?? 1);
     setPace(f.paceBpm);
+    // Any move off the parked spot (a step button, a new loop) means he's playing again.
+    if (!f.finished) setReached(null);
   }, []);
 
   const restart = useCallback(() => {
@@ -990,6 +998,7 @@ export function ScoreView() {
     if (stripRef.current) centerCursor('auto');
     else osmd.cursor.cursorElement?.scrollIntoView?.({ block: 'center' });
     setFeedback({ kind: 'idle' });
+    setReached(null);
     setWrongCount(0);
     setLap(f.lap);
     lapStartRef.current = null;
@@ -1136,6 +1145,8 @@ export function ScoreView() {
     setChunk(edited);
     useSettingsStore.getState().setPieceLoop(pieceLabelRef.current, next);
     if (edited.start !== c.start || edited.last !== c.last) applyLoop({ first: edited.start, last: edited.last }, true);
+    // #5382: an earlier first bar un-finishes it; a parked follower has to loop again.
+    else if (reached && !edited.done) restart();
     chunkEvent(edited, { edited: true });
   };
 
@@ -1156,18 +1167,33 @@ export function ScoreView() {
 
   // One lap wrapped. Clean (no wrong note in it) counts toward the chunk; enough of
   // them and the loop starts a bar earlier. A wrong lap just doesn't count.
+  // Returns true when the note that wrapped it shouldn't be judged (grew or stopped).
   const chunkLap = useCallback(() => {
     const wrong = lapWrongRef.current;
     lapWrongRef.current = 0;
     const c = chunkRef.current;
     if (!c) return false;
-    const { state, grew } = lapDone(c, wrong, parseTargets(useSettingsStore.getState().backwardTargets));
+    const { state, grew, reached: hit } = lapDone(c, wrong, parseTargets(useSettingsStore.getState().backwardTargets));
     chunkRef.current = state;
     setChunk(state);
-    chunkEvent(state, { grew, wrongInLap: wrong });
-    if (grew) applyLoop({ first: state.start, last: state.last }, true);
-    return grew;
-  }, [applyLoop]);
+    chunkEvent(state, { grew, wrongInLap: wrong, ...(hit ? { reached: true } : {}) });
+    if (grew) {
+      applyLoop({ first: state.start, last: state.last }, true);
+      setGrewTip(grewLabel(state));
+      window.clearTimeout(grewTipTimerRef.current);
+      grewTipTimerRef.current = window.setTimeout(() => setGrewTip(''), 3000);
+    }
+    if (hit) {
+      // #5382: done. Park the follower past the end so more notes don't count; Restart
+      // (the banner's button or the toolbar's) loops the whole range again.
+      const f = followerRef.current;
+      if (f) f.seek(f.steps.length);
+      setReached(reachedLabel(state));
+      void playChime();
+      syncUi();
+    }
+    return grew || hit;
+  }, [applyLoop, syncUi]);
 
   // Bar under a click on the score, from OSMD's bar layout.
   const barAt = (clientX: number, clientY: number): number | null => {
@@ -2491,6 +2517,30 @@ export function ScoreView() {
         </div>
       )}
       </div>
+
+      {reached && (
+        <div
+          className="flex items-center justify-between gap-4 rounded-lg border-2 border-green-500 bg-green-900/40 px-5 py-4"
+          data-testid="target-reached"
+          role="status"
+        >
+          <span className="text-xl font-semibold text-green-200">✓ {reached}</span>
+          {/* Focused so the trackball click or Enter both go again (#5382). */}
+          <button
+            autoFocus
+            onClick={restart}
+            className="rounded-md bg-green-600 px-5 py-2 text-lg font-semibold text-white hover:bg-green-500"
+            data-testid="target-reached-restart"
+          >
+            Go again
+          </button>
+        </div>
+      )}
+      {grewTip && !reached && (
+        <p className="text-sm font-medium text-yellow-200" data-testid="grew-tip">
+          {grewTip}
+        </p>
+      )}
 
       {status === 'error' && (
         <p className="rounded-md border border-red-800/50 bg-red-900/20 p-3 text-sm text-red-300">
