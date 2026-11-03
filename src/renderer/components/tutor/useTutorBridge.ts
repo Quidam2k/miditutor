@@ -93,6 +93,8 @@ export function useTutorBridge(onShowScore: () => void) {
       if (s.connected !== p.connected || s.activeDevice !== p.activeDevice || s.enabled !== p.enabled || s.error !== p.error) {
         reportDevice();
       }
+      // #5412: the feed shows the keyboard dropping and coming back.
+      if (s.connected !== p.connected) reportEvent('device', { connected: s.connected, name: s.activeDevice?.name ?? null });
     });
 
     const unsubCmd = bridge.onCommand((cmd) => {

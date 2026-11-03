@@ -1,7 +1,9 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { WebMidi, Input, NoteMessageEvent, ControlChangeMessageEvent } from 'webmidi';
 import { useMidiStore } from '../../store/useMidiStore';
 import { MidiDevice } from '../../types/midi';
+
+const MIDI_EVENTS = ['noteon', 'noteoff', 'controlchange'] as const;
 
 function toDevice(input: Input): MidiDevice {
   return {
@@ -15,10 +17,18 @@ export function useMidi() {
   const { setDevices, setActiveDevice, ingestNote, setPedal, setEnabled, setError, setConnected } =
     useMidiStore();
 
+  // The one input we listen to. WebMidi keeps an unplugged Input and hands the same object
+  // back when it returns, with its old listeners still on it, so attaching again without
+  // taking them off plays every note twice (#5412).
+  const attachedRef = useRef<Input | null>(null);
+
   // Attach note-on / note-off listeners that funnel through the store's single
   // ingestion path — the same path the virtual dev keyboard uses.
   const attachListeners = useCallback(
     (input: Input) => {
+      const old = attachedRef.current;
+      if (old) for (const event of MIDI_EVENTS) old.removeListener(event);
+      attachedRef.current = input;
       input.addListener('noteon', (e: NoteMessageEvent) => {
         ingestNote({
           kind: 'noteon',

@@ -1769,7 +1769,8 @@ export function ScoreView() {
 
   // #9988: tap a notehead to give it a finger number, or (#10146) mark it "hold".
   const onScoreTap = (ev: React.MouseEvent) => {
-    if (watching || !(ev.target instanceof Element)) return;
+    // #5410: choosing a loop's bars, a click on a note picks its bar; no finger picker over the music.
+    if (watching || picking !== 'off' || !(ev.target instanceof Element)) return;
     const hit = noteAt(ev.target, ev.clientY);
     if (hit) openPick(ev.clientX, ev.clientY, hit);
   };
@@ -1999,6 +2000,26 @@ export function ScoreView() {
   const commitWheelRef = useRef(commitWheel);
   commitWheelRef.current = commitWheel;
 
+  // #5410: centre the bar next to the one now mid-panel. Instant, so a fast spin reads the
+  // position it just set rather than one still animating.
+  const slideStripBar = (way: -1 | 1) => {
+    const osmd = osmdRef.current;
+    const container = containerRef.current;
+    const panel = panelRef.current;
+    if (!osmd || !container || !panel) return;
+    const p = panel.getBoundingClientRect();
+    const middle = p.left + panel.clientLeft + panel.clientWidth / 2;
+    const svg = container.querySelector('svg');
+    if (!svg) return;
+    const originX = svg.getBoundingClientRect().left;
+    const bars = [...barBoxes(osmd).values()];
+    if (bars.length === 0) return;
+    const at = bars.findIndex((b) => middle < originX + b.x + b.w);
+    const here = at < 0 ? bars.length - 1 : at;
+    const next = bars[Math.max(0, Math.min(bars.length - 1, here + way))];
+    panel.scrollLeft += originX + next.x + next.w / 2 - middle;
+  };
+
   // #10237 #10238: on a yellow note the wheel steps its finger; anywhere else it scrolls.
   // The strip has no scroll of its own, so there it goes a bar at a time.
   const onWheel = (ev: WheelEvent) => {
@@ -2016,7 +2037,8 @@ export function ScoreView() {
         return;
       }
     }
-    const target = wheelTarget;
+    // Choosing a loop's bars edits no finger, even if a note was yellow as he started.
+    const target = picking === 'off' ? wheelTarget : null;
     if (!target && !strip) return;
     ev.preventDefault();
     // macOS turns a Shift+wheel into a sideways scroll: the notch arrives as deltaX.
@@ -2025,11 +2047,17 @@ export function ScoreView() {
     if (notch === 0) return;
     const up = notch < 0;
     if (!target) {
+      const way = reverseWheel ? (-notch as -1 | 1) : notch;
+      // #5410: choosing a loop's bars, the wheel slides the music a bar per notch to find the
+      // next one. The cursor stays where it is.
+      if (picking !== 'off') {
+        slideStripBar(way);
+        return;
+      }
       // #10259: one note per notch. The loop itself never changes; the wheel stops at its edges,
       // and Shift+wheel goes past them to tag notes outside it.
-      if (watching || picking !== 'off') return;
+      if (watching) return;
       const range = !ev.shiftKey && loopBars ? stepRangeOf(f.steps, loopBars.first, loopBars.last) : null;
-      const way = reverseWheel ? (-notch as -1 | 1) : notch;
       const step = stepForWheel(f.steps, cursorIndexRef.current, way, range || null);
       if (step === null) return;
       // Notes skipped by scrolling mustn't earn a clean lap in Build backwards.

@@ -150,8 +150,9 @@ def recent(seconds: float | None = None, limit: int = 50) -> dict:
     # pass them through as-is. Velocity etc. stay in the raw /events.
     # invite-on/off/error (#5154): "Bring in the tutor" started, ended (button|idle) or failed.
     # chunk (#10133): Build backwards progress (startBar, clean/need, grew, done).
+    # device (#5412): the keyboard dropped or came back.
     feed_kinds = {"pedal", "follow", "loop", "lap", "chunk", "piece", "screenshot",
-                  "invite-on", "invite-off", "invite-error"}
+                  "invite-on", "invite-off", "invite-error", "device"}
     notes = [e for e in events if "note" in e and e.get("kind") not in feed_kinds]
     feed = [{k: v for k, v in e.items() if k != "seq"} for e in events if e.get("kind") in feed_kinds]
     # Expression telemetry (#9569): one hedged line per marked passage he finished,
