@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Install the latest CI macOS build on Pinocchio over SSH (no toolchain needed on the Mac).
 # Never call git/python3/cc on the Mac: without Xcode CLT they pop an install dialog on the TV.
+# Never call osascript on the Mac either (#5412): it can put a permission dialog on his screen,
+# and he has already complained about one (2026-11-02). Stop the app with plain SIGTERM, and don't
+# bring it forward: it may reopen behind whatever is in front.
+# The app it replaces stays in ~/miditutor-previous/MidiTutor.app. To go back: stop the app, then
+# move that over ~/Applications/MidiTutor.app.
 set -euo pipefail
 
 usage() {
@@ -57,21 +62,28 @@ fi
 
 ssh "$PINOCCHIO_HOST" 'bash -s' <<'REMOTE'
 set -euo pipefail
-# Stop the app before replacing its bundle.
-# Only ask it to quit when running: telling a stopped app to quit launches it.
-if pgrep -x MidiTutor >/dev/null; then
-  osascript -e 'tell application "MidiTutor" to quit' >/dev/null 2>&1 || true
-fi
-for ((i=0; i<10; i++)); do
+# Unpack and check the new build first: a bad zip must leave the old app where it is.
+rm -rf "$HOME/miditutor-new"
+mkdir -p "$HOME/miditutor-new" "$HOME/miditutor-previous" "$HOME/Applications"
+ditto -x -k "$HOME/miditutor-deploy.zip" "$HOME/miditutor-new/"
+test -x "$HOME/miditutor-new/MidiTutor.app/Contents/MacOS/MidiTutor"
+# Stop the app before replacing its bundle: SIGTERM, and -9 only if it won't exit.
+pkill -x MidiTutor || true
+for ((i=0; i<15; i++)); do
   pgrep -x MidiTutor >/dev/null || break
   sleep 1
 done
-pgrep -x MidiTutor >/dev/null && pkill -x MidiTutor || true
-mkdir -p "$HOME/Applications"
-rm -rf "$HOME/Applications/MidiTutor.app"
-ditto -x -k "$HOME/miditutor-deploy.zip" "$HOME/Applications/"
-rm "$HOME/miditutor-deploy.zip"
-test -x "$HOME/Applications/MidiTutor.app/Contents/MacOS/MidiTutor"
+if pgrep -x MidiTutor >/dev/null; then
+  echo 'MidiTutor ignored SIGTERM for 15 s; using SIGKILL.' >&2
+  pkill -9 -x MidiTutor || true
+  sleep 1
+fi
+if [[ -d "$HOME/Applications/MidiTutor.app" ]]; then
+  rm -rf "$HOME/miditutor-previous/MidiTutor.app"
+  mv "$HOME/Applications/MidiTutor.app" "$HOME/miditutor-previous/MidiTutor.app"
+fi
+mv "$HOME/miditutor-new/MidiTutor.app" "$HOME/Applications/MidiTutor.app"
+rm -rf "$HOME/miditutor-new" "$HOME/miditutor-deploy.zip"
 xattr -dr com.apple.quarantine "$HOME/Applications/MidiTutor.app" 2>/dev/null || true
 REMOTE
 
@@ -81,14 +93,17 @@ set +x
 set -euo pipefail
 quit_app() {
   rm -f /tmp/mt_state.json
-  rm -rf "$verify_data"
-  pgrep -x MidiTutor >/dev/null || return 0
-  osascript -e 'tell application "MidiTutor" to quit' >/dev/null 2>&1 || true
-  for ((j=0; j<10; j++)); do
+  pkill -x MidiTutor || true
+  for ((j=0; j<15; j++)); do
     pgrep -x MidiTutor >/dev/null || break
     sleep 1
   done
-  pgrep -x MidiTutor >/dev/null && pkill -x MidiTutor || true
+  if pgrep -x MidiTutor >/dev/null; then
+    echo 'The hidden check copy ignored SIGTERM for 15 s; using SIGKILL.' >&2
+    pkill -9 -x MidiTutor || true
+    sleep 1
+  fi
+  rm -rf "$verify_data"
 }
 # The check runs on its own user data: it must not touch his tab, piece or session (#10236).
 verify_data=$(mktemp -d /tmp/miditutor-verify.XXXXXX)
@@ -125,8 +140,7 @@ REMOTE
 fi
 if [[ "$was_running" == yes && "${RELAUNCH:-1}" != 0 ]]; then
   ssh "$PINOCCHIO_HOST" 'open -a "$HOME/Applications/MidiTutor.app"'
-  # Opened over ssh it comes up behind whatever is in front. The gate means he isn't using the Mac.
-  ssh "$PINOCCHIO_HOST" "osascript -e 'tell application \"MidiTutor\" to activate'" || true
+  # Opened over ssh it may come up behind whatever is in front; no osascript to raise it (see top).
   printf 'MidiTutor reopened on %s\n' "$PINOCCHIO_HOST"
 else
   printf 'MidiTutor left closed on %s (it was running: %s)\n' "$PINOCCHIO_HOST" "$was_running"

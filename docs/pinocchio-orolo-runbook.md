@@ -10,9 +10,12 @@ Orolo drives the Mac mini **Pinocchio** over SSH from the Windows box **Solace**
 - **No Xcode Command Line Tools, no Node, no Homebrew.** `/usr/bin/git`, `/usr/bin/python3`,
   `cc`, `make` are CLT shims: running one pops an "install developer tools" dialog on the
   TV. Never call them on Pinocchio. Use only sh/bash (3.2), ditto, xattr, codesign,
-  osascript, open, pgrep, pkill, curl, defaults, plutil.
+  open, pgrep, pkill, curl, defaults, plutil.
+- **No `osascript` on Pinocchio (#5412).** It can put a permission dialog on his screen. Stop
+  the app with `pkill -x MidiTutor` (SIGTERM); don't raise it. If a dialog appears:
+  `pkill -x osascript; pkill -x UserNotificationCenter`.
 - `launchctl asuser` needs root and fails from Todd's SSH session
-  ("Could not switch to audit session"). Plain `open` and `osascript` from SSH reach his
+  ("Could not switch to audit session"). Plain `open` from SSH reaches his
   logged-in desktop fine.
 
 ## 1. Build and install (verified 2026-10-25)
@@ -144,8 +147,8 @@ unset MIDITUTOR_TOKEN
 To rotate, quit the app, delete its Mac token file, and relaunch. Run on Pinocchio, then fetch the new token and restart the MCP session:
 
 ```bash
-osascript -e 'tell application "MidiTutor" to quit' &&
-  rm -f "$HOME/Library/Application Support/MidiTutor/api-token" &&
+pkill -x MidiTutor; sleep 5
+rm -f "$HOME/Library/Application Support/MidiTutor/api-token" &&
   open -a "$HOME/Applications/MidiTutor.app"
 ```
 
@@ -191,7 +194,6 @@ Run the relevant checks on Pinocchio:
 ```bash
 system_profiler SPUSBDataType | grep -i roland
 curl -s -H "Authorization: Bearer $(cat "$HOME/Library/Application Support/MidiTutor/api-token")" http://127.0.0.1:47800/state
-osascript -e 'tell application "MidiTutor" to activate'
 pgrep -fl MidiTutor
 pmset -g | grep -E 'sleep|autorestart'
 ```
