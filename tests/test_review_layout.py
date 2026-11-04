@@ -14,7 +14,10 @@ _spec = importlib.util.spec_from_file_location("review_layout", _path)
 review_layout = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(review_layout)
 
-LIBRARY = Path("Q:/Personal/piano/library")
+sys.path.insert(0, str(SCRIPTS))
+import localcfg  # noqa: E402
+
+LIBRARY = Path(localcfg.get("library", "MIDITUTOR_LIBRARY", "piano-library-not-set"))
 needs_library = pytest.mark.skipif(not LIBRARY.is_dir(), reason="piano library not present")
 
 

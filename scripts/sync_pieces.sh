@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copy Todd's finished scores to Pinocchio's Pieces folder (~/MidiTutor Pieces),
 # which the Score tab lists. Run from Solace. The scores are copyrighted: they live in
-# Q:/Personal/piano/library and are never committed. Only top-level *.musicxml/*.mxl
+# the local score library and are never committed. Only top-level *.musicxml/*.mxl
 # (plus trust.json, the OMR audit's per-score badges, #9644, and versions.json, which
 # groups one song's Easy / Harder / My mix files, #9627) are copied; the scanner's
 # omr-*/ working folders, partial/ pages and

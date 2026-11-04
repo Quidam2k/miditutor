@@ -1,5 +1,5 @@
 // Scan review on the desk (#9664): reads the OMR library directly
-// (Q:/Personal/piano/library), keeps his marks as an append-only event log per
+// (the local score library), keeps his marks as an append-only event log per
 // piece, and writes "Verified by you" into trust.json. Enabled only when the
 // app is started with --review-library=<dir> (or MIDITUTOR_REVIEW_LIBRARY).
 // This process is the only writer of the event logs.

@@ -2,7 +2,7 @@
 
 Usage: align_versions.py SLUG [--library DIR] [--own-solace] [--dry-run]
 
-Reads SLUG's group in DIR/versions.json (default Q:/Personal/piano/library). Each version that is
+Reads SLUG's group in DIR/versions.json (default: the configured library). Each version that is
 not "Easy", not "My mix" and not mixable:false is compared bar by bar with the Easy file on the
 highest sounding pitch class at every onset (any staff), the Harder one shifted into the Easy
 key. Bars are matched by DTW with an LCS cost (the arrangement embellishes), then cut into
@@ -20,8 +20,9 @@ import xml.etree.ElementTree as ET
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from omr_second_engine import gate_ok, input_idle_s, ram_avail_gb  # noqa: E402
+import localcfg  # noqa: E402
 
-LIBRARY = Path("Q:/Personal/piano/library")
+LIBRARY = Path(localcfg.get("library", "MIDITUTOR_LIBRARY", str(Path.home() / "piano" / "library")))
 STEP_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
 

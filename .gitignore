@@ -102,3 +102,16 @@ screengrab/
 bench/omr/images/
 bench/omr/out/
 bench/omr/tools/
+
+# Internal working material and machine-specific settings (kept on disk, not published)
+notes/
+cascades/
+.claude/
+NOTE-*
+session-state.md
+CLAUDE.local.md
+docs/pinocchio-orolo-runbook.md
+docs/pinocchio-todd-steps.md
+scripts/local_config.json
+scripts/local.env
+scripts/local.bat

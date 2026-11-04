@@ -1,6 +1,6 @@
 """Back up his scan-review work (#9664) into a private git repo.
 
-The library (Q:/Personal/piano/library) is not in git, so the desk app runs this
+The library (the score library) is not in git, so the desk app runs this
 on start and a minute after his last mark, confirm or accept:
 
     python -I scripts/backup_review.py --library <library> --dest <dir inside a git repo>

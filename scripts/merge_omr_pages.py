@@ -1,6 +1,6 @@
 """Join homr's one-part-per-page MusicXML into one piece (pages in reading order, #9486).
 
-Usage: merge_omr_pages.py OUT TITLE PAGE.musicxml... Output stays under Q:/Personal, never the repo.
+Usage: merge_omr_pages.py OUT TITLE PAGE.musicxml... Output stays outside the repo.
 """
 import sys
 import xml.etree.ElementTree as ET

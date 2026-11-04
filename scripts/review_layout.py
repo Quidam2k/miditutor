@@ -22,13 +22,15 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import localcfg  # noqa: E402
 
 import numpy as np
 from PIL import Image
 
 Image.MAX_IMAGE_PIXELS = None
 
-DEFAULT_LIBRARY = Path("Q:/Personal/piano/library")
+DEFAULT_LIBRARY = Path(localcfg.get("library", "MIDITUTOR_LIBRARY", str(Path.home() / "piano" / "library")))
 VERSION = 1
 DARK_LEVEL = 170            # gray below this counts as ink
 ANGLE_RANGE_TENTHS = 20     # deskew search: -2.0..+2.0 degrees in 0.1 steps

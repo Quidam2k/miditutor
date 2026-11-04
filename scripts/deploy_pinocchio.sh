@@ -13,10 +13,10 @@ usage() {
 Usage: scripts/deploy_pinocchio.sh [--no-verify | --help]
 Install the latest successful master macOS build and verify a hidden launch.
 Environment:
-  PINOCCHIO_HOST  SSH destination (default: toddwalker@todds-mac-mini)
+  PINOCCHIO_HOST  SSH destination (required; may come from scripts/local.env)
   RUN_ID         GitHub Actions run ID (default: latest successful macos.yml)
-  PANTHEON_CERT  Solace's WebUI cert, pinned by "Bring in the tutor" (default: Q:/Pantheon/certs/cert.pem)
-  PANTHEON_URL   written to the app's pantheon-url when set (the app defaults to https://192.168.50.139:7861)
+  PANTHEON_CERT  the companion server's WebUI cert, pinned by "Bring in the tutor" (path; may come from scripts/local.env)
+  PANTHEON_URL   written to the app's pantheon-url when set (the app has no built-in default)
   RELAUNCH=0     leave the app closed even if it was running (default: reopen it if it was)
 USAGE
 }
@@ -29,7 +29,9 @@ case "${1:-}" in
 esac
 if (( $# > 1 )); then usage >&2; exit 2; fi
 
-PINOCCHIO_HOST=${PINOCCHIO_HOST:-toddwalker@todds-mac-mini}
+# Machine-specific values (gitignored): PINOCCHIO_HOST, PANTHEON_CERT, PANTHEON_URL.
+[[ -f "$(dirname "${BASH_SOURCE[0]}")/local.env" ]] && source "$(dirname "${BASH_SOURCE[0]}")/local.env"
+PINOCCHIO_HOST=${PINOCCHIO_HOST:?set PINOCCHIO_HOST or scripts/local.env}
 RUN_ID=${RUN_ID:-$(gh run list --workflow macos.yml --branch master --status success -L 1 --json databaseId -q '.[0].databaseId')}
 [[ -n "$RUN_ID" && "$RUN_ID" != null ]] || { echo "No successful run found." >&2; exit 1; }
 tmpdir=$(mktemp -d)
@@ -44,9 +46,9 @@ scp "${zips[0]}" "${PINOCCHIO_HOST}:miditutor-deploy.zip"
 was_running=$(ssh "$PINOCCHIO_HOST" 'pgrep -x MidiTutor >/dev/null && echo yes || echo no')
 
 # "Bring in the tutor" (#5154): the app pins Solace's self-signed WebUI cert (public, not a secret).
-PANTHEON_CERT=${PANTHEON_CERT:-/q/Pantheon/certs/cert.pem}
+PANTHEON_CERT=${PANTHEON_CERT:-}
 support='Library/Application Support/MidiTutor'
-if [[ -s "$PANTHEON_CERT" ]]; then
+if [[ -n "$PANTHEON_CERT" && -s "$PANTHEON_CERT" ]]; then
   ssh "$PINOCCHIO_HOST" "mkdir -p \"\$HOME/$support\" && cat > \"\$HOME/$support/pantheon-cert.pem\"" < "$PANTHEON_CERT"
 else
   echo "WARNING: no Pantheon cert at $PANTHEON_CERT; Bring in the tutor will say it can't reach Pantheon." >&2

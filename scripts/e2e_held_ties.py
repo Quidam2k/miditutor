@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from miditutor_mcp import tutor_client as tc  # noqa: E402
 
-DEFAULT = Path("Q:/Personal/piano/library/sorcerers-apprentice.musicxml")
+DEFAULT = Path(os.environ.get("MIDITUTOR_LIBRARY", str(Path.home() / "piano" / "library"))) / "sorcerers-apprentice.musicxml"
 LETTERS = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 FAILS: list[str] = []
 

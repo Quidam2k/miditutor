@@ -40,7 +40,7 @@ npx electron-forge package   # production build → out/
 No keyboard? Install **loopMIDI** (or any virtual MIDI port) to test input
 without hardware.
 
-## Voice drill + MCP server (Pantheon interface)
+## Voice drill + MCP server (companion-app interface)
 
 `drill/` is a stdlib-only practice engine: `catalog.json` (24 major/minor triads, grouped by
 white/black key colour) and `piano_drill.py`, which serves chords at random from the ones not yet

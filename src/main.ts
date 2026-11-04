@@ -274,8 +274,8 @@ const stopTake = () => {
   recorder.stop().catch((err) => console.warn('[recorder] take failed:', (err as Error).message));
 };
 
-// "Bring in the tutor" (#5154): his button asks Pantheon (on Solace) to open the tutor link
-// and put Jarvis + Karen on him; it ends 10 min after his last note, or on a second press.
+// "Bring in the tutor" (#5154): his button asks the companion server to open the tutor link
+// and bring the assistants in; it ends 10 min after his last note, or on a second press.
 // Pantheon also polls /state and tears down on its own. The address and Solace's
 // self-signed cert (pinned) are files deploy writes into userData; env overrides for tests.
 const readSetting = async (name: string, env: string | undefined): Promise<string> => {
@@ -287,7 +287,7 @@ const readSetting = async (name: string, env: string | undefined): Promise<strin
   }
 };
 const pantheonUrl = async () =>
-  (await readSetting('pantheon-url', process.env.MIDITUTOR_PANTHEON_URL)) || 'https://192.168.50.139:7861';
+  (await readSetting('pantheon-url', process.env.MIDITUTOR_PANTHEON_URL)) || '';
 const pantheonCert = async () => {
   const file = process.env.MIDITUTOR_PANTHEON_CERT;
   if (file) return fs.readFile(file, 'utf8').catch(() => null);

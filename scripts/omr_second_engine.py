@@ -3,7 +3,7 @@
 oemer is the independent second read; homr re-reads each page on its own so every
 bar maps to its page image (with --write-staff-positions for system crops).
 Output: OUT/<slug>/<page>.musicxml, resumable (pages with output are skipped).
-Pages are copyrighted: OUT must stay under Q:/Personal, never the repo.
+Pages are copyrighted: OUT must stay outside the repo.
 Jobs run at BELOW_NORMAL priority and yield to Todd's input and available RAM (#pm1026:
 --jobs 4 + homr froze Solace on 2026-10-26 while he was playing). Defaults: 1 job, children
 capped at 4 BLAS threads, a page launches only with >= 12 GB RAM free AND >= 10 min input
@@ -26,12 +26,15 @@ from concurrent.futures import ThreadPoolExecutor
 from ctypes import wintypes
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import localcfg  # noqa: E402
+
 import psutil
 
 REPO = Path(__file__).resolve().parent.parent
 OEMER = REPO / '.venv-omr-oemer' / 'Scripts' / 'oemer.exe'
 HOMR = REPO / '.venv-omr-homr' / 'Scripts' / 'homr.exe'
-PIANO = Path('Q:/Personal/piano')
+PIANO = Path(localcfg.get('piano_root', 'MIDITUTOR_PIANO_ROOT', str(Path.home() / 'piano')))
 BELOW_NORMAL = 0x00004000
 
 

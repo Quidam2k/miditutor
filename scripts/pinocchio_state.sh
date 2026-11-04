@@ -6,7 +6,9 @@
 # Prints the gate on stdout; exit 0 = open, 1 = closed, 2 = could not read it.
 set -euo pipefail
 
-PINOCCHIO_HOST=${PINOCCHIO_HOST:-toddwalker@192.168.50.27}
+# Machine-specific host (gitignored): scripts/local.env, or set PINOCCHIO_HOST.
+[[ -f "$(dirname "${BASH_SOURCE[0]}")/local.env" ]] && source "$(dirname "${BASH_SOURCE[0]}")/local.env"
+PINOCCHIO_HOST=${PINOCCHIO_HOST:?set PINOCCHIO_HOST or scripts/local.env}
 support='Library/Application Support/MidiTutor'
 
 state=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$PINOCCHIO_HOST" \

@@ -27,6 +27,8 @@ import time
 import uuid
 
 sys.dont_write_bytecode = True
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import localcfg  # noqa: E402
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import omr_fix, omr_audit
 from annotate_scan import Score, _child, _children, _name, _text, _note_pitch
@@ -35,7 +37,7 @@ from PIL import Image, ImageDraw
 
 Image.MAX_IMAGE_PIXELS = None
 
-DEFAULT_LIBRARY = Path("Q:/Personal/piano/library")
+DEFAULT_LIBRARY = Path(localcfg.get("library", "MIDITUTOR_LIBRARY", str(Path.home() / "piano" / "library")))
 MIN_FREE_RAM_GB = 6.0       # propose waits when Solace has less available memory than this
 MAX_CROP_WIDTH = 1800
 BRACKET_COLOR, BRACKET_THICK = (220, 30, 30), 6

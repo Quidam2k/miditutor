@@ -1,7 +1,7 @@
 # MidiTutor — pickup note
 
 Last updated: 2026-09-28. **Milestone 2 (score following) is built and tested
-with the virtual keyboard. Next step: Todd tests it at the FP-30X.**
+with the virtual keyboard. Next step: the owner tests it at the FP-30X.**
 
 ## What M2 does
 
@@ -110,14 +110,14 @@ sits at the piano. AGPL batch tools (Audiveris) for M3 scanning.
 
 ## Pinocchio (Mac mini, remote music box)
 
-Pinocchio is a Mac mini (Apple Silicon) in the music room, driven by Orolo
-over SSH from Solace (`ssh toddwalker@todds-mac-mini`). Three docs, in order:
+Pinocchio is a Mac mini (Apple Silicon) in the music room, driven by an assistant
+over SSH from the main Windows PC (`ssh <user>@<mac-mini-host>`). Three docs, in order:
 
-- `docs/pinocchio-todd-steps.md`: Todd's one-time physical checklist (power,
-  hub, Wi-Fi, account, Remote Login, keep-awake, FP-30X).
-- `docs/pinocchio-walkthrough.md`: the same steps as a script Orolo reads aloud.
-- `docs/pinocchio-orolo-runbook.md`: Orolo's SSH steps (toolchain, build,
-  LaunchAgent, tunnel `ssh -L 47800:127.0.0.1:47800 pinocchio`, token, checks).
+- the owner's one-time physical checklist (power, hub, Wi-Fi, account, Remote Login,
+  keep-awake, FP-30X); kept outside the repo.
+- `docs/pinocchio-walkthrough.md`: the same steps as a script an assistant reads aloud.
+- the assistant's SSH runbook (toolchain, build, LaunchAgent, tunnel
+  `ssh -L 47800:127.0.0.1:47800 pinocchio`, token, checks); kept outside the repo.
 
 Build workflow: `.github/workflows/macos.yml` runs on `workflow_dispatch` and
 `v*` tags only (no push trigger, to save private minutes). It runs tsc, vitest,
@@ -133,9 +133,9 @@ on the Desktop. The Mac has no Xcode tools, so never run git/python3 there (it
 pops an install dialog on the TV). Not yet verified: the FP-30X plugged into
 Pinocchio, launch at login.
 
-2026-10-25 (#9443): tunnel + token (runbook 5-7) verified from Solace; POST /piece
-loaded The Sorcerer's Apprentice (69 bars, homr on Todd's photos + hand fixes; kept
-OUT of this public repo at `Q:/Personal/piano/sorcerers-apprentice/`, with its
+2026-10-25 (#9443): tunnel + token (runbook 5-7) verified from the main PC; POST /piece
+loaded The Sorcerer's Apprentice (69 bars, homr on the owner's photos + hand fixes; kept
+OUT of this public repo at a private local folder, with its
 `build.py`). Also never use `osascript ... System Events` over SSH: it hangs on an
 Automation permission prompt on the TV. Open app bugs found:
 - The view opens scrolled to the END: `extractSteps` walks the cursor with
@@ -148,14 +148,14 @@ Automation permission prompt on the TV. Open app bugs found:
 Shipped + pushed (master cd35233): tutor API + tutor_* MCP tools, blue/red play-along overlay, importer (MIDI/MusicXML/photo) + Open piece + Photo/Score toggle, OMR = homr 0.7.0 (.venv-omr-homr; bench/omr), macOS CI green (run 37842684233), Pinocchio docs.
 Verified only via /inject — NOT a real or loopback MIDI port.
 
-Next worker, once Todd has installed loopMIDI and sent photos:
+Next worker, once loopMIDI is installed and sent photos:
 1. Create a loopMIDI port; run the app (hidden; see scripts/e2e_tutor.py header) and select that port as input.
 2. Write/run a mido script (.venv) that plays chords + Minuet bars into the port; verify with tutor_wait_for_play / tutor_check / piano_next_chord(show=True) and a /screenshot. Pass -> claim (1), close #3566/#3567.
-3. Run bench/omr on Todd's real photos (keep them OUT of git — repo is public); report pitch / pitch+duration % per engine. If homr fails, try Audiveris (needs Docker running or an approved msiexec extract).
+3. Run bench/omr on the owner's real photos (keep them OUT of git — repo is public); report pitch / pitch+duration % per engine. If homr fails, try Audiveris (needs Docker running or an approved msiexec extract).
 4. Still open: tutor_list_pieces (needs piece persistence), Open piece dialog click-test, tests_py/test_piano_drill.py breaks pytest collection, FP-30X + on-box Mac test (#4046 remainder), tempo overlay (#1181 remainder).
 
-## Walking Todd through homework (#4098)
-Say what each item is *asking him to do*, not just its name. One plain sentence each:
+## Walking through homework (#4098)
+Say what each item is *asking the player to do*, not just its name. One plain sentence each:
 - **Scale / arpeggio (e.g. E minor):** play the scale up and down with a steady fingering, then the same notes as a broken chord (1-3-5, up and back), hands as JP specified. Goal: even and in the right key (E minor = one sharp, F#).
 - **Triads by colour:** memorize chords by their colour, i.e. by the sound and shape of major, minor, diminished and augmented, so you can name or play one on hearing or seeing it, not by spelling it out. The Practice voice drill covers this.
 - **A piece's chord patterns (e.g. Sorcerer's):** learn the chord shapes the left hand repeats, so a bar reads as "this chord again" and not as separate notes.

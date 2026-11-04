@@ -1,9 +1,9 @@
 Read each line aloud.
-At every Tell me or Say ready line, stop and wait for Todd.
+At every Tell me or Say ready line, stop and wait for the owner.
 
 Part 1 Unbox and plug in
 
-Todd, it's Orolo.
+Hello, it's your assistant.
 I'll guide you through the physical setup.
 We'll take one step at a time.
 
@@ -225,4 +225,4 @@ Leave the Mac powered on.
 Leave the piano connected.
 Say ready when you're finished.
 
-Orolo will take it from here over SSH.
+The assistant will take it from here over SSH.

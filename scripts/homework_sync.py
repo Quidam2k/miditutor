@@ -20,6 +20,9 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import localcfg  # noqa: E402
 from typing import Any
 
 Item = dict[str, Any]
@@ -236,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--homework-file", required=True, help="UTF-8 lesson log, or - for stdin")
     parser.add_argument("--library", type=Path,
-                        default=Path(os.environ.get("MIDITUTOR_LIBRARY", "Q:/Personal/piano/library")))
+                        default=Path(localcfg.get("library", "MIDITUTOR_LIBRARY", str(Path.home() / "piano" / "library"))))
     parser.add_argument("--write", action="store_true")
     parser.add_argument("--no-push", action="store_true")
     args = parser.parse_args(argv)
@@ -268,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
             elif not args.no_push:
                 pending.touch()
             if pending.exists() and not args.no_push:
-                host = os.environ.get("PINOCCHIO_HOST", "toddwalker@192.168.50.27")
+                host = localcfg.get("pinocchio_host", "PINOCCHIO_HOST", "")
                 try:
                     subprocess.run(
                         ["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",

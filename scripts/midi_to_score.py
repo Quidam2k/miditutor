@@ -18,6 +18,10 @@ from copy import deepcopy
 from datetime import datetime
 from itertools import groupby
 from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import localcfg  # noqa: E402
 from typing import Any
 
 Event = tuple[float, float, list[int]]
@@ -238,7 +242,7 @@ def _uploads(library: Path, inbox: Path, dry: bool) -> list[Path]:
     seen_path = inbox / ".uploads_seen.json"
     seen = _read(seen_path, [])
     seen = set(seen if isinstance(seen, list) else [])
-    db_path = Path(os.environ.get("MIDITUTOR_PANTHEON_DB", "Q:/Pantheon/data/pantheon.db"))
+    db_path = Path(localcfg.get("tutor_db", "MIDITUTOR_PANTHEON_DB", "pantheon.db"))
     planned = []
     try:
         with closing(sqlite3.connect(db_path.resolve().as_uri() + "?mode=ro", uri=True)) as db:
@@ -323,8 +327,7 @@ def _push(library: Path, inbox: Path, host: str, files: list[Path], dry: bool) -
 
 def sweep(library: Path, no_pinocchio: bool = False, no_uploads: bool = False,
           dry_run: bool = False) -> int:
-    state = _read(Path(os.environ.get("MIDITUTOR_LOAD_STATE",
-                                    "Q:/Pantheon/data/runtime/solace_load_state.json")), {})
+    state = _read(Path(localcfg.get("load_state", "MIDITUTOR_LOAD_STATE", "load_state.json")), {})
     if isinstance(state, dict) and state.get("tripped"):
         _log(Path(library), "skipped: solace load tripwire", dry_run)
         if not dry_run:
@@ -334,7 +337,7 @@ def sweep(library: Path, no_pinocchio: bool = False, no_uploads: bool = False,
     inbox = library / "midi-in"
     if not dry_run:
         inbox.mkdir(parents=True, exist_ok=True)
-    host = os.environ.get("PINOCCHIO_HOST", "toddwalker@192.168.50.27")
+    host = localcfg.get("pinocchio_host", "PINOCCHIO_HOST", "")
     planned = _uploads(library, inbox, dry_run) if not no_uploads else []
     if not no_pinocchio:
         planned += _pull(library, inbox, host, dry_run)
@@ -375,8 +378,8 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     for command in ("convert", "sweep"):
         sub = commands.add_parser(command)
-        sub.add_argument("--library", type=Path, default=Path(os.environ.get(
-            "MIDITUTOR_LIBRARY", "Q:/Personal/piano/library")))
+        sub.add_argument("--library", type=Path, default=Path(localcfg.get(
+            "library", "MIDITUTOR_LIBRARY", str(Path.home() / "piano" / "library"))))
         if command == "convert":
             sub.add_argument("path", type=Path)
             sub.add_argument("--title")

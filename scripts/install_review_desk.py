@@ -15,15 +15,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import localcfg  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 BUILD = REPO / "out" / "MidiTutor-win32-x64"
 DEST = Path(os.environ["LOCALAPPDATA"]) / "MidiTutor Review"
 EXE = DEST / "MidiTutor.exe"
-LIBRARY = r"Q:\Personal\piano\library"
-BACKUP = r"Q:\project-reports\miditutor\review-backup"
+LIBRARY = str(Path(localcfg.get("library", "MIDITUTOR_LIBRARY") or Path.home() / "piano" / "library"))
+BACKUP = str(Path(localcfg.get("review_backup", "MIDITUTOR_REVIEW_BACKUP") or Path.home() / "miditutor-review-backup"))
 # Pinocchio's copy: the app pulls his marks from there every 2 min while open (#9666).
-# By IP: the todds-mac-mini name does not resolve from Solace.
-PINOCCHIO = "toddwalker@192.168.50.27"
+# By IP: the Mac mini's mDNS name does not always resolve from the Windows box.
+PINOCCHIO = localcfg.get("pinocchio_host", "PINOCCHIO_HOST") or ""
 NAME = "MidiTutor Review"
 
 

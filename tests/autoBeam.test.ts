@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { addBeams, beamGroup } from '../src/renderer/engine/autoBeam';
+import { libraryDir } from './libraryDir';
 
 const parse = (xml: string) => new DOMParser().parseFromString(xml, 'application/xml') as unknown as Document;
 const serialize = (doc: Document) => new XMLSerializer().serializeToString(doc as unknown as Node);
@@ -74,7 +75,7 @@ describe('addBeams', () => {
     expect(beams(beam(xml))).toEqual(['C:-', 'D:begin', 'E:continue', 'F:end', 'G:begin', 'A:continue', 'B:end']);
   });
 
-  const real = 'Q:/Personal/piano/library/o-holy-night.musicxml';
+  const real = `${libraryDir()}o-holy-night.musicxml`;
   it.skipIf(!existsSync(real))('O Holy Night: beams added, every pitch and duration as it was', () => {
     const xml = readFileSync(real, 'utf8');
     const out = beam(xml);

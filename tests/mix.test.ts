@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { spliceMix, type MixChoice, type MixSection } from '../src/shared/mix';
+import { libraryDir } from './libraryDir';
 
 const parse = (xml: string) => new DOMParser().parseFromString(xml, 'application/xml') as unknown as Document;
 const serialize = (doc: Document) => new XMLSerializer().serializeToString(doc as unknown as Node);
@@ -146,7 +147,7 @@ describe('spliceMix', () => {
   });
 });
 
-const LIBRARY = 'Q:/Personal/piano/library/';
+const LIBRARY = libraryDir();
 describe('spliceMix on the real O scores', () => {
   it.skipIf(!existsSync(`${LIBRARY}o-from-o.musicxml`))('splices harder 1-8 then easy 9-34', () => {
     const easy = readFileSync(`${LIBRARY}o-from-o.musicxml`, 'utf8');

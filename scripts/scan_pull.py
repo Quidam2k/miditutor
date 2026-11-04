@@ -20,6 +20,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import localcfg  # noqa: E402
+
 from PIL import Image, ImageStat
 
 SCANNER = "~/Applications/sane/bin/scanimage"
@@ -141,9 +144,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--source", default="ADF Duplex")
     parser.add_argument("--resolution", type=int, default=300)
     parser.add_argument("--mode", default="Color")
-    parser.add_argument("--dest", type=Path, default=Path("Q:/Personal/scans/inbox"))
+    parser.add_argument("--dest", type=Path, default=Path(localcfg.get("scans_inbox", "MIDITUTOR_SCANS_INBOX", str(Path.home() / "scans" / "inbox"))))
     parser.add_argument("--music", action="store_true")
-    parser.add_argument("--library", type=Path, default=Path("Q:/Personal/piano/library"))
+    parser.add_argument("--library", type=Path, default=Path(localcfg.get("library", "MIDITUTOR_LIBRARY", str(Path.home() / "piano" / "library"))))
     parser.add_argument("--blank-threshold", type=float, default=0.003)
     parser.add_argument("--list-only", action="store_true")
     # SANE defaults to letter height (279 mm); a taller sheet stops the feeder as a

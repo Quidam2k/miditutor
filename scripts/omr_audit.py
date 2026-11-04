@@ -5,7 +5,7 @@ Usage: omr_audit.py lint LIBRARY_DIR --out OUT.json [--annotate DIR] [--only slu
        omr_audit.py report LINT.json [COMPARE.json] --out REPORT.md
        omr_audit.py trust LIBRARY_DIR [--annotate DIR] [--report MD] [--out trust.json]
 
-Library content stays under Q:/Personal, never the repo.
+Library content stays outside the repo.
 """
 import argparse
 from collections import Counter, defaultdict
