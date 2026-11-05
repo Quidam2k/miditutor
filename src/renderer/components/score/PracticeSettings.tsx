@@ -1,5 +1,5 @@
-// The practice preferences that don't earn a toolbar slot of their own, e.g. the graze
-// filter (#5516). All persist.
+// The practice preferences that don't earn a toolbar slot of their own: the graze filter
+// (#5516), keep awake (#5522). All persist.
 import { useState } from 'react';
 import { useSettingsStore } from '../../store/useSettingsStore';
 
@@ -51,6 +51,13 @@ export function PracticeSettings({ btn }: { btn: string }) {
             onChange={(n) => s.setPrefs({ minVelocity: n })}
             testId="min-velocity"
           />
+          <label
+            className="flex items-center gap-1.5"
+            title="Keep the screen from going dark while you play (your piano's keys don't count as activity to the Mac). Lets go 15 minutes after your last note."
+          >
+            <input type="checkbox" checked={s.keepAwake} onChange={(e) => s.setPrefs({ keepAwake: e.target.checked })} data-testid="keep-awake" />
+            Keep screen awake while playing
+          </label>
         </div>
       )}
     </div>

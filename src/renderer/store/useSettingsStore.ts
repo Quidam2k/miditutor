@@ -51,6 +51,8 @@ interface SettingsState {
   grazeMs: number;
   /** #5516: keys softer than this velocity are strays (0 = off). */
   minVelocity: number;
+  /** #5522: hold the display awake while he plays; let go 15 min after the last note. */
+  keepAwake: boolean;
 
   /** Set any of the plain number/boolean preferences above. */
   setPrefs: (prefs: Partial<Pick<SettingsState, PrefKey>>) => void;
@@ -79,7 +81,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-type PrefKey = 'grazeMs' | 'minVelocity';
+type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -114,6 +116,7 @@ export const useSettingsStore = create<SettingsState>()(
       reverseWheel: false,
       grazeMs: GRAZE_MS,
       minVelocity: 0,
+      keepAwake: true,
       setPrefs: (prefs) => set(prefs),
       setReverseWheel: (on) => set({ reverseWheel: on }),
 

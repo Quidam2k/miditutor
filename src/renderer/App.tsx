@@ -33,6 +33,9 @@ export function App() {
   });
   const setLastView = useSettingsStore((s) => s.setLastView);
   useEffect(() => setLastView(view), [view, setLastView]);
+  // #5522: main holds the display awake while he plays, unless he turned it off.
+  const keepAwake = useSettingsStore((s) => s.keepAwake);
+  useEffect(() => window.tutorBridge?.setKeepAwake?.(keepAwake), [keepAwake]);
   const scoreLayout = useSettingsStore((s) => s.scoreLayout);
   const strip = view === 'score' && scoreLayout === 'strip';
   const mainWidth =

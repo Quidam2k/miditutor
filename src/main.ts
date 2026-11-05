@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, OpenDialogOptions, screen, session } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, OpenDialogOptions, powerSaveBlocker, screen, session } from 'electron';
 import { createHash } from 'node:crypto';
 import { createWriteStream, WriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
@@ -8,6 +8,7 @@ import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
 import { Recorder, outputSize } from './main/recorder';
 import { InviteTimer, postLive } from './main/invite';
+import { KeepAwake } from './main/keepAwake';
 import { onSomeDisplay, sessionFiles, WindowState } from './main/sessionFiles';
 import { Review, mirrorConfig, reviewConfig, sshRemote } from './main/review';
 import {
@@ -296,6 +297,10 @@ const pantheonCert = async () => {
 
 let apiToken = '';
 let inviteSentAt = 0;
+// #5522: the display stays lit while he plays (MIDI isn't "activity" to macOS idle sleep).
+const keepAwake = new KeepAwake({
+  blocker: { start: () => powerSaveBlocker.start('prevent-display-sleep'), stop: (id) => powerSaveBlocker.stop(id) },
+});
 const invite = new InviteTimer({
   idleMs: Number(process.env.MIDITUTOR_INVITE_IDLE_MS ?? 10 * 60_000),
   onIdle: () => {
@@ -350,6 +355,7 @@ const startTutorApi = () => {
     if (msg.error || !msg.sampleRate || !msg.channels) settleAudio(msg.id, new Error(msg.error ?? 'bad audio'));
     else settleAudio(msg.id, null, { sampleRate: msg.sampleRate, channels: msg.channels });
   });
+  ipcMain.on('keepAwake:set', (_e, on: unknown) => keepAwake.setEnabled(on === true));
   ipcMain.handle('invite:status', () => ({ state: invite.state() }));
   ipcMain.handle('invite:toggle', toggleInvite);
   ipcMain.handle('pieces:list', listPieces);
@@ -412,12 +418,14 @@ const startTutorApi = () => {
     },
     recorder: { status: () => recorder.status(), start: startTake, stop: () => recorder.stop() },
     invite,
+    keepAwake,
   });
   ipcMain.on('tutor:note', (_e, ev) => {
     tutorApi?.onNote(ev);
     recorder.noteEvent(ev);
     if (ev?.kind === 'noteon') {
       invite.noteOn();
+      keepAwake.noteOn();
       // The button's "N min left" reads endsAt, which every note moves (#10171). It only
       // changes by the minute, so once a second is plenty for fast passages.
       const now = Date.now();
@@ -545,6 +553,7 @@ app.on('will-quit', () => {
   // Quitting mid-invite ends it; Pantheon would notice anyway when /state stops answering.
   if (invite.state().active) endInvite('quit');
   tutorApi?.stop();
+  keepAwake.dispose();
 });
 
 app.on('window-all-closed', () => {

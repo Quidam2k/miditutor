@@ -44,6 +44,8 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   // "Bring in the tutor" (#5154): { state, error? }.
   inviteStatus: () => ipcRenderer.invoke('invite:status'),
   inviteToggle: () => ipcRenderer.invoke('invite:toggle'),
+  // #5522: keep the display awake while he plays (the Practice settings checkbox).
+  setKeepAwake: (on: boolean) => ipcRenderer.send('keepAwake:set', on),
   onCommand: (cb: Listener) => {
     const handler = (_e: IpcRendererEvent, cmd: unknown) => cb(cmd);
     ipcRenderer.on('tutor:command', handler);

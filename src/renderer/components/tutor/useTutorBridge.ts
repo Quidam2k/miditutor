@@ -31,6 +31,7 @@ interface TutorBridge {
   recordingStatus?: () => Promise<RecordingStatus>;
   inviteStatus?: () => Promise<{ state: InviteState; error?: string }>;
   inviteToggle?: () => Promise<{ state: InviteState; error?: string }>;
+  setKeepAwake?: (on: boolean) => void;
   takePcm?: (id: string, data: Uint8Array) => void;
   takePcmDone?: (msg: { id: string; sampleRate?: number; channels?: number; error?: string }) => void;
   /** #10236: the practice snapshot. force = this launch is a patch relaunch. Null in a hidden test copy. */
