@@ -8,9 +8,10 @@ import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import expressionXml from '../../assets/expression-test.musicxml?raw';
-import { initAudio, playChime, playChord } from '../../audio/AudioEngine';
+import { initAudio, playChime, playChord, playFanfare, playLapChime } from '../../audio/AudioEngine';
 import { PianoKeyboard88 } from '../homework/PianoKeyboard88';
 import { PracticeSettings } from './PracticeSettings';
+import { WaveOverlay, WAVE_FLARE_MS, waveDelays, type WaveDot } from './WaveOverlay';
 import { hesitationMs, PACE_SAMPLES } from '../../engine/TrainingWheels';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
@@ -506,6 +507,9 @@ export function ScoreView() {
   const stepGapsRef = useRef<number[]>([]);
   const hesitateTimerRef = useRef<number | undefined>(undefined);
   const [hesitating, setHesitating] = useState(false);
+  // #5521: the clean-lap glow wave; `key` remounts the overlay to replay it.
+  const [wave, setWave] = useState<{ key: number; dots: WaveDot[]; peak: number } | null>(null);
+  const waveTimersRef = useRef<number[]>([]);
   // Expression telemetry (#9569): how he plays the marked dynamics and tempo
   // changes. Report-only: it never gates the follower or turns anything red.
   const exprRef = useRef<ExpressionTracker | null>(null);
@@ -1177,6 +1181,48 @@ export function ScoreView() {
     } else if (overall) editRange({ first: overall.first, last: bar });
   };
 
+  // #5521: glow the noteheads of steps first..last, one beat after another, `times` over.
+  const startWave = useCallback((first: number, last: number, peak: number, times = 1) => {
+    const osmd = osmdRef.current;
+    const layer = layerRef.current;
+    const steps = followerRef.current?.steps;
+    if (!osmd || !layer || !steps) return;
+    const layerRect = layer.getBoundingClientRect();
+    const found: { x: number; y: number; r: number; beat: number }[] = [];
+    for (let i = first; i <= last; i++) {
+      for (const n of stepNotesRef.current[i] ?? []) {
+        const head = headOf(osmd.EngravingRules.GNote(n as never) as unknown as OsmdGraphicalNote | undefined);
+        const rect = head?.getBoundingClientRect();
+        if (!rect || !rect.width) continue;
+        found.push({
+          x: rect.left + rect.width / 2 - layerRect.left,
+          y: rect.top + rect.height / 2 - layerRect.top,
+          r: Math.max(rect.width, rect.height) * 0.9,
+          beat: steps[i].beat,
+        });
+      }
+    }
+    const delays = waveDelays(found.map((d) => d.beat));
+    const dots = found.map(({ x, y, r }, i) => ({ x, y, r, delayMs: delays[i] }));
+    if (!dots.length) return;
+    const span = Math.max(0, ...delays) + WAVE_FLARE_MS;
+    waveTimersRef.current.forEach((t) => window.clearTimeout(t));
+    waveTimersRef.current = [];
+    for (let n = 0; n < times; n++) {
+      waveTimersRef.current.push(window.setTimeout(() => setWave({ key: Date.now(), dots, peak }), n * (span + 150)));
+    }
+    waveTimersRef.current.push(window.setTimeout(() => setWave(null), times * (span + 150)));
+  }, []);
+  useEffect(() => () => waveTimersRef.current.forEach((t) => window.clearTimeout(t)), []);
+
+  // #5521: a clean lap (no wrong note or stray in it) gets a ding and/or the glow wave.
+  const celebrateLap = useCallback((range: { first: number; last: number } | null) => {
+    const prefs = useSettingsStore.getState();
+    if (prefs.celebrateChime) void playLapChime();
+    if (prefs.celebrateWave && range) startWave(range.first, range.last, 0.45);
+    reportEvent('celebrate', { what: 'lap', chime: prefs.celebrateChime, wave: prefs.celebrateWave && !!range });
+  }, [startWave]);
+
   // One lap wrapped. Clean (no wrong note in it) counts toward the chunk; enough of
   // them and the loop starts a bar earlier. A wrong lap just doesn't count.
   // Returns true when the note that wrapped it shouldn't be judged (grew or stopped).
@@ -1184,7 +1230,11 @@ export function ScoreView() {
     const wrong = lapWrongRef.current;
     lapWrongRef.current = 0;
     const c = chunkRef.current;
-    if (!c) return false;
+    const lapRange = followerRef.current?.range ?? null;
+    if (!c) {
+      if (wrong === 0) celebrateLap(lapRange);
+      return false;
+    }
     const { state, grew, reached: hit } = lapDone(c, wrong, parseTargets(useSettingsStore.getState().backwardTargets));
     chunkRef.current = state;
     setChunk(state);
@@ -1200,12 +1250,24 @@ export function ScoreView() {
       // (the banner's button or the toolbar's) loops the whole range again.
       const f = followerRef.current;
       if (f) f.seek(f.steps.length);
-      setReached(reachedLabel(state));
-      void playChime();
+      // #5521: a finale scaled to what he built: a few bars, a flourish; 16+, a hooray.
+      const bars = state.last - state.first + 1;
+      const size = bars <= 4 ? 'small' : bars <= 15 ? 'medium' : 'big';
+      const prefs = useSettingsStore.getState();
+      setReached((size === 'big' && prefs.celebrateFinale ? 'Hooray! ' : '') + reachedLabel(state));
+      reportEvent('celebrate', { what: 'finale', size, bars, finale: prefs.celebrateFinale });
+      if (prefs.celebrateFinale) {
+        void playFanfare(size);
+        if (lapRange) startWave(lapRange.first, lapRange.last, size === 'small' ? 0.55 : 0.7, size === 'big' ? 2 : 1);
+      } else {
+        void playChime();
+      }
       syncUi();
+    } else if (wrong === 0) {
+      celebrateLap(lapRange);
     }
     return grew || hit;
-  }, [applyLoop, syncUi]);
+  }, [applyLoop, syncUi, celebrateLap, startWave]);
 
   // Bar under a click on the score, from OSMD's bar layout.
   const barAt = (clientX: number, clientY: number): number | null => {
@@ -1700,6 +1762,8 @@ export function ScoreView() {
         case 'complete':
           paintHeldTies(result.from, f.steps.length - 1);
           setFeedback({ kind: 'complete' });
+          // #5521: the whole piece with no wrong note since Restart: the ding.
+          if (lapWrongRef.current === 0 && useSettingsStore.getState().celebrateChime) void playLapChime();
           break;
         case 'wrong': {
           setWrongCount((c) => c + 1);
@@ -2672,6 +2736,7 @@ export function ScoreView() {
             } : undefined}
           />
           <PlayedOverlay marks={marks} bands={bands} />
+          {wave && <WaveOverlay key={wave.key} dots={wave.dots} peak={wave.peak} />}
         </div>
         {strip && !showPhoto && <div className="shrink-0 basis-1/2" />}
       </div>

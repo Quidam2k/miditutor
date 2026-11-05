@@ -61,6 +61,34 @@ export async function playChime(): Promise<void> {
   }
 }
 
+/** #5521: one soft high "ding" for a clean lap, so he knows without looking. */
+export async function playLapChime(): Promise<void> {
+  try {
+    await initAudio();
+    synth?.triggerAttackRelease('E6', '16n', Tone.now(), 0.25);
+  } catch (err) {
+    console.warn('[chime] could not play:', err);
+  }
+}
+
+/**
+ * #5521: the finale when a backwards build reaches its target, scaled to its size:
+ * small = the #5382 chime, medium = a rising arpeggio, big = a longer run and a chord.
+ */
+export async function playFanfare(size: 'small' | 'medium' | 'big'): Promise<void> {
+  if (size === 'small') return playChime();
+  try {
+    await initAudio();
+    if (!synth) return;
+    const now = Tone.now();
+    const run = size === 'medium' ? ['C5', 'E5', 'G5', 'C6'] : ['C5', 'E5', 'G5', 'C6', 'E6', 'G6'];
+    run.forEach((n, i) => synth?.triggerAttackRelease(n, '16n', now + i * 0.11, 0.35));
+    if (size === 'big') synth.triggerAttackRelease(['C5', 'E5', 'G5', 'C6'], '2n', now + run.length * 0.11 + 0.05, 0.4);
+  } catch (err) {
+    console.warn('[chime] could not play:', err);
+  }
+}
+
 export function isInitialized(): boolean {
   return initialized;
 }

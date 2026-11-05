@@ -55,6 +55,10 @@ interface SettingsState {
   keepAwake: boolean;
   /** #5519: the keyboard's green keys show for a lap's first bar, then only on a hesitation. */
   trainingWheels: boolean;
+  /** #5521 clean-run celebrations, each on its own: a ding per clean lap, a glow wave, a finale. */
+  celebrateChime: boolean;
+  celebrateWave: boolean;
+  celebrateFinale: boolean;
 
   /** Set any of the plain number/boolean preferences above. */
   setPrefs: (prefs: Partial<Pick<SettingsState, PrefKey>>) => void;
@@ -83,7 +87,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -120,6 +124,9 @@ export const useSettingsStore = create<SettingsState>()(
       minVelocity: 0,
       keepAwake: true,
       trainingWheels: false,
+      celebrateChime: true,
+      celebrateWave: false,
+      celebrateFinale: true,
       setPrefs: (prefs) => set(prefs),
       setReverseWheel: (on) => set({ reverseWheel: on }),
 

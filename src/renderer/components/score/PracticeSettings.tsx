@@ -1,7 +1,19 @@
 // The practice preferences that don't earn a toolbar slot of their own: the graze filter
-// (#5516), keep awake (#5522). All persist.
+// (#5516), keep awake (#5522), clean-run celebrations (#5521). All persist.
 import { useState } from 'react';
-import { useSettingsStore } from '../../store/useSettingsStore';
+import { useSettingsStore, type PrefKey } from '../../store/useSettingsStore';
+
+type Toggle = Exclude<PrefKey, 'grazeMs' | 'minVelocity' | 'trainingWheels'>;
+
+function Check({ k, label, title }: { k: Toggle; label: string; title: string }) {
+  const on = useSettingsStore((s) => s[k]);
+  return (
+    <label className="flex items-center gap-1.5" title={title}>
+      <input type="checkbox" checked={on} onChange={(e) => useSettingsStore.getState().setPrefs({ [k]: e.target.checked })} data-testid={k} />
+      {label}
+    </label>
+  );
+}
 
 function Num({ label, title, value, max, onChange, testId }: {
   label: string; title: string; value: number; max: number; onChange: (n: number) => void; testId: string;
@@ -51,13 +63,19 @@ export function PracticeSettings({ btn }: { btn: string }) {
             onChange={(n) => s.setPrefs({ minVelocity: n })}
             testId="min-velocity"
           />
-          <label
-            className="flex items-center gap-1.5"
+          <Check
+            k="keepAwake"
+            label="Keep screen awake while playing"
             title="Keep the screen from going dark while you play (your piano's keys don't count as activity to the Mac). Lets go 15 minutes after your last note."
-          >
-            <input type="checkbox" checked={s.keepAwake} onChange={(e) => s.setPrefs({ keepAwake: e.target.checked })} data-testid="keep-awake" />
-            Keep screen awake while playing
-          </label>
+          />
+          <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Clean laps</div>
+          <Check k="celebrateChime" label="Chime" title="A soft ding from the computer when you finish a lap with no wrong notes" />
+          <Check k="celebrateWave" label="Glow wave" title="The notes of the loop glow softly, left to right, after a clean lap" />
+          <Check
+            k="celebrateFinale"
+            label="Finale"
+            title="When Build backwards reaches its target: a fanfare that grows with how many bars you built"
+          />
         </div>
       )}
     </div>
