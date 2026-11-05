@@ -11,6 +11,7 @@ import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { initAudio, playChime, playChord } from '../../audio/AudioEngine';
 import { PianoKeyboard88 } from '../homework/PianoKeyboard88';
 import { PracticeSettings } from './PracticeSettings';
+import { hesitationMs, PACE_SAMPLES } from '../../engine/TrainingWheels';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
@@ -499,6 +500,12 @@ export function ScoreView() {
   // whether they now cover it (then the symbol is green).
   const chordLitRef = useRef(noChord());
   const lapStartRef = useRef<number | null>(null);
+  // #5519 training wheels: the bar his run started in, his step pace, and a hesitation.
+  const runStartBarRef = useRef<number | null>(null);
+  const lastAdvanceRef = useRef<number | null>(null);
+  const stepGapsRef = useRef<number[]>([]);
+  const hesitateTimerRef = useRef<number | undefined>(undefined);
+  const [hesitating, setHesitating] = useState(false);
   // Expression telemetry (#9569): how he plays the marked dynamics and tempo
   // changes. Report-only: it never gates the follower or turns anything red.
   const exprRef = useRef<ExpressionTracker | null>(null);
@@ -536,6 +543,7 @@ export function ScoreView() {
   const held = useMidiStore((s) => s.held);
   const showKeyboard = useSettingsStore((s) => s.showKeyboard);
   const setShowKeyboard = useSettingsStore((s) => s.setShowKeyboard);
+  const trainingWheels = useSettingsStore((s) => s.trainingWheels);
   const reverseWheel = useSettingsStore((s) => s.reverseWheel);
   const setReverseWheel = useSettingsStore((s) => s.setReverseWheel);
   const [remaining, setRemaining] = useState<number[]>([]);
@@ -1003,6 +1011,9 @@ export function ScoreView() {
     setWrongCount(0);
     setLap(f.lap);
     lapStartRef.current = null;
+    lastAdvanceRef.current = null;
+    window.clearTimeout(hesitateTimerRef.current);
+    setHesitating(false);
     lapWrongRef.current = 0;
     exprRef.current?.reset();
     exprNewPassRef.current = false;
@@ -1535,6 +1546,21 @@ export function ScoreView() {
   );
   useEffect(() => () => window.clearTimeout(pedalTipTimerRef.current), []);
 
+  // #5519: a credited note ends a hesitation and starts the clock on the next one.
+  const noteCredit = useCallback((advanceAt: number | null) => {
+    if (advanceAt !== null) {
+      if (lastAdvanceRef.current !== null) {
+        stepGapsRef.current = [...stepGapsRef.current.slice(1 - PACE_SAMPLES), advanceAt - lastAdvanceRef.current];
+      }
+      lastAdvanceRef.current = advanceAt;
+    }
+    setHesitating(false);
+    window.clearTimeout(hesitateTimerRef.current);
+    if (!useSettingsStore.getState().trainingWheels) return;
+    hesitateTimerRef.current = window.setTimeout(() => setHesitating(true), hesitationMs(stepGapsRef.current));
+  }, []);
+  useEffect(() => () => window.clearTimeout(hesitateTimerRef.current), []);
+
   const flashWrong = useCallback(() => {
     setWrongFlash(true);
     window.clearTimeout(flashTimerRef.current);
@@ -1636,7 +1662,9 @@ export function ScoreView() {
         if (result.kind === 'loop') exprNewPassRef.current = true;
       }
 
+      if (credited) noteCredit(result.kind === 'advance' || result.kind === 'loop' ? ev.timestamp : null);
       if (lapStartRef.current === null && credited) {
+        runStartBarRef.current = step?.measure ?? null;
         lapStartRef.current = ev.timestamp;
       }
 
@@ -1685,6 +1713,7 @@ export function ScoreView() {
           });
           // Only his note goes red (drawn above); the panel ring flashes.
           flashWrong();
+          setHesitating(true);
           break;
         }
         case 'stray':
@@ -1697,7 +1726,7 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong]);
+  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong, noteCredit]);
 
   // Key releases, for the length of a fermata on the last note. A wrong note shows
   // only while its key is down (#9630), so the score doesn't fill up with red.
@@ -2147,6 +2176,10 @@ export function ScoreView() {
       followerRef.current!.steps.slice(loopRange.first, cursorStep).every((st) => st.notes.length === 0)) {
     for (let i = loopRange.first; i <= cursorStep; i++) for (const n of tieNotesRef.current[i] ?? []) tiedKeys.add(toMidi(n));
   }
+  // #5519: with training wheels, the keys he's to play show only in his run's first bar,
+  // on a hesitation, or after a wrong note. Red and his own held keys always show.
+  const atRunStart = lapStartRef.current === null || followerRef.current?.steps[cursorStep]?.measure === runStartBarRef.current;
+  const hints = !trainingWheels || watching || hesitating || atRunStart || !!wheelLive;
   const finished = feedback.kind === 'complete';
   const lastBar = followerRef.current?.steps.at(-1)?.measure;
   const keyLabels = fingersOf(stepNotesRef.current[cursorStep]);
@@ -2389,6 +2422,20 @@ export function ScoreView() {
           <input type="checkbox" checked={showKeyboard} onChange={(e) => setShowKeyboard(e.target.checked)} />
           Keyboard
         </label>
+        {showKeyboard && (
+          <label
+            className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+            title="Show the keys to play only in the first bar of each lap; after that they fade, and come back if you pause or miss"
+          >
+            <input
+              type="checkbox"
+              data-testid="training-wheels"
+              checked={trainingWheels}
+              onChange={(e) => useSettingsStore.getState().setPrefs({ trainingWheels: e.target.checked })}
+            />
+            Training wheels
+          </label>
+        )}
         {strip && (
           <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Turn the wheel the other way to move along the score">
             <input type="checkbox" data-testid="reverse-wheel" checked={reverseWheel} onChange={(e) => setReverseWheel(e.target.checked)} />
@@ -2687,11 +2734,12 @@ export function ScoreView() {
         >
           <PianoKeyboard88
             heightRatio={20}
-            green={new Set(watching ? watchNotes : stepKeys)}
+            green={new Set(watching ? watchNotes : hints ? stepKeys : [])}
             red={wrongKeys}
             held={held}
-            tied={tiedKeys}
-            labels={keyLabels}
+            tied={hints ? tiedKeys : undefined}
+            fadeMs={hints ? undefined : 500}
+            labels={hints ? keyLabels : undefined}
             yellow={wheelTarget && hoverKey === wheelTarget.midi ? hoverKey : null}
             onKeyHover={setHoverKey}
             onKeyClick={onKeyClick}

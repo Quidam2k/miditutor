@@ -7,6 +7,8 @@ interface Props {
   held?: ReadonlySet<number>;
   /** #5514: keys of a chord held over from before the loop: hold these, don't strike them. */
   tied?: ReadonlySet<number>;
+  /** #5519: keys leaving their colour fade over this long (a colour arriving is instant). */
+  fadeMs?: number;
   /** Text drawn on a key, e.g. the finger number for a lit key (#5153). */
   labels?: ReadonlyMap<number, string>;
   /** The key being edited (#10238): outranks every other colour. */
@@ -46,7 +48,7 @@ function layout(low: number, high: number): { keys: KeyGeom[]; width: number } {
 }
 
 /** Display-only 88-key piano that scales to its container; keys light red / green / held. */
-export function PianoKeyboard88({ green, red, held, tied, labels, yellow, onKeyHover, onKeyClick, low = 21, high = 108, heightRatio = 7 }: Props) {
+export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, yellow, onKeyHover, onKeyClick, low = 21, high = 108, heightRatio = 7 }: Props) {
   const { keys, width } = useMemo(() => layout(low, high), [low, high]);
   const height = Math.round(width / heightRatio);
   const blackH = height * 0.62;
@@ -61,16 +63,22 @@ export function PianoKeyboard88({ green, red, held, tied, labels, yellow, onKeyH
   };
   const middleC = keys.find((k) => k.midi === 60);
   // Only a strip that edits notes reacts to the pointer.
-  const events = (k: KeyGeom) =>
-    onKeyHover || onKeyClick
+  const events = (k: KeyGeom) => {
+    // A transition follows the new style: only a key going back to plain fades (#5519).
+    const plain = fill(k) === (k.white ? '#f8fafc' : '#111827');
+    const style = fadeMs && plain ? { transition: `fill ${fadeMs}ms ease-out` } : {};
+    const base = { 'data-green': green?.has(k.midi) ? 'true' : undefined, style };
+    return onKeyHover || onKeyClick
       ? {
+          ...base,
           'data-midi': k.midi,
           'data-yellow': yellow === k.midi ? 'true' : undefined,
           onMouseEnter: () => onKeyHover?.(k.midi),
           onClick: (ev: MouseEvent) => onKeyClick?.(k.midi, ev),
-          style: { cursor: 'pointer' },
+          style: { ...style, cursor: 'pointer' },
         }
-      : {};
+      : base;
+  };
 
   return (
     <svg
