@@ -5,6 +5,8 @@ interface Props {
   green?: ReadonlySet<number>;
   red?: ReadonlySet<number>;
   held?: ReadonlySet<number>;
+  /** #5514: keys of a chord held over from before the loop: hold these, don't strike them. */
+  tied?: ReadonlySet<number>;
   /** Text drawn on a key, e.g. the finger number for a lit key (#5153). */
   labels?: ReadonlyMap<number, string>;
   /** The key being edited (#10238): outranks every other colour. */
@@ -44,7 +46,7 @@ function layout(low: number, high: number): { keys: KeyGeom[]; width: number } {
 }
 
 /** Display-only 88-key piano that scales to its container; keys light red / green / held. */
-export function PianoKeyboard88({ green, red, held, labels, yellow, onKeyHover, onKeyClick, low = 21, high = 108, heightRatio = 7 }: Props) {
+export function PianoKeyboard88({ green, red, held, tied, labels, yellow, onKeyHover, onKeyClick, low = 21, high = 108, heightRatio = 7 }: Props) {
   const { keys, width } = useMemo(() => layout(low, high), [low, high]);
   const height = Math.round(width / heightRatio);
   const blackH = height * 0.62;
@@ -54,6 +56,7 @@ export function PianoKeyboard88({ green, red, held, labels, yellow, onKeyHover, 
     if (red?.has(k.midi)) return '#ef4444';
     if (green?.has(k.midi)) return '#22c55e';
     if (held?.has(k.midi)) return '#818cf8';
+    if (tied?.has(k.midi)) return k.white ? '#bbf7d0' : '#166534';
     return k.white ? '#f8fafc' : '#111827';
   };
   const middleC = keys.find((k) => k.midi === 60);
@@ -83,6 +86,21 @@ export function PianoKeyboard88({ green, red, held, labels, yellow, onKeyHover, 
       ))}
       {keys.filter((k) => !k.white).map((k) => (
         <rect key={k.midi} x={k.x} y={0} width={BLACK_W} height={blackH} fill={fill(k)} stroke={OUTLINE} strokeWidth={0.4} {...events(k)} />
+      ))}
+      {/* #5514: an inset green outline, over the neighbours, marks a held-over key he isn't holding yet. */}
+      {tied && keys.filter((k) => tied.has(k.midi) && !held?.has(k.midi) && !green?.has(k.midi) && !red?.has(k.midi)).map((k) => (
+        <rect
+          key={`tied-${k.midi}`}
+          x={k.x + 0.7}
+          y={0.7}
+          width={(k.white ? WHITE_W : BLACK_W) - 1.4}
+          height={(k.white ? height : blackH) - 1.4}
+          fill="none"
+          stroke="#22c55e"
+          strokeWidth={1.2}
+          pointerEvents="none"
+          data-tied={k.midi}
+        />
       ))}
       {/* A finger number on middle C takes the dot's place. */}
       {middleC && !labels?.has(60) && <circle cx={middleC.x + WHITE_W / 2} cy={height - WHITE_W * 0.9} r={WHITE_W * 0.2} fill="#9ca3af" />}

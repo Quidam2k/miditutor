@@ -2139,6 +2139,14 @@ export function ScoreView() {
       (k) => held.has(k),
     ),
   );
+  // #5514: on the loop's first step to play, the chord tied over into it from an earlier
+  // bar shows as "hold these" (it still needn't be struck), so he can pick it up mid-way.
+  const tiedKeys = new Set<number>();
+  const loopRange = followerRef.current?.range;
+  if (loopRange && !watching && cursorStep >= loopRange.first &&
+      followerRef.current!.steps.slice(loopRange.first, cursorStep).every((st) => st.notes.length === 0)) {
+    for (let i = loopRange.first; i <= cursorStep; i++) for (const n of tieNotesRef.current[i] ?? []) tiedKeys.add(toMidi(n));
+  }
   const finished = feedback.kind === 'complete';
   const lastBar = followerRef.current?.steps.at(-1)?.measure;
   const keyLabels = fingersOf(stepNotesRef.current[cursorStep]);
@@ -2682,6 +2690,7 @@ export function ScoreView() {
             green={new Set(watching ? watchNotes : stepKeys)}
             red={wrongKeys}
             held={held}
+            tied={tiedKeys}
             labels={keyLabels}
             yellow={wheelTarget && hoverKey === wheelTarget.midi ? hoverKey : null}
             onKeyHover={setHoverKey}
