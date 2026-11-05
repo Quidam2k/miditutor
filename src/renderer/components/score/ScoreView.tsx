@@ -10,6 +10,7 @@ import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { initAudio, playChime, playChord } from '../../audio/AudioEngine';
 import { PianoKeyboard88 } from '../homework/PianoKeyboard88';
+import { PracticeSettings } from './PracticeSettings';
 import { useMidiStore } from '../../store/useMidiStore';
 import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
@@ -1534,6 +1535,12 @@ export function ScoreView() {
   );
   useEffect(() => () => window.clearTimeout(pedalTipTimerRef.current), []);
 
+  const flashWrong = useCallback(() => {
+    setWrongFlash(true);
+    window.clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = window.setTimeout(() => setWrongFlash(false), 450);
+  }, []);
+
   // --- live MIDI → follower ---
   useEffect(() => {
     if (!following || watching) return;
@@ -1552,7 +1559,11 @@ export function ScoreView() {
       // settle that first, so this note is judged against the step it lands in.
       const keysDown = new Set(held);
       keysDown.delete(ev.note);
-      const settled = f.settle(ev.timestamp, keysDown);
+      const prefs = useSettingsStore.getState();
+      f.grazeMs = prefs.grazeMs;
+      f.minVelocity = prefs.minVelocity;
+      // #5516: a stray must not confirm a carry (that could finish a lap); skip settling.
+      const settled = f.strayCheck(ev.note, ev.timestamp, ev.velocity) ? null : f.settle(ev.timestamp, keysDown);
       if (settled?.kind === 'advance' || settled?.kind === 'loop') {
         if (settled.kind === 'loop') setMarks([]);
         moveCursorTo(settled.to);
@@ -1584,9 +1595,11 @@ export function ScoreView() {
         pedalTipTimerRef.current = window.setTimeout(() => setPedalTip(''), 6000);
         reportEvent('pedal-gap', { bar: gap.bar, step: gap.step, gapMs: gap.gapMs, next: playedName, text });
       }
-      const result = f.noteOn(ev.note, ev.timestamp, keysDown);
+      const result = f.noteOn(ev.note, ev.timestamp, keysDown, ev.velocity);
+      // A stray (#5516) earns nothing; like a wrong note it only shows red and spoils the lap.
+      const credited = result.kind !== 'wrong' && result.kind !== 'ignored' && result.kind !== 'stray';
       if (result.kind !== 'ignored') {
-        const mark = placePlayed(idx, ev.note, result.kind === 'wrong');
+        const mark = placePlayed(idx, ev.note, result.kind === 'wrong' || result.kind === 'stray');
         if (mark) setMarks((m) => [...m, mark]);
       }
       reportEvent('follow', {
@@ -1598,7 +1611,11 @@ export function ScoreView() {
             ? step?.ringing?.includes(ev.note)
               ? 'written note still ringing (tie or held)'
               : 'already played, carried over, or piece finished'
-            : undefined,
+            : result.kind === 'stray'
+              ? result.reason === 'graze'
+                ? `graze: within ${f.grazeMs} ms of the last step`
+                : `soft: velocity under ${f.minVelocity}`
+              : undefined,
         step: idx,
         bar: step?.measure,
         velocity: ev.velocity,
@@ -1609,7 +1626,7 @@ export function ScoreView() {
       });
 
       const expr = exprRef.current;
-      if (expr && result.kind !== 'wrong' && result.kind !== 'ignored') {
+      if (expr && credited) {
         if (exprNewPassRef.current) {
           expr.reset();
           exprNewPassRef.current = false;
@@ -1619,7 +1636,7 @@ export function ScoreView() {
         if (result.kind === 'loop') exprNewPassRef.current = true;
       }
 
-      if (lapStartRef.current === null && result.kind !== 'wrong' && result.kind !== 'ignored') {
+      if (lapStartRef.current === null && credited) {
         lapStartRef.current = ev.timestamp;
       }
 
@@ -1667,17 +1684,20 @@ export function ScoreView() {
             hint: hintFor(osmdRef.current, stepNotesRef.current[idx] ?? [], result.remaining),
           });
           // Only his note goes red (drawn above); the panel ring flashes.
-          setWrongFlash(true);
-          window.clearTimeout(flashTimerRef.current);
-          flashTimerRef.current = window.setTimeout(() => setWrongFlash(false), 450);
+          flashWrong();
           break;
         }
+        case 'stray':
+          // #5516: no credit and the step stands; the lap just isn't clean any more.
+          lapWrongRef.current++;
+          flashWrong();
+          break;
         case 'ignored':
           break;
       }
       syncUi();
     });
-  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap]);
+  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong]);
 
   // Key releases, for the length of a fermata on the last note. A wrong note shows
   // only while its key is down (#9630), so the score doesn't fill up with red.
@@ -2368,6 +2388,7 @@ export function ScoreView() {
           </label>
         )}
         <div className="ml-auto flex items-center gap-2">
+          <PracticeSettings btn={btn} />
           <button
             onClick={() => {
               setPicking(picking === 'off' ? 'start' : 'off');

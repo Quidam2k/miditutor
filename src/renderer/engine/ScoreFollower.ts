@@ -10,6 +10,10 @@
 // this long of the one before (GestureTracker's chord window), with no wrong key between.
 export const CHORD_WINDOW_MS = 120;
 
+// #5516: a key struck this soon after the strike that finished a step, and not part of
+// that step, is a graze (his 11/4 log: grazes 7-59 ms, real next notes >= 316 ms).
+export const GRAZE_MS = 80;
+
 export interface ScoreStep {
   /** MIDI notes newly struck at this cursor position. */
   notes: number[];
@@ -28,6 +32,9 @@ export type FollowResult =
   | { kind: 'loop'; from: number; to: number; lap: number }
   // remaining = the expected notes not yet played at this step (#9986: name only those).
   | { kind: 'wrong'; index: number; played: number; expected: number[]; remaining: number[] }
+  // #5516: a graze (too soon after the last step) or a key under the velocity floor.
+  // Never credited and never resets the step; it only spoils a clean lap.
+  | { kind: 'stray'; index: number; played: number; reason: 'graze' | 'soft' }
   | { kind: 'ignored' };
 
 /**
@@ -71,6 +78,12 @@ export class ScoreFollower {
   // #9994: set by a wrong note on this step; credit then counts only a clean chord.
   private missed = false;
   private lastHitMs = -Infinity;
+  // #5516: when a strike last finished a step (not a carry settled at a later strike).
+  private lastFinishMs = -Infinity;
+  /** #5516: graze window in ms; 0 turns it off. */
+  grazeMs = GRAZE_MS;
+  /** #5516: velocity floor (1-127); 0 = off. A softer key is a stray. */
+  minVelocity = 0;
 
   constructor(steps: ScoreStep[]) {
     this.steps = steps.map((step) => ({
@@ -158,9 +171,13 @@ export class ScoreFollower {
     return { kind: 'advance', from, to: this.currentIndex };
   }
 
-  noteOn(midi: number, timeMs: number, sounding: ReadonlySet<number> = new Set()): FollowResult {
+  noteOn(midi: number, timeMs: number, sounding: ReadonlySet<number> = new Set(), velocity = 127): FollowResult {
     const held = new Set(sounding);
     held.delete(midi);
+    // #5516: judged before carries settle, so a graze can never complete a step or a lap.
+    const stray = this.strayCheck(midi, timeMs, velocity);
+    if (stray === 'bounce') return { kind: 'ignored' };
+    if (stray) return { kind: 'stray', index: this.currentIndex, played: midi, reason: stray };
     this.settle(timeMs, held);
     if (this.finished) {
       return { kind: 'ignored' };
@@ -181,13 +198,7 @@ export class ScoreFollower {
     }
 
     if (!expected.includes(midi)) {
-      if (
-        this.prevCarried.has(midi) ||
-        this.prevStruck.has(midi) ||
-        this.steps[this.currentIndex].ringing?.includes(midi)
-      ) {
-        return { kind: 'ignored' };
-      }
+      if (this.harmless(midi)) return { kind: 'ignored' };
       // A miss resets the step: piecemeal credit from before it no longer counts.
       this.missed = true;
       this.restartAttempt();
@@ -211,6 +222,7 @@ export class ScoreFollower {
     // The key that just finished this step is not carried: a repeated written note
     // (Auld Lang Syne's F4 F4) must be struck again (#9630). `held` already lacks it.
     const from = this.currentIndex;
+    this.lastFinishMs = timeMs;
     const lapped = this.finishStep(timeMs, held);
 
     if (this.finished) {
@@ -220,6 +232,27 @@ export class ScoreFollower {
       return { kind: 'loop', from, to: this.currentIndex, lap: this.currentLap };
     }
     return { kind: 'advance', from, to: this.currentIndex };
+  }
+
+  /**
+   * #5516: would this strike be a stray? 'graze' = another key within grazeMs of the
+   * strike that finished the last step; 'soft' = under the velocity floor; 'bounce' = the
+   * same key again inside the window (a double trigger: no credit, no penalty). Call it
+   * before settle(): a stray must not confirm a carry.
+   */
+  strayCheck(midi: number, timeMs: number, velocity = 127): 'graze' | 'soft' | 'bounce' | null {
+    if (this.finished || this.satisfiedNotes.has(midi)) return null;
+    const inWindow = this.grazeMs > 0 && timeMs - this.lastFinishMs < this.grazeMs;
+    if (inWindow && this.prevStruck.has(midi)) return 'bounce';
+    if (!this.steps[this.currentIndex].notes.includes(midi) && this.harmless(midi)) return null;
+    if (inWindow) return 'graze';
+    if (this.minVelocity > 0 && velocity < this.minVelocity) return 'soft';
+    return null;
+  }
+
+  /** Not asked for here, but no mistake: carried, just struck, or still ringing. */
+  private harmless(midi: number): boolean {
+    return this.prevCarried.has(midi) || this.prevStruck.has(midi) || !!this.steps[this.currentIndex].ringing?.includes(midi);
   }
 
   seek(i: number): void {
@@ -232,6 +265,7 @@ export class ScoreFollower {
     this.prevStruck.clear();
     this.pendingCarry.clear();
     this.missed = false;
+    this.lastFinishMs = -Infinity;
     this.completions = [];
     this.beatOffset = 0;
   }

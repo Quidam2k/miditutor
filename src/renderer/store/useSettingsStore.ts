@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { GRAZE_MS } from '../engine/ScoreFollower';
 import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
 import { ExerciseType } from '../types/exercise';
@@ -46,7 +47,13 @@ interface SettingsState {
   parkedDrills: Record<string, SessionSnapshot>;
   /** #10254: the wheel off a note in Strip moves the other way. */
   reverseWheel: boolean;
+  /** #5516: a key this many ms after the strike that finished a step is a graze (0 = off). */
+  grazeMs: number;
+  /** #5516: keys softer than this velocity are strays (0 = off). */
+  minVelocity: number;
 
+  /** Set any of the plain number/boolean preferences above. */
+  setPrefs: (prefs: Partial<Pick<SettingsState, PrefKey>>) => void;
   setReverseWheel: (on: boolean) => void;
   toggleSimplePiece: (title: string) => void;
   markSightRead: (id: string, title: string) => void;
@@ -71,6 +78,8 @@ interface SettingsState {
   countIntervalCorrect: () => void;
   markHomeworkPracticed: (id: string) => void;
 }
+
+type PrefKey = 'grazeMs' | 'minVelocity';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -103,6 +112,9 @@ export const useSettingsStore = create<SettingsState>()(
       sightReadPiece: null,
       parkedDrills: {},
       reverseWheel: false,
+      grazeMs: GRAZE_MS,
+      minVelocity: 0,
+      setPrefs: (prefs) => set(prefs),
       setReverseWheel: (on) => set({ reverseWheel: on }),
 
       toggleSimplePiece: (title) =>
