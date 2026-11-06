@@ -5,7 +5,7 @@ RH fingering is "JP-TEST 123 1234", E minor arpeggio). Packaged hidden copy (for
     (env) MIDITUTOR_HIDDEN=1 MIDITUTOR_ALLOW_INJECT=1 MIDITUTOR_PORT=47811
           MIDITUTOR_PIECES_DIR=tests/fixtures/scales-homework
     out/MidiTutor-win32-x64/MidiTutor.exe --mute-audio --remote-debugging-port=9347 --user-data-dir=<scratch>
-    (env) MIDITUTOR_URL=http://127.0.0.1:47811 MIDITUTOR_TOKEN_FILE=<scratch>/api-token CDP_PORT=9347
+    (env) MIDITUTOR_URL=http://127.0.0.1:47811 MIDITUTOR_TOKEN_FILE=<scratch>/api-token MIDITUTOR_CDP=http://127.0.0.1:9347
     python scripts/e2e_scales.py
 Stop the copy afterwards.
 """
@@ -46,7 +46,7 @@ def mirrored(up: list[int]) -> list[int]:
 
 
 with sync_playwright() as p:
-    browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{os.environ.get('CDP_PORT', '9333')}")
+    browser = p.chromium.connect_over_cdp(os.environ.get("MIDITUTOR_CDP", "http://127.0.0.1:9333"))
     page = browser.contexts[0].pages[0]
     notes = page.locator("[data-testid=scale-note]")
     fingers = page.locator("[data-testid=scale-finger]")
