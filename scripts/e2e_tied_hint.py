@@ -60,8 +60,16 @@ SCORE2 = f"""<?xml version="1.0" encoding="UTF-8"?>
 <clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>
 {REST.format(d=16, v=1, t="whole", s="")}<backup><duration>16</duration></backup>{LH_CHORD("whole", "start")}</measure>
 <measure number="2">{"".join(note(s_, 4, "quarter") for s_ in "GFED")}<backup><duration>16</duration></backup>
-{LH_CHORD("quarter", "stop")}{REST.format(d=12, v=5, t="half", s="<dot/><staff>2</staff>")}</measure>
+{LH_CHORD("quarter", "stop")}{REST.format(d=8, v=5, t="half", s="<staff>2</staff>")}{lh("G", 2, "quarter")}</measure>
 </part></score-partwise>"""
+
+
+def mini(page):
+    el = page.query_selector("[data-testid=mini-staff]")
+    if not el:
+        return None
+    keys = sorted(el.get_attribute("data-keys").split(), key=lambda k: (k[-1], k))
+    return el.get_attribute("data-clefs"), " ".join(keys)
 
 
 def blue_marks(page) -> int:
@@ -73,6 +81,12 @@ def restrike_check(page) -> None:
     time.sleep(3)
     tc.request("POST", "/loop", {"firstBar": 2, "lastBar": 2})
     time.sleep(1)
+    check(mini(page) == ("treble", "g/4"), "#5624 mini staff: just the G4, treble", mini(page))
+    page.uncheck("[data-testid=mini-staff-toggle]")
+    time.sleep(0.3)
+    check(mini(page) is None, "#5624 mini staff switches off", mini(page))
+    page.check("[data-testid=mini-staff-toggle]")
+    time.sleep(0.3)
     since = tc.state().get("eventSeq", 0)
     strike([67, 47, 51, 55])  # G4, then the tied chord 20-60 ms later
     for _ in range(20):  # a hidden window paints lazily
@@ -83,9 +97,17 @@ def restrike_check(page) -> None:
     events = tc.request("GET", f"/events?since={since}")["events"]
     results = [e.get("result") for e in events if e.get("kind") == "follow"]
     check("stray" not in results and "wrong" not in results, "the chord is no graze", results)
-    for n in (65, 64, 62):
+    for n in (65, 64):
         strike([n])
         time.sleep(0.15)
+    check(mini(page) == ("treble+bass", "g/2 d/4"), "#5624 both hands: a braced treble and bass", mini(page))
+    strike([62, 43])
+    time.sleep(0.15)
+    page.click('button:text-is("Left")')
+    time.sleep(0.8)
+    check(mini(page) == ("bass", "g/2"), "#5624 left hand only: the staff follows the hand switch", mini(page))
+    page.click('button:text-is("Both")')
+    time.sleep(0.8)
     time.sleep(0.4)
     chunk = [e for e in tc.request("GET", f"/events?since={since}")["events"] if e.get("kind") == "lap"]
     check(len(chunk) == 1, "lap wrapped", chunk)

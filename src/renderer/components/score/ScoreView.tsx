@@ -8,8 +8,9 @@ import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import expressionXml from '../../assets/expression-test.musicxml?raw';
-import { initAudio, playChime, playChord, playFanfare, playLapChime } from '../../audio/AudioEngine';
-import { PianoKeyboard88 } from '../homework/PianoKeyboard88';
+import { initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound } from '../../audio/AudioEngine';
+import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
+import { MiniStaff, MiniStaffPart, miniStaffParts } from './MiniStaff';
 import { PracticeSettings } from './PracticeSettings';
 import { WaveOverlay, WAVE_FLARE_MS, waveDelays, type WaveDot } from './WaveOverlay';
 import { hesitationMs, PACE_SAMPLES } from '../../engine/TrainingWheels';
@@ -539,6 +540,8 @@ export function ScoreView() {
   const [status, setStatus] = useState<'loading' | 'ready' | 'error' | 'photo'>('loading');
   const [view, setView] = useState<'score' | 'photo'>('score');
   const [hand, setHand] = useState<'both' | 'right' | 'left'>('both');
+  // #5624: bumped whenever the step lists are rebuilt (a hand switch, a reload).
+  const [stepsVersion, setStepsVersion] = useState(0);
   const handRef = useRef(hand);
   const [staffCount, setStaffCount] = useState(0);
   const [openError, setOpenError] = useState('');
@@ -579,6 +582,14 @@ export function ScoreView() {
   // The whole range he chose; with Build backwards the loop itself is only the end of it.
   const overall = chunk ? { first: chunk.first, last: chunk.last } : loopBars;
   const lapWrongRef = useRef(0);
+  // #5566: a wrong note or a stray spoils the lap; the first one in a lap ticks, faintly.
+  const spoilLap = useCallback(() => {
+    if (lapWrongRef.current++ > 0) return;
+    const sound = useSettingsStore.getState().missSound;
+    if (sound) void playMissSound();
+    reportEvent('lap-spoiled', { sound });
+  }, []);
+  const missSound = useSettingsStore((s) => s.missSound);
   const backwardTargets = useSettingsStore((s) => s.backwardTargets);
   const setBackwardTargets = useSettingsStore((s) => s.setBackwardTargets);
   const [bands, setBands] = useState<Band[]>([]);
@@ -1045,6 +1056,7 @@ export function ScoreView() {
     const exprMarksParsed = parseExpression(drawnXml);
     exprRef.current = new ExpressionTracker(exprMarksParsed, steps);
     setExprMarks(exprMarksParsed.map(describeMark));
+    setStepsVersion((v) => v + 1);
     return { steps, exprMarksParsed };
   }, [drawnXml, trackChord]);
 
@@ -1787,7 +1799,7 @@ export function ScoreView() {
           break;
         case 'wrong': {
           setWrongCount((c) => c + 1);
-          lapWrongRef.current++;
+          spoilLap();
           setFeedback({
             kind: 'wrong',
             played: result.played,
@@ -1802,7 +1814,7 @@ export function ScoreView() {
         }
         case 'stray':
           // #5516: no credit and the step stands; the lap just isn't clean any more.
-          lapWrongRef.current++;
+          spoilLap();
           flashWrong();
           break;
         case 'ignored':
@@ -1810,7 +1822,7 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong, noteCredit]);
+  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong, noteCredit, spoilLap]);
 
   // Key releases, for the length of a fermata on the last note. A wrong note shows
   // only while its key is down (#9630), so the score doesn't fill up with red.
@@ -2264,6 +2276,33 @@ export function ScoreView() {
   // on a hesitation, or after a wrong note. Red and his own held keys always show.
   const atRunStart = lapStartRef.current === null || followerRef.current?.steps[cursorStep]?.measure === runStartBarRef.current;
   const hints = !trainingWheels || watching || hesitating || atRunStart || !!wheelLive;
+
+  // #5624: the notes to play now, as written, on a scrap of staff above the keyboard;
+  // clefs follow the hands (treble, bass, or both braced).
+  const miniStaff = useSettingsStore((s) => s.miniStaff);
+  const mini = useMemo(() => {
+    const osmd = osmdRef.current;
+    const notes = (stepNotesRef.current[cursorStep] ?? []).filter((n) => !n.IsGraceNote);
+    if (!miniStaff || status !== 'ready' || !osmd || notes.length === 0) return null;
+    const bar = followerRef.current?.steps[cursorStep]?.measure ?? 1;
+    const part = (staff: number): MiniStaffPart => {
+      const gm = osmd.GraphicSheet.MeasureList[bar - 1]?.[staff] as unknown as OsmdMeasure | undefined;
+      const clef = gm ? (gm.InitiallyActiveClef?.ClefType === 1 ? 'bass' : 'treble') : staff === 1 ? 'bass' : 'treble';
+      return {
+        clef,
+        notes: notes.filter((n) => staffOf(n) === staff).flatMap((n) => {
+          const w = writtenOf(n);
+          if (!w) return [];
+          const accidental = w.alter > 0 ? 'sharp' as const : w.alter < 0 ? 'flat' as const : undefined;
+          return [{ note: w.letter, accidental, octave: w.octave, midiNumber: toMidi(n) }];
+        }),
+      };
+    };
+    const parts = miniStaffParts(part(0), part(1));
+    const midis = notes.map(toMidi);
+    const center = midis.reduce((sum, m) => sum + keyCenterPct(m), 0) / midis.length;
+    return { parts, center };
+  }, [miniStaff, status, cursorStep, stepsVersion]);
   const finished = feedback.kind === 'complete';
   const lastBar = followerRef.current?.steps.at(-1)?.measure;
   const keyLabels = fingersOf(stepNotesRef.current[cursorStep]);
@@ -2520,6 +2559,32 @@ export function ScoreView() {
             Training wheels
           </label>
         )}
+        {showKeyboard && (
+          <label
+            className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+            title="Show the notes to play now on a little staff just above the keyboard"
+          >
+            <input
+              type="checkbox"
+              data-testid="mini-staff-toggle"
+              checked={miniStaff}
+              onChange={(e) => useSettingsStore.getState().setPrefs({ miniStaff: e.target.checked })}
+            />
+            Mini staff
+          </label>
+        )}
+        <label
+          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+          title="A very faint tick the moment a lap stops being clean (a wrong note or a grazed key), so you know it won't count"
+        >
+          <input
+            type="checkbox"
+            data-testid="miss-sound"
+            checked={missSound}
+            onChange={(e) => useSettingsStore.getState().setPrefs({ missSound: e.target.checked })}
+          />
+          Miss sound
+        </label>
         {strip && (
           <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Turn the wheel the other way to move along the score">
             <input type="checkbox" data-testid="reverse-wheel" checked={reverseWheel} onChange={(e) => setReverseWheel(e.target.checked)} />
@@ -2814,9 +2879,10 @@ export function ScoreView() {
       {showKeyboard && (
         <div
           ref={keyStripRef}
-          className={strip ? '-mx-6 -mb-6 shrink-0 bg-gray-950 px-1 py-1' : 'sticky bottom-0 z-20 -mx-2 rounded-t-md bg-gray-950 px-2 py-1'}
+          className={strip ? 'relative -mx-6 -mb-6 shrink-0 bg-gray-950 px-1 py-1' : 'sticky bottom-0 z-20 -mx-2 rounded-t-md bg-gray-950 px-2 py-1'}
           data-testid="keyboard-strip"
         >
+          {mini && <MiniStaff parts={mini.parts} fifths={fifths} centerPct={mini.center} />}
           <PianoKeyboard88
             heightRatio={20}
             green={new Set(watching ? watchNotes : hints ? stepKeys : [])}

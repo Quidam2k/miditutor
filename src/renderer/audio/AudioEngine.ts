@@ -89,6 +89,26 @@ export async function playFanfare(size: 'small' | 'medium' | 'big'): Promise<voi
   }
 }
 
+let missTick: Tone.NoiseSynth | null = null;
+
+/**
+ * #5566: the moment a lap stops being clean, a very faint, very short tick of soft
+ * noise: not a note, so it never sounds like part of the music.
+ */
+export async function playMissSound(): Promise<void> {
+  try {
+    await initAudio();
+    missTick ??= new Tone.NoiseSynth({
+      noise: { type: 'pink' },
+      envelope: { attack: 0.002, decay: 0.07, sustain: 0, release: 0.02 },
+      volume: -30,
+    }).toDestination();
+    missTick.triggerAttackRelease(0.07, Tone.now());
+  } catch (err) {
+    console.warn('[miss] could not play:', err);
+  }
+}
+
 export function isInitialized(): boolean {
   return initialized;
 }

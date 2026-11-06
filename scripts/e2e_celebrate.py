@@ -16,12 +16,17 @@ import time
 
 from playwright.sync_api import sync_playwright
 
-from e2e_backwards import FAILS, SCORE, check, play_lap, screen, tc
+from e2e_backwards import FAILS, SCORE, check, play_lap, screen, strike, tc
 
 
 def celebrations(seq: int) -> list[dict]:
     events = tc.request("GET", f"/events?since={seq}&limit=2000")["events"]
     return [e for e in events if e.get("kind") == "celebrate"]
+
+
+def spoiled(seq: int) -> list[dict]:
+    events = tc.request("GET", f"/events?since={seq}&limit=2000")["events"]
+    return [e for e in events if e.get("kind") == "lap-spoiled"]
 
 
 def dots(page) -> int:
@@ -59,13 +64,18 @@ def main() -> int:
         got = celebrations(seq)
         check(len(got) == 1 and got[0].get("chime") and got[0].get("wave"), "clean lap: chime + wave reported", got)
         check(n > 0, "clean lap: the wave is drawn", n)
+        check(spoiled(seq) == [], "clean lap: no miss tick", spoiled(seq))
 
         time.sleep(2.5)
         check(dots(page) == 0, "the wave clears itself", dots(page))
         seq = tc.state()["eventSeq"]
+        strike([30])  # #5566: two wrong notes in one lap (this, and play_lap's own)
+        time.sleep(0.3)
         play_lap(wrong=True)
         time.sleep(0.3)
         check(celebrations(seq) == [], "a lap with a wrong note: no celebration", celebrations(seq))
+        got = spoiled(seq)
+        check(len(got) == 1 and got[0].get("sound") is True, "#5566: one miss tick per spoiled lap", got)
 
         tc.request("POST", "/loop", {"firstBar": 2, "lastBar": 3, "backwards": True})
         time.sleep(1)

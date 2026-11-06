@@ -47,6 +47,13 @@ function layout(low: number, high: number): { keys: KeyGeom[]; width: number } {
   return { keys, width: whites * WHITE_W };
 }
 
+/** #5624: where key `midi`'s centre sits across the drawn keyboard, 0-100. */
+export function keyCenterPct(midi: number, low = 21, high = 108): number {
+  const { keys, width } = layout(low, high);
+  const k = keys.find((g) => g.midi === midi);
+  return k ? ((k.x + (k.white ? WHITE_W : BLACK_W) / 2) / width) * 100 : 50;
+}
+
 /** Display-only 88-key piano that scales to its container; keys light red / green / held. */
 export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, yellow, onKeyHover, onKeyClick, low = 21, high = 108, heightRatio = 7 }: Props) {
   const { keys, width } = useMemo(() => layout(low, high), [low, high]);
