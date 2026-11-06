@@ -581,6 +581,7 @@ export function ScoreView() {
   const reverseWheel = useSettingsStore((s) => s.reverseWheel);
   // #5630: off, the wheel over the score never edits a finger; over a key it still does.
   const scoreWheelFingers = useSettingsStore((s) => s.scoreWheelFingers);
+  const keyWheelFingers = useSettingsStore((s) => s.keyWheelFingers);
   const setReverseWheel = useSettingsStore((s) => s.setReverseWheel);
   const [remaining, setRemaining] = useState<number[]>([]);
   const [playHint, setPlayHint] = useState('');
@@ -2001,9 +2002,10 @@ export function ScoreView() {
     if (hoverKey === null) {
       return;
     }
-    const hits = !watching && picking === 'off' ? keyTargets(hoverKey) : [];
+    // #5630: with "Wheel fingers on keyboard" off, the wheel over a key only scrolls.
+    const hits = keyWheelFingers && !watching && picking === 'off' ? keyTargets(hoverKey) : [];
     setHoverTarget(hits.length === 1 ? hits[0] : null);
-  }, [hoverKey, cursorStep, watching, picking, drawn]);
+  }, [hoverKey, cursorStep, watching, picking, drawn, keyWheelFingers]);
 
   // A save or a re-fit redraws the score under a pointer that hasn't moved: find what it's on
   // again, or the next notch of the same spin would scroll instead of edit.
@@ -2642,7 +2644,7 @@ export function ScoreView() {
         </label>
         <label
           className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-          title="On: the scroll wheel over a note on the score changes its finger. Off: it only does that over a key on the keyboard"
+          title="On: the scroll wheel over a note on the score changes its finger. Off: the wheel there only scrolls"
         >
           <input
             type="checkbox"
@@ -2654,6 +2656,18 @@ export function ScoreView() {
             }}
           />
           Wheel fingers on score
+        </label>
+        <label
+          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+          title="On: the scroll wheel over a key on the keyboard changes that note's finger. Off: the wheel there only scrolls"
+        >
+          <input
+            type="checkbox"
+            data-testid="key-wheel-fingers"
+            checked={keyWheelFingers}
+            onChange={(e) => useSettingsStore.getState().setPrefs({ keyWheelFingers: e.target.checked })}
+          />
+          Wheel fingers on keyboard
         </label>
         {strip && (
           <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Turn the wheel the other way to move along the score">
