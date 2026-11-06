@@ -2,13 +2,13 @@ name: macOS
 
 # Run only manually or on version tags; branch pushes and pull requests consume paid private-repo minutes.
 # Unsigned, not notarized: the zip is a build artifact only. Gatekeeper needs a manual "Open Anyway" on the target Mac.
-# Green on macos-14 (runs 37842684233, 40234143238); scripts/deploy_pinocchio.sh installs its artifact on Pinocchio.
+# Green on macos-14 (runs 37842684233, 40234143238); macos-14 refused 2026-11-06 ("not supported"), so macos-15. scripts/deploy_pinocchio.sh installs its artifact on Pinocchio.
 on:
   workflow_dispatch:
     inputs:
       runner:
         description: macOS runner image (arm64), for when one image's queue is stuck (2026-10-28)
-        default: macos-14
+        default: macos-15
   push:
     tags: ['v*']
 
@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   macos:
-    runs-on: ${{ inputs.runner || 'macos-14' }}
+    runs-on: ${{ inputs.runner || 'macos-15' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
