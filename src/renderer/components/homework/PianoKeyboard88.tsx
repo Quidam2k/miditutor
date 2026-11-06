@@ -131,6 +131,7 @@ export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, tiedLa
           fontWeight="bold"
           fill={k.white || yellow === k.midi ? '#111827' : '#ffffff'}
           pointerEvents="none"
+          data-label={k.midi}
         >
           {labels.get(k.midi)}
         </text>

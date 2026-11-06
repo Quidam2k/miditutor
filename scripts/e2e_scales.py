@@ -1,12 +1,17 @@
-"""#10130 end-to-end check of two-octave homework scales against a RUNNING hidden app.
-Needs CDP and a scratch Pieces folder holding a test homework.json (E minor scale with no type,
-G major scale whose RH fingering is "JP-TEST 123 1234", E minor arpeggio):
-    (sleep 170) | MIDITUTOR_HIDDEN=1 MIDITUTOR_PORT=47931 MIDITUTOR_VITE_PORT=5183 \
-      MIDITUTOR_PIECES_DIR=<scratch> npx electron-forge start -- --remote-debugging-port=9333
-    MIDITUTOR_URL=http://127.0.0.1:47931 python scripts/e2e_scales.py
+"""#10130/#5634 end-to-end check of two-octave homework scales against a RUNNING hidden app.
+Pieces folder: tests/fixtures/scales-homework (E minor scale with no type, G major scale whose
+RH fingering is "JP-TEST 123 1234", E minor arpeggio). Packaged hidden copy (forge start exits):
+    npx electron-forge package
+    (env) MIDITUTOR_HIDDEN=1 MIDITUTOR_ALLOW_INJECT=1 MIDITUTOR_PORT=47811
+          MIDITUTOR_PIECES_DIR=tests/fixtures/scales-homework
+    out/MidiTutor-win32-x64/MidiTutor.exe --mute-audio --remote-debugging-port=9347 --user-data-dir=<scratch>
+    (env) MIDITUTOR_URL=http://127.0.0.1:47811 MIDITUTOR_TOKEN_FILE=<scratch>/api-token CDP_PORT=9347
+    python scripts/e2e_scales.py
+Stop the copy afterwards.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -41,13 +46,21 @@ def mirrored(up: list[int]) -> list[int]:
 
 
 with sync_playwright() as p:
-    browser = p.chromium.connect_over_cdp("http://127.0.0.1:9333")
+    browser = p.chromium.connect_over_cdp(f"http://127.0.0.1:{os.environ.get('CDP_PORT', '9333')}")
     page = browser.contexts[0].pages[0]
     notes = page.locator("[data-testid=scale-note]")
     fingers = page.locator("[data-testid=scale-finger]")
 
     def finger_list() -> list[int]:
         return [int(x) for x in fingers.all_inner_texts()]
+
+    def key_labels() -> dict[int, str]:
+        """#5634: finger numbers drawn on keys, by MIDI note."""
+        els = page.query_selector_all("[data-label]")
+        return {int(e.get_attribute("data-label")): e.text_content() for e in els}
+
+    def done_count() -> int:
+        return page.locator("[data-testid=scale-note].text-emerald-400").count()
 
     def open_item(label: str) -> None:
         page.get_by_role("button", name="Practice", exact=True).click()
@@ -62,12 +75,34 @@ with sync_playwright() as p:
     check(page.locator("button.bg-indigo-600", has_text="natural").count() == 1, "natural is the default type")
     check("Standard fingering, not JP's" in body.inner_text(), "fingering labelled as not JP's")
     check(finger_list() == mirrored(RH_UP), "RH numbers", finger_list())
+    labels = key_labels()
+    check(len(labels) > 1 and all(n % 12 == 4 for n in labels) and set(labels.values()) == {"1"},
+          "#5634 every starting E shows finger 1", labels)
+    strike(52)
+    strike(54)
+    page.wait_for_timeout(200)
+    check(key_labels() == {55: "3"}, "#5634 after E F#, the G key shows finger 3", key_labels())
+    page.get_by_test_id("scale-restart").click()
+    page.wait_for_timeout(200)
+    check(done_count() == 0 and key_labels() == labels, "#5634 Restart: back to note 1, every E lit with 1", (done_count(), key_labels()))
 
     for offset in mirrored(NATURAL_UP):
         strike(52 + offset)
     page.wait_for_timeout(1600)
     check("Left hand" in body.inner_text(), "29 right notes moves on to the left hand")
     check(finger_list() == mirrored(LH_UP), "LH numbers", finger_list())
+    check(set(key_labels().values()) == {"5"}, "#5634 left hand: the starting Es show finger 5", key_labels())
+    strike(40)
+    page.get_by_test_id("scale-restart").click()
+    page.wait_for_timeout(200)
+    check("Left hand" in body.inner_text() and done_count() == 0, "#5634 Restart mid left hand stays on the left hand, at note 1")
+    for offset in mirrored(NATURAL_UP):
+        strike(40 + offset)
+    page.wait_for_timeout(1600)
+    check("Both hands done" in body.inner_text() and not key_labels(), "#5634 both hands done, no numbers on keys", key_labels())
+    page.get_by_test_id("scale-restart").click()
+    page.wait_for_timeout(200)
+    check("Right hand" in body.inner_text() and set(key_labels().values()) == {"1"}, "#5634 Restart after done: right hand again", key_labels())
 
     page.get_by_role("button", name="melodic").click()
     page.wait_for_timeout(200)
@@ -83,6 +118,7 @@ with sync_playwright() as p:
     open_item("G major scale")
     check("JP-TEST 123 1234" in body.inner_text(), "JP's written fingering shows")
     check("Standard fingering" not in body.inner_text() and fingers.count() == 0, "no numbers beside JP's")
+    check(not key_labels(), "#5634 no numbers on keys beside JP's", key_labels())
 
     open_item("E minor arpeggio")
     check("one octave" in body.inner_text() and notes.count() == 7, "arpeggio stays one octave", notes.count())

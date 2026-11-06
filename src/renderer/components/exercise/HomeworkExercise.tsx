@@ -154,6 +154,8 @@ function SequenceRun({ item, offsets: initial, title, type }: {
   const [hand, setHand] = useState<'right' | 'left' | 'done'>('right');
   const [seq, setSeq] = useState(() => startSequence(offsets));
   const [okNotes, setOkNotes] = useState<ReadonlySet<number>>(new Set());
+  // Bumped by Restart: re-runs the note effect, whose cleanup cancels a pending hand change.
+  const [run, setRun] = useState(0);
   const held = useMidiStore((s) => s.held);
   const markPracticed = useSettingsStore((s) => s.markHomeworkPracticed);
   // Read the latest sequence through a ref: two note-ons can arrive before React re-renders.
@@ -198,7 +200,7 @@ function SequenceRun({ item, offsets: initial, title, type }: {
       unsubscribe();
       clearTimeout(timer);
     };
-  }, [hand, offsets, tonicPc, item.id, markPracticed]);
+  }, [hand, offsets, tonicPc, item.id, markPracticed, run]);
 
   const names = noteNames(key, offsets);
   const expected = hand !== 'done' ? expectedNext(seq, tonicPc) : [];
@@ -207,6 +209,19 @@ function SequenceRun({ item, offsets: initial, title, type }: {
   // JP's text wins. It won't line up note for note, so it replaces the numbers rather than joining them.
   const fingering = writtenFingering(item, handKey);
   const fingers = !fingering && type ? scaleFingers(key, type, handKey) : null;
+  // #5634: the finger for the next note sits on its key(s), as on the score tab (#5153).
+  const keyFingers = fingers && hand !== 'done' && seq.index < fingers.length
+    ? new Map(expected.map((n) => [n, String(fingers[seq.index])]))
+    : undefined;
+  // #5634: start this hand over; once both are done, start again from the right hand.
+  const restart = () => {
+    const fresh = startSequence(offsets);
+    seqRef.current = fresh;
+    setSeq(fresh);
+    setOkNotes(new Set());
+    setRun((r) => r + 1);
+    if (hand === 'done') setHand('right');
+  };
 
   return (
     <div className="flex flex-col items-center gap-4 w-full">
@@ -231,8 +246,11 @@ function SequenceRun({ item, offsets: initial, title, type }: {
         ))}
       </div>
       {seq.mistakes > 0 && <p className="text-sm text-gray-400">Wrong keys this hand: {seq.mistakes}</p>}
+      <button onClick={restart} data-testid="scale-restart" className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-sm text-gray-100">
+        Restart
+      </button>
       <div className="w-full max-w-5xl">
-        <PianoKeyboard88 green={new Set(expected)} red={red} held={held} />
+        <PianoKeyboard88 green={new Set(expected)} red={red} held={held} labels={keyFingers} />
       </div>
     </div>
   );

@@ -1,0 +1,5 @@
+{"date":"e2e","items":[
+ {"id":"scale:E-minor","kind":"scale","label":"E minor scale","source":"e2e","key":"E","quality":"minor","types":[]},
+ {"id":"scale:G-major","kind":"scale","label":"G major scale","source":"e2e","key":"G","quality":"major","fingering":{"RH":"JP-TEST 123 1234"}},
+ {"id":"arpeggio:E-minor","kind":"arpeggio","label":"E minor arpeggio","source":"e2e","key":"E","quality":"minor"}
+],"unparsed":[],"flags":[]}
