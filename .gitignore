@@ -114,4 +114,5 @@ docs/pinocchio-orolo-runbook.md
 docs/pinocchio-todd-steps.md
 scripts/local_config.json
 scripts/local.env
+scripts/.deployed-pinocchio
 scripts/local.bat

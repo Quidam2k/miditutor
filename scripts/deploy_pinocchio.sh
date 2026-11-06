@@ -10,8 +10,10 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/deploy_pinocchio.sh [--no-verify | --help]
+Usage: scripts/deploy_pinocchio.sh [--no-verify | --check-superseded | --help]
 Install the latest successful master macOS build and verify a hidden launch.
+A run older than the last deployed build or the newest master build is skipped, never installed.
+--check-superseded only says whether RUN_ID would be skipped; nothing is downloaded or installed.
 Environment:
   PINOCCHIO_HOST  SSH destination (required; may come from scripts/local.env)
   RUN_ID         GitHub Actions run ID (default: latest successful macos.yml)
@@ -21,9 +23,11 @@ Environment:
 USAGE
 }
 verify=true
+check_only=false
 case "${1:-}" in
   --help|-h) usage; exit 0 ;;
   --no-verify) verify=false ;;
+  --check-superseded) check_only=true ;;
   "") ;;
   *) usage >&2; exit 2 ;;
 esac
@@ -34,6 +38,26 @@ if (( $# > 1 )); then usage >&2; exit 2; fi
 PINOCCHIO_HOST=${PINOCCHIO_HOST:?set PINOCCHIO_HOST or scripts/local.env}
 RUN_ID=${RUN_ID:-$(gh run list --workflow macos.yml --branch master --status success -L 1 --json databaseId -q '.[0].databaseId')}
 [[ -n "$RUN_ID" && "$RUN_ID" != null ]] || { echo "No successful run found." >&2; exit 1; }
+
+# Never roll him back (#11106): a waiter armed for an older run must not install over a newer build.
+# Skip when this run's commit is an ancestor of the last build deployed from here, or of the newest
+# master macOS run that hasn't failed (it may still be building). Unknown ancestry: deploy as before.
+ledger="$(dirname "${BASH_SOURCE[0]}")/.deployed-pinocchio"
+run_sha=$(gh run view "$RUN_ID" --json headSha -q .headSha)
+git fetch -q origin master 2>/dev/null || echo "WARNING: git fetch failed; superseded check uses local refs." >&2
+newest=$(gh run list --workflow macos.yml --branch master -L 10 --json databaseId,headSha,conclusion \
+  -q '[.[] | select(.conclusion == "" or .conclusion == "success")][0] // empty | "\(.databaseId) \(.headSha)"') || newest=""
+for cand in "$newest" "$( [[ -f "$ledger" ]] && cat "$ledger")"; do
+  read -r cand_run cand_sha <<<"$cand" || true
+  [[ -n "${cand_sha:-}" && "$cand_sha" != "$run_sha" ]] || continue
+  if git merge-base --is-ancestor "$run_sha" "$cand_sha" 2>/dev/null; then
+    echo "skipped: superseded by $cand_run (${cand_sha:0:7}; run $RUN_ID is ${run_sha:0:7})"
+    exit 0
+  fi
+done
+echo "not superseded: run $RUN_ID (${run_sha:0:7})"
+if [[ "$check_only" == true ]]; then exit 0; fi
+
 tmpdir=$(mktemp -d)
 trap 'rm -rf -- "$tmpdir"' EXIT
 gh run download "$RUN_ID" -n MidiTutor-macos-arm64 -D "$tmpdir"
@@ -147,4 +171,5 @@ if [[ "$was_running" == yes && "${RELAUNCH:-1}" != 0 ]]; then
 else
   printf 'MidiTutor left closed on %s (it was running: %s)\n' "$PINOCCHIO_HOST" "$was_running"
 fi
+printf '%s %s\n' "$RUN_ID" "$run_sha" > "$ledger"
 printf 'PASS: MidiTutor deployed to %s\n' "$PINOCCHIO_HOST"
