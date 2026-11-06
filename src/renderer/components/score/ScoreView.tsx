@@ -2299,10 +2299,19 @@ export function ScoreView() {
   // #5514: on the loop's first step to play, the chord tied over into it from an earlier
   // bar shows as "hold these" (it still needn't be struck), so he can pick it up mid-way.
   const tiedKeys = new Set<number>();
+  const tiedLabels = new Map<number, string>();
   const loopRange = followerRef.current?.range;
   if (loopRange && !watching && cursorStep >= loopRange.first &&
       followerRef.current!.steps.slice(loopRange.first, cursorStep).every((st) => st.notes.length === 0)) {
-    for (let i = loopRange.first; i <= cursorStep; i++) for (const n of tieNotesRef.current[i] ?? []) tiedKeys.add(toMidi(n));
+    for (let i = loopRange.first; i <= cursorStep; i++) {
+      for (const n of tieNotesRef.current[i] ?? []) {
+        tiedKeys.add(toMidi(n));
+        // #5562: the finger is written on the note the tie starts from.
+        const start = (n.NoteTie?.StartNote ?? n) as OsmdNote;
+        const finger = start.Fingering?.value?.trim() || n.Fingering?.value?.trim();
+        if (finger) tiedLabels.set(toMidi(n), finger);
+      }
+    }
   }
   // #5519: with training wheels, the keys he's to play show only in his run's first bar,
   // on a hesitation, or after a wrong note. Red and his own held keys always show.
@@ -2955,6 +2964,7 @@ export function ScoreView() {
             red={wrongKeys}
             held={held}
             tied={hints ? tiedKeys : undefined}
+            tiedLabels={hints ? tiedLabels : undefined}
             fadeMs={hints ? undefined : 500}
             labels={hints ? keyLabels : undefined}
             yellow={wheelTarget && hoverKey === wheelTarget.midi ? hoverKey : null}

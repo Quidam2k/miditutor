@@ -30,7 +30,11 @@ def note(step: str, octave: int, kind: str, tie: str | None = None, chord: bool 
 
 
 def chord(kind: str, tie: str) -> str:
-    return "".join(note(s, 4, kind, tie, chord=i > 0) for i, s in enumerate("CEG"))
+    notes = [note(s, 4, kind, tie, chord=i > 0) for i, s in enumerate("CEG")]
+    if tie == "start":  # #5562: fingered where the tie starts, 1-3-5
+        notes = [n.replace("</notations>", f"<technical><fingering>{f}</fingering></technical></notations>")
+                 for n, f in zip(notes, "135")]
+    return "".join(notes)
 
 
 SCORE = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -177,6 +181,10 @@ def tied(page) -> list[int]:
     return sorted(int(v) for v in page.eval_on_selector_all("[data-tied]", "els => els.map(e => e.dataset.tied)"))
 
 
+def tied_fingers(page) -> dict[int, str]:
+    return dict(page.eval_on_selector_all("[data-tied-label]", "els => els.map(e => [+e.dataset.tiedLabel, e.textContent])"))
+
+
 def main() -> int:
     for _ in range(60):
         try:
@@ -205,6 +213,7 @@ def main() -> int:
         time.sleep(0.6)
         check(screen()["loop"]["lap"] == 2, "lap wrapped", screen()["loop"])
         check(tied(page) == [60, 64, 67], "next lap shows it again", tied(page))
+        check(tied_fingers(page) == {60: "1", 64: "3", 67: "5"}, "#5562 the held keys show their fingers, faint", tied_fingers(page))
         tc.request("POST", "/loop", {"firstBar": 3, "lastBar": 3})
         time.sleep(1)
         check(tied(page) == [], "a bar with no tie shows nothing", tied(page))

@@ -11,6 +11,8 @@ interface Props {
   fadeMs?: number;
   /** Text drawn on a key, e.g. the finger number for a lit key (#5153). */
   labels?: ReadonlyMap<number, string>;
+  /** #5562: the finger written for a held-over (tied) key, drawn faint on it. */
+  tiedLabels?: ReadonlyMap<number, string>;
   /** The key being edited (#10238): outranks every other colour. */
   yellow?: number | null;
   onKeyHover?: (midi: number | null) => void;
@@ -55,7 +57,7 @@ export function keyCenterPct(midi: number, low = 21, high = 108): number {
 }
 
 /** Display-only 88-key piano that scales to its container; keys light red / green / held. */
-export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, yellow, onKeyHover, onKeyClick, low = 21, high = 108, heightRatio = 7 }: Props) {
+export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, tiedLabels, yellow, onKeyHover, onKeyClick, low = 21, high = 108, heightRatio = 7 }: Props) {
   const { keys, width } = useMemo(() => layout(low, high), [low, high]);
   const height = Math.round(width / heightRatio);
   const blackH = height * 0.62;
@@ -131,6 +133,23 @@ export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, yellow
           pointerEvents="none"
         >
           {labels.get(k.midi)}
+        </text>
+      ))}
+      {/* #5562: a faint finger on a held-over chord's keys, so he knows which finger keeps holding. */}
+      {tiedLabels && keys.filter((k) => tiedLabels.has(k.midi) && !labels?.has(k.midi)).map((k) => (
+        <text
+          key={`tied-label-${k.midi}`}
+          x={k.x + (k.white ? WHITE_W : BLACK_W) / 2}
+          y={k.white ? height - WHITE_W * 0.35 : blackH - BLACK_W * 0.3}
+          textAnchor="middle"
+          fontSize={k.white ? WHITE_W * 0.8 : BLACK_W * 0.9}
+          fontWeight="bold"
+          fill={k.white ? '#15803d' : '#bbf7d0'}
+          opacity={0.6}
+          pointerEvents="none"
+          data-tied-label={k.midi}
+        >
+          {tiedLabels.get(k.midi)}
         </text>
       ))}
     </svg>
