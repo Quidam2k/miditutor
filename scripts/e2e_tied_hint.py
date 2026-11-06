@@ -65,11 +65,16 @@ SCORE2 = f"""<?xml version="1.0" encoding="UTF-8"?>
 
 
 def mini(page):
-    el = page.query_selector("[data-testid=mini-staff]")
-    if not el:
+    """(clefs right hand first, every key low to high), or None. One staff per hand (#11091)."""
+    els = page.query_selector_all("[data-testid=mini-staff]")
+    if not els:
         return None
-    keys = sorted(el.get_attribute("data-keys").split(), key=lambda k: (k[-1], k))
-    return el.get_attribute("data-clefs"), " ".join(keys)
+    keys = sorted((k for el in els for k in el.get_attribute("data-keys").split()), key=lambda k: (k[-1], k))
+    return "+".join(el.get_attribute("data-clefs") for el in els), " ".join(keys)
+
+
+def durations(page) -> list[str]:
+    return [el.get_attribute("data-durations") for el in page.query_selector_all("[data-testid=mini-staff]")]
 
 
 def blue_marks(page) -> int:
@@ -82,6 +87,7 @@ def restrike_check(page) -> None:
     tc.request("POST", "/loop", {"firstBar": 2, "lastBar": 2})
     time.sleep(1)
     check(mini(page) == ("treble", "g/4"), "#5624 mini staff: just the G4, treble", mini(page))
+    clear_of_score(page, "treble")
     page.uncheck("[data-testid=mini-staff-toggle]")
     time.sleep(0.3)
     check(mini(page) is None, "#5624 mini staff switches off", mini(page))
@@ -97,10 +103,18 @@ def restrike_check(page) -> None:
     events = tc.request("GET", f"/events?since={since}")["events"]
     results = [e.get("result") for e in events if e.get("kind") == "follow"]
     check("stray" not in results and "wrong" not in results, "the chord is no graze", results)
-    for n in (65, 64):
-        strike([n])
-        time.sleep(0.15)
-    check(mini(page) == ("treble+bass", "g/2 d/4"), "#5624 both hands: a braced treble and bass", mini(page))
+    check(durations(page) == ["q", "hr"], "#11092 the F4 is a quarter; the left hand shows its half rest", durations(page))
+    strike([65])
+    time.sleep(0.15)
+    strike([64])
+    time.sleep(0.15)
+    check(mini(page) == ("treble+bass", "g/2 d/4"), "#11091 both hands: a treble over the right, a bass over the left", mini(page))
+    clear_of_score(page, "two-hand")
+    boxes = [el.bounding_box() for el in page.query_selector_all("[data-testid=mini-staff]")]
+    check(len(boxes) == 2 and boxes[1]["x"] + boxes[1]["width"] <= boxes[0]["x"] + 1,
+          "#11091 two staves: the left hand's sits left of the right hand's, apart", boxes)
+    check(durations(page) == ["q", "q"], "#11092 quarters drawn as quarters", durations(page))
+    page.screenshot(path="screengrab/e2e-mini-staff-band.png")
     strike([62, 43])
     time.sleep(0.15)
     page.click('button:text-is("Left")')
@@ -112,6 +126,16 @@ def restrike_check(page) -> None:
     chunk = [e for e in tc.request("GET", f"/events?since={since}")["events"] if e.get("kind") == "lap"]
     check(len(chunk) == 1, "lap wrapped", chunk)
     tc.request("DELETE", "/loop")
+
+
+def clear_of_score(page, what: str) -> None:
+    """#11089: the card sits in its own band above the keyboard, never over the music."""
+    band = page.query_selector("[data-testid=mini-staff-band]").bounding_box()
+    for el in page.query_selector_all("[data-testid=mini-staff]"):
+        card = el.bounding_box()
+        inside = card["y"] >= band["y"] - 0.5 and card["y"] + card["height"] <= band["y"] + band["height"] + 0.5
+        check(inside and card["height"] > 20, f"#11089 {what} staff fits its band, clear of the score",
+              (card, band))
 
 
 def tied(page) -> list[int]:

@@ -10,7 +10,7 @@ import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound } from '../../audio/AudioEngine';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
-import { MiniStaff, MiniStaffPart, miniStaffParts } from './MiniStaff';
+import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
 import { PracticeSettings } from './PracticeSettings';
 import { WaveOverlay, WAVE_FLARE_MS, waveDelays, type WaveDot } from './WaveOverlay';
 import { hesitationMs, PACE_SAMPLES } from '../../engine/TrainingWheels';
@@ -93,6 +93,9 @@ interface OsmdNote {
   /** Its voice entry; Timestamp is from the start of its measure (whole notes). */
   ParentVoiceEntry?: { Timestamp?: { RealValue: number }; TechnicalInstructions?: unknown[] };
   Length?: { RealValue: number };
+  /** The length its <type> names, and its <dot>s (#11092). */
+  TypeLength?: { RealValue: number };
+  DotsXml?: number;
   /** Its own <fingering>, when the score gives one. */
   Fingering?: { value?: string } | null;
 }
@@ -277,9 +280,11 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
   ties: OsmdNote[][];
   chords: (StepChord | null)[];
   restBefore: boolean[];
+  rests: OsmdNote[][];
 } {
   const steps: ScoreStep[] = [];
   const notes: OsmdNote[][] = [];
+  const rests: OsmdNote[][] = [];
   const ringing: OsmdNote[][] = [];
   // #10136: tie continuations of the selected hand, coloured blue while he holds them.
   const ties: OsmdNote[][] = [];
@@ -315,6 +320,7 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
       ringing: [...new Set(ring.map(toMidi))],
     });
     notes.push(under);
+    rests.push(all.filter((n) => n.isRest() && (selectedStaff === null || staffOf(n) === selectedStaff)));
     ringing.push(ring);
     ties.push(unstruck.filter((n) => !n.IsGraceNote && (selectedStaff === null || staffOf(n) === selectedStaff)));
     const entries = cursor.iterator.CurrentVoiceEntries as unknown as OsmdVoiceEntry[];
@@ -333,7 +339,7 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
     cursor.next();
   }
   cursor.reset();
-  return { steps, notes, ringing, ties, chords, restBefore };
+  return { steps, notes, ringing, ties, chords, restBefore, rests };
 }
 
 // Colour a chord symbol's text (green = he is playing that chord), or reset it.
@@ -429,6 +435,24 @@ function fitStrip(osmd: OpenSheetMusicDisplay, container: HTMLElement, panel: HT
   return true;
 }
 
+/**
+ * #11094: in the strip, the music sits centred with a wide white gap above the treble
+ * staff. Lift it by a fifth of that gap so the score sits higher, at the same size.
+ */
+const STRIP_LIFT = 0.2;
+function liftStrip(osmd: OpenSheetMusicDisplay, layer: HTMLElement | null, panel: HTMLElement | null): void {
+  if (!layer) return;
+  layer.style.transform = '';
+  if (!panel) return;
+  const first = (osmd.GraphicSheet.MeasureList[0] as unknown as (OsmdMeasure | undefined)[] | undefined)?.[0];
+  const lineY = first?.ParentStaffLine?.PositionAndShape.AbsolutePosition.y;
+  const svg = layer.querySelector('svg');
+  if (lineY === undefined || !svg) return;
+  const staffTop = svg.getBoundingClientRect().top + lineY * 10 * osmd.Zoom;
+  const gap = staffTop - (panel.getBoundingClientRect().top + 16); // inside the panel's p-4
+  if (gap > 0) layer.style.transform = `translateY(${-Math.round(gap * STRIP_LIFT)}px)`;
+}
+
 // The finger number written on each struck note of a step, by the key it lights.
 // A note with no <fingering> gets no label, never a guess.
 function fingersOf(notes: OsmdNote[] | undefined): Map<number, string> {
@@ -472,6 +496,7 @@ export function ScoreView() {
   const osmdRef = useRef<OpenSheetMusicDisplay | null>(null);
   const followerRef = useRef<ScoreFollower | null>(null);
   const stepNotesRef = useRef<OsmdNote[][]>([]);
+  const stepRestsRef = useRef<OsmdNote[][]>([]);
   const ringNotesRef = useRef<OsmdNote[][]>([]);
   const tieNotesRef = useRef<OsmdNote[][]>([]);
   // #5568: the step he just finished, whose ties a late re-strike still paints.
@@ -1043,10 +1068,11 @@ export function ScoreView() {
   }, [moveCursorTo, centerCursor, syncUi, trackChord]);
 
   const buildFollower = useCallback((osmd: OpenSheetMusicDisplay) => {
-    const { steps, notes, ringing, ties, chords, restBefore } = extractSteps(osmd, handRef.current, holdsOf(drawnXml));
+    const { steps, notes, ringing, ties, chords, restBefore, rests } = extractSteps(osmd, handRef.current, holdsOf(drawnXml));
     stepRestRef.current = restBefore;
     pedalCoachRef.current.reset();
     stepNotesRef.current = notes;
+    stepRestsRef.current = rests;
     ringNotesRef.current = ringing;
     tieNotesRef.current = ties;
     stepChordsRef.current = chords;
@@ -1532,6 +1558,7 @@ export function ScoreView() {
       render();
       if (strip && fitStrip(osmd, container, panelRef.current)) render();
       paintFingerings(osmd, container);
+      liftStrip(osmd, layerRef.current, strip ? panelRef.current : null); // no panel: lift cleared
       centerCursor('auto'); // a re-layout moves the cursor along the strip
     };
     osmdRef.current = osmd;
@@ -2278,30 +2305,42 @@ export function ScoreView() {
   const hints = !trainingWheels || watching || hesitating || atRunStart || !!wheelLive;
 
   // #5624: the notes to play now, as written, on a scrap of staff above the keyboard;
-  // clefs follow the hands (treble, bass, or both braced).
+  // one small staff over each hand's keys (#11091), with the notes as written (#11092).
   const miniStaff = useSettingsStore((s) => s.miniStaff);
   const mini = useMemo(() => {
     const osmd = osmdRef.current;
     const notes = (stepNotesRef.current[cursorStep] ?? []).filter((n) => !n.IsGraceNote);
+    const rests = stepRestsRef.current[cursorStep] ?? [];
     if (!miniStaff || status !== 'ready' || !osmd || notes.length === 0) return null;
+    const lengthOf = (n: OsmdNote) => miniDuration(n.TypeLength?.RealValue, n.DotsXml, n.Length?.RealValue);
     const bar = followerRef.current?.steps[cursorStep]?.measure ?? 1;
-    const part = (staff: number): MiniStaffPart => {
+    const part = (staff: number): MiniStaffPart & { pct: number } => {
+      const mine = notes.filter((n) => staffOf(n) === staff);
       const gm = osmd.GraphicSheet.MeasureList[bar - 1]?.[staff] as unknown as OsmdMeasure | undefined;
       const clef = gm ? (gm.InitiallyActiveClef?.ClefType === 1 ? 'bass' : 'treble') : staff === 1 ? 'bass' : 'treble';
       return {
         clef,
-        notes: notes.filter((n) => staffOf(n) === staff).flatMap((n) => {
+        // A hand that only rests sits over its usual octave: around C5 right, C3 left.
+        pct: mine.length
+          ? mine.reduce((sum, n) => sum + keyCenterPct(toMidi(n)), 0) / mine.length
+          : keyCenterPct(staff === 0 ? 72 : 48),
+        notes: mine.flatMap((n) => {
           const w = writtenOf(n);
           if (!w) return [];
           const accidental = w.alter > 0 ? 'sharp' as const : w.alter < 0 ? 'flat' as const : undefined;
-          return [{ note: w.letter, accidental, octave: w.octave, midiNumber: toMidi(n) }];
+          return [{
+            note: w.letter, accidental, octave: w.octave, midiNumber: toMidi(n), ...lengthOf(n),
+            finger: n.Fingering?.value?.trim() || undefined,
+            tie: !!n.NoteTie && n.NoteTie.StartNote === n,
+          }];
         }),
+        rest: (() => {
+          const r = rests.find((n) => staffOf(n) === staff);
+          return r ? lengthOf(r) : undefined;
+        })(),
       };
     };
-    const parts = miniStaffParts(part(0), part(1));
-    const midis = notes.map(toMidi);
-    const center = midis.reduce((sum, m) => sum + keyCenterPct(m), 0) / midis.length;
-    return { parts, center };
+    return miniStaffPlacements(part(0), part(1));
   }, [miniStaff, status, cursorStep, stepsVersion]);
   const finished = feedback.kind === 'complete';
   const lastBar = followerRef.current?.steps.at(-1)?.measure;
@@ -2882,7 +2921,12 @@ export function ScoreView() {
           className={strip ? 'relative -mx-6 -mb-6 shrink-0 bg-gray-950 px-1 py-1' : 'sticky bottom-0 z-20 -mx-2 rounded-t-md bg-gray-950 px-2 py-1'}
           data-testid="keyboard-strip"
         >
-          {mini && <MiniStaff parts={mini.parts} fifths={fifths} centerPct={mini.center} />}
+          {/* #11089: the mini staff gets its own band, so it never covers the music. */}
+          {miniStaff && (
+            <div className="relative -mx-1 bg-white" style={{ height: MINI_STAFF_BAND_PX }} data-testid="mini-staff-band">
+              {mini?.map((p) => <MiniStaff key={p.hand} part={p} fifths={fifths} pct={p.pct} align={p.align} />)}
+            </div>
+          )}
           <PianoKeyboard88
             heightRatio={20}
             green={new Set(watching ? watchNotes : hints ? stepKeys : [])}
