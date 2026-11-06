@@ -60,6 +60,16 @@ export function trustMark(trust: PieceTrust | undefined): string {
   }
 }
 
+/** #5571: what the badge means, in plain words, for its hover title. */
+export function trustTitle(trust: PieceTrust | undefined): string {
+  switch (trust?.status) {
+    case 'verified': return 'You compared this score with the printed page and marked it right';
+    case 'checked': return 'This score was compared with the printed page and matched';
+    case 'issues': return 'This score was compared with the printed page and has known mistakes';
+    default: return 'Nobody has compared this score with the printed page yet';
+  }
+}
+
 /** Return the label for a piece's trust status. */
 export function trustBadge(trust: PieceTrust | undefined): string {
   switch (trust?.status) {

@@ -138,6 +138,41 @@ def clear_of_score(page, what: str) -> None:
               (card, band))
 
 
+def score_wheel_check(page) -> None:
+    """#5630: with the switch off the wheel over a score note edits no finger; over a key it does."""
+    tc.load_piece("Tied hint (e2e)", SCORE)
+    time.sleep(2)
+    def wheel_on_note() -> bool:
+        width = page.viewport_size["width"] if page.viewport_size else page.evaluate("innerWidth")
+        heads = [b for b in (h.bounding_box() for h in page.query_selector_all(".vf-notehead"))
+                 if b and 40 < b["x"] < width - 60]
+        head = heads[0]
+        page.mouse.move(head["x"] + head["width"] / 2, head["y"] + head["height"] / 2)
+        time.sleep(0.3)
+        page.mouse.wheel(0, 120)
+        time.sleep(0.15)
+        return page.query_selector("[data-testid=finger-live]") is not None
+
+    page.check("[data-testid=score-wheel-fingers]")
+    check(wheel_on_note(), "#5630 switch on: the wheel over a score note edits its finger")
+    page.mouse.move(5, 5)
+    time.sleep(0.8)  # the edit commits; this is the test's own piece
+    page.uncheck("[data-testid=score-wheel-fingers]")
+    check(not wheel_on_note(), "#5630 switch off: the wheel over a score note edits no finger")
+    page.mouse.move(5, 5)
+    tc.request("POST", "/loop", {"firstBar": 1, "lastBar": 1})  # the cursor on the C-E-G chord
+    time.sleep(0.8)
+    box = page.query_selector("[data-midi='60']").bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] - 6)
+    time.sleep(0.3)
+    page.mouse.wheel(0, 120)
+    time.sleep(0.1)
+    check(page.query_selector("[data-testid=finger-live]") is not None, "#5630 switch off: the wheel over the key still edits the finger")
+    page.mouse.move(5, 5)
+    time.sleep(0.8)
+    tc.request("DELETE", "/loop")
+
+
 def tied(page) -> list[int]:
     return sorted(int(v) for v in page.eval_on_selector_all("[data-tied]", "els => els.map(e => e.dataset.tied)"))
 
@@ -175,6 +210,7 @@ def main() -> int:
         check(tied(page) == [], "a bar with no tie shows nothing", tied(page))
         tc.request("DELETE", "/loop")
         restrike_check(page)
+        score_wheel_check(page)
 
     print("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
     return 1 if FAILS else 0

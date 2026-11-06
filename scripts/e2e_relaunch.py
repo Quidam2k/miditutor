@@ -276,7 +276,7 @@ def phase_count(scratch: Path) -> None:
             page.evaluate("(n) => window.__miditutorDev.play(n)", note)
             page.wait_for_timeout(400)
         check(count.is_visible(), "#10240 practice count after he plays", page.locator("header").inner_text())
-        check(re.fullmatch(r"Practiced \d+:\d\d", count.inner_text()) is not None, "reads hours:minutes", count.inner_text())
+        check(re.fullmatch(r"Practiced \d+:\d\d:\d\d", count.inner_text()) is not None, "reads hours:minutes:seconds", count.inner_text())
         clock_checks(page)  # with the count beside the time
         page.screenshot(path=str(scratch / "top_bar_900.png"))
         page.reload()

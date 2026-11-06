@@ -63,6 +63,8 @@ interface SettingsState {
   missSound: boolean;
   /** #5624: the notes to play now on a scrap of staff just above the keyboard. */
   miniStaff: boolean;
+  /** #5630: the wheel over a note on the score changes its finger. Off: only over a key. */
+  scoreWheelFingers: boolean;
 
   /** Set any of the plain number/boolean preferences above. */
   setPrefs: (prefs: Partial<Pick<SettingsState, PrefKey>>) => void;
@@ -91,7 +93,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -133,6 +135,7 @@ export const useSettingsStore = create<SettingsState>()(
       celebrateFinale: true,
       missSound: true,
       miniStaff: true,
+      scoreWheelFingers: false,
       setPrefs: (prefs) => set(prefs),
       setReverseWheel: (on) => set({ reverseWheel: on }),
 

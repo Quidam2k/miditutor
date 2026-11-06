@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseTrust, trustBadge, trustFor, trustMark } from '../src/shared/trust';
+import { parseTrust, trustBadge, trustFor, trustMark, trustTitle } from '../src/shared/trust';
 
 describe('parseTrust', () => {
   it('returns an empty map for anything that is not an object', () => {
@@ -83,5 +83,14 @@ describe('parseTrust version flags (#9794)', () => {
     expect(parseTrust({
       'a.musicxml': { status: 'verified', note: '', score_sha256: 'abc', hide: true, no_mix: 'x' },
     })).toEqual({ 'a.musicxml': { status: 'verified', note: '', sha: 'abc' } });
+  });
+});
+
+describe('trust badge hover title (#5571)', () => {
+  it('says in plain words what "Not yet checked" means', () => {
+    expect(trustBadge(undefined)).toBe('Not yet checked');
+    expect(trustTitle(undefined)).toBe('Nobody has compared this score with the printed page yet');
+    expect(trustTitle({ status: 'unverified', note: '' })).toBe('Nobody has compared this score with the printed page yet');
+    expect(trustTitle({ status: 'issues', note: 'bar 3' })).toMatch(/known mistakes/);
   });
 });

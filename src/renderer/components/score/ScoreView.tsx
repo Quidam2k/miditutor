@@ -26,7 +26,7 @@ import { loadStartupSnapshot, restorable, type SessionSnapshot } from './session
 import { pickBars, pickHand, pickSightPiece } from '../../engine/SightRead';
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
-import { PieceTrust, trustBadge, trustMark } from '../../../shared/trust';
+import { PieceTrust, trustBadge, trustMark, trustTitle } from '../../../shared/trust';
 import type { MixChoice } from '../../../shared/mix';
 import type { PieceGroupRef } from '../../../shared/versions';
 import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
@@ -579,6 +579,8 @@ export function ScoreView() {
   const setShowKeyboard = useSettingsStore((s) => s.setShowKeyboard);
   const trainingWheels = useSettingsStore((s) => s.trainingWheels);
   const reverseWheel = useSettingsStore((s) => s.reverseWheel);
+  // #5630: off, the wheel over the score never edits a finger; over a key it still does.
+  const scoreWheelFingers = useSettingsStore((s) => s.scoreWheelFingers);
   const setReverseWheel = useSettingsStore((s) => s.setReverseWheel);
   const [remaining, setRemaining] = useState<number[]>([]);
   const [playHint, setPlayHint] = useState('');
@@ -1984,9 +1986,12 @@ export function ScoreView() {
   const setHoverTarget = (next: FingerTarget | null) =>
     setWheelTarget((was) => (was && next && sameTarget(was, next) ? was : next));
 
+  // The wheel over a score note edits its finger only with the switch on, not during
+  // Play it for me, and not while choosing a loop's bars.
+  const wheelOnScore = scoreWheelFingers && !watching && picking === 'off';
   const onScoreHover = (ev: React.MouseEvent) => {
     if (hoverKey !== null) setHoverKey(null);
-    const on = !watching && picking === 'off' && ev.target instanceof Element ? noteAt(ev.target, ev.clientY) : null;
+    const on = wheelOnScore && ev.target instanceof Element ? noteAt(ev.target, ev.clientY) : null;
     setHoverTarget(on);
   };
 
@@ -2016,7 +2021,7 @@ export function ScoreView() {
     const el = x < 0 ? null : document.elementFromPoint(x, y);
     const midi = el?.getAttribute('data-midi');
     if (midi) setHoverKey(Number(midi));
-    else if (el && containerRef.current?.contains(el) && !watching && picking === 'off') {
+    else if (el && containerRef.current?.contains(el) && wheelOnScore) {
       setHoverTarget(noteAt(el, y));
     }
   }, [drawn, layoutTick]);
@@ -2480,6 +2485,8 @@ export function ScoreView() {
         )}
         {/* Visible, not hover-only: what the OMR audit knows about this score (#9644). */}
         <span
+          data-testid="trust-badge"
+          title={piece.group?.label === 'My mix' ? undefined : trustTitle(piece.trust)}
           className={`text-xs ${
             piece.trust?.status === 'issues'
               ? 'text-amber-400'
@@ -2623,6 +2630,21 @@ export function ScoreView() {
             onChange={(e) => useSettingsStore.getState().setPrefs({ missSound: e.target.checked })}
           />
           Miss sound
+        </label>
+        <label
+          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+          title="On: the scroll wheel over a note on the score changes its finger. Off: it only does that over a key on the keyboard"
+        >
+          <input
+            type="checkbox"
+            data-testid="score-wheel-fingers"
+            checked={scoreWheelFingers}
+            onChange={(e) => {
+              useSettingsStore.getState().setPrefs({ scoreWheelFingers: e.target.checked });
+              if (!e.target.checked && hoverKey === null) setHoverTarget(null);
+            }}
+          />
+          Wheel fingers on score
         </label>
         {strip && (
           <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Turn the wheel the other way to move along the score">

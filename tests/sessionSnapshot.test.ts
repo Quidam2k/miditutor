@@ -63,9 +63,9 @@ describe('practice tally (#10240)', () => {
   });
 
   it('labels hours and minutes', () => {
-    expect(practiceLabel(0)).toBe('0:00');
-    expect(practiceLabel(7 * 60000 + 59000)).toBe('0:07');
-    expect(practiceLabel(83 * 60000)).toBe('1:23');
+    expect(practiceLabel(0)).toBe('0:00:00');
+    expect(practiceLabel(7 * 60000 + 59000)).toBe('0:07:59');
+    expect(practiceLabel(83 * 60000 + 4500)).toBe('1:23:04');
   });
 
   it('reads back only a good tally', () => {

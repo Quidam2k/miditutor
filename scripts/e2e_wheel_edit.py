@@ -558,6 +558,7 @@ def main() -> int:
         page.wait_for_timeout(1500)
         page.get_by_role("button", name="Score", exact=True).click()
         page.wait_for_selector("[data-testid=loop-bars]", timeout=30000)
+        page.check("[data-testid=score-wheel-fingers]")  # #5630: off by default
         page.wait_for_function("() => [...document.querySelector('select').options].some((o) => o.value.includes('sorcerers'))", timeout=30000)
         page.locator("select").first.select_option("file:sorcerers-apprentice.musicxml")
         page.wait_for_function("() => document.querySelectorAll('.vf-notehead').length > 50", timeout=60000)

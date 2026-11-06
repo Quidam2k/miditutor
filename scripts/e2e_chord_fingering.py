@@ -111,6 +111,7 @@ def main() -> int:
         page.reload()  # this session's edits live in memory too: read the copy fresh
         page.get_by_role("button", name="Score", exact=True).click()
         page.wait_for_selector("[data-testid=loop-bars]", timeout=30000)
+        page.check("[data-testid=score-wheel-fingers]")  # #5630: off by default
         page.wait_for_timeout(1500)
         sel = page.locator("select").first
         value = sel.evaluate(

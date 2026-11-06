@@ -17,10 +17,11 @@ export function tallyNote(t: PracticeTally | null, now: number): PracticeTally {
   return { lastNoteAt: now, totalMs: t.totalMs + (gap < 0 || gap > PRACTICE_IDLE_MS ? 0 : gap) };
 }
 
-/** The count, as "0:07" (hours:minutes). */
+/** The count, as "0:07:42" (hours:minutes:seconds, #5380). */
 export function practiceLabel(totalMs: number): string {
-  const minutes = Math.floor(totalMs / 60000);
-  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}`;
+  const seconds = Math.floor(Math.max(0, totalMs) / 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${Math.floor(seconds / 3600)}:${pad(Math.floor(seconds / 60) % 60)}:${pad(seconds % 60)}`;
 }
 
 export function parseTally(raw: string | null): PracticeTally | null {
