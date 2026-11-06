@@ -17,6 +17,8 @@ export interface PlayedMark {
   wrong?: boolean;
   /** The key he struck; a wrong mark goes away when it is released (#9630). */
   midi?: number;
+  /** #5568: the tie note this paints ("step:index"), so it is painted once. */
+  tie?: string;
 }
 
 /** A shaded rectangle (px, relative to the overlay layer). */

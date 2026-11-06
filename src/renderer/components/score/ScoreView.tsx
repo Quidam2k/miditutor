@@ -473,6 +473,8 @@ export function ScoreView() {
   const stepNotesRef = useRef<OsmdNote[][]>([]);
   const ringNotesRef = useRef<OsmdNote[][]>([]);
   const tieNotesRef = useRef<OsmdNote[][]>([]);
+  // #5568: the step he just finished, whose ties a late re-strike still paints.
+  const tieLeftRef = useRef<number | null>(null);
   const stepChordsRef = useRef<(StepChord | null)[]>([]);
   const stepRestRef = useRef<boolean[]>([]);
   // #9976: notices the pedal lifted before the next note (a gap in the sound).
@@ -897,21 +899,25 @@ export function ScoreView() {
 
   // #10136: as the cursor moves from `from` to `to`, a tied note he is still sounding
   // (key down or pedal) turns blue like a struck one. One he let go of stays black.
+  // #5568: so does one he strikes again (`struck`), at the step he is on or the one he
+  // just left: the loop's first step is checked as the cursor lands, before he plays it.
   const paintHeldTies = useCallback(
-    (from: number, to: number) => {
+    (from: number, to: number, struck?: number) => {
       const ties = tieNotesRef.current;
       const osmd = osmdRef.current;
+      const sounding = struck === undefined ? soundingNow() : new Set([struck]);
       // A held note under an 8va (#10146) rings as the pitch he holds where it is drawn.
-      const pitchesOf = (n: OsmdNote, sounding: Set<number>) => {
+      const pitchesOf = (n: OsmdNote) => {
         const shift = osmd ? shiftOf(osmd, n) : 0;
         return shift && sounding.has(toMidi(n) - shift) ? toMidi(n) - shift : toMidi(n);
       };
-      const sounding = soundingNow();
-      const picks = heldTies(ties.map((t) => t.map((n) => pitchesOf(n, sounding))), from, to, sounding);
-      const added = picks
-        .map(({ step, index }) => placePlayed(step, toMidi(ties[step][index]), false, ties[step][index]))
-        .filter((m): m is PlayedMark => m !== null);
-      if (added.length) setMarks((m) => [...m, ...added]);
+      const picks = heldTies(ties.map((t) => t.map(pitchesOf)), from, to, sounding);
+      const added = picks.flatMap(({ step, index }): PlayedMark[] => {
+        const mark = placePlayed(step, toMidi(ties[step][index]), false, ties[step][index]);
+        return mark ? [{ ...mark, tie: `${step}:${index}` }] : [];
+      });
+      // A tie already painted (held, then struck again) is not drawn twice.
+      if (added.length) setMarks((m) => [...m, ...added.filter((a) => !m.some((k) => k.tie === a.tie))]);
     },
     [placePlayed],
   );
@@ -1652,6 +1658,9 @@ export function ScoreView() {
       f.minVelocity = prefs.minVelocity;
       // #5516: a stray must not confirm a carry (that could finish a lap); skip settling.
       const settled = f.strayCheck(ev.note, ev.timestamp, ev.velocity) ? null : f.settle(ev.timestamp, keysDown);
+      // #5568: the step a late tie re-strike may still paint; a lap wrap clears the page.
+      if (settled?.kind === 'advance' || settled?.kind === 'complete') tieLeftRef.current = settled.from;
+      else if (settled?.kind === 'loop') tieLeftRef.current = null;
       if (settled?.kind === 'advance' || settled?.kind === 'loop') {
         if (settled.kind === 'loop') setMarks([]);
         moveCursorTo(settled.to);
@@ -1684,6 +1693,17 @@ export function ScoreView() {
         reportEvent('pedal-gap', { bar: gap.bar, step: gap.step, gapMs: gap.gapMs, next: playedName, text });
       }
       const result = f.noteOn(ev.note, ev.timestamp, keysDown, ev.velocity);
+      // #5568: a tied note struck again turns blue, here or at the step he just left
+      // (only steps with nothing to play lie between: he has not played on yet).
+      if (result.kind === 'ignored') {
+        paintHeldTies(idx - 1, idx, ev.note);
+        const left = tieLeftRef.current;
+        if (left !== null && left < idx && f.steps.slice(left + 1, idx).every((s) => s.notes.length === 0)) {
+          paintHeldTies(left - 1, left, ev.note);
+        }
+      }
+      if (result.kind === 'advance' || result.kind === 'complete') tieLeftRef.current = result.from;
+      else if (result.kind !== 'ignored' && result.kind !== 'stray' && result.kind !== 'wrong') tieLeftRef.current = null;
       // A stray (#5516) earns nothing; like a wrong note it only shows red and spoils the lap.
       const credited = result.kind !== 'wrong' && result.kind !== 'ignored' && result.kind !== 'stray';
       if (result.kind !== 'ignored') {

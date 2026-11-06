@@ -73,6 +73,10 @@ export class ScoreFollower {
   // #9993: the chord he just finished. He replays a whole chord after a miss, so a
   // note of it landing just after the advance is not wrong, until he plays on.
   private prevStruck = new Set<number>();
+  // #5568: written notes still sounding at the step he just finished (a tied chord he
+  // strikes a moment after the melody note that finished the step). Not wrong, and not
+  // a graze, at the next step, until he plays on.
+  private prevRinging = new Set<number>();
   // #9999: notes of the current step that may carry, decided at his next strike.
   private pendingCarry = new Set<number>();
   // #9994: set by a wrong note on this step; credit then counts only a clean chord.
@@ -213,6 +217,7 @@ export class ScoreFollower {
 
     this.satisfiedNotes.add(midi);
     this.prevStruck.clear();
+    this.prevRinging.clear();
     this.lastHitMs = timeMs;
 
     if (this.satisfiedNotes.size < expected.length) {
@@ -252,7 +257,8 @@ export class ScoreFollower {
 
   /** Not asked for here, but no mistake: carried, just struck, or still ringing. */
   private harmless(midi: number): boolean {
-    return this.prevCarried.has(midi) || this.prevStruck.has(midi) || !!this.steps[this.currentIndex].ringing?.includes(midi);
+    return this.prevCarried.has(midi) || this.prevStruck.has(midi) || this.prevRinging.has(midi) ||
+      !!this.steps[this.currentIndex].ringing?.includes(midi);
   }
 
   seek(i: number): void {
@@ -263,6 +269,7 @@ export class ScoreFollower {
     this.satisfiedNotes.clear();
     this.prevCarried.clear();
     this.prevStruck.clear();
+    this.prevRinging.clear();
     this.pendingCarry.clear();
     this.missed = false;
     this.lastFinishMs = -Infinity;
@@ -331,6 +338,7 @@ export class ScoreFollower {
     this.completeStep(done, timeMs);
     this.prevCarried.clear();
     for (const note of this.steps[done].notes) this.prevStruck.add(note);
+    this.prevRinging = new Set(this.steps[done].ringing ?? []);
     // Never carry across a lap wrap: the note just struck would cover its own step.
     if (this.moveOn(done)) return true;
     if (!this.finished) {

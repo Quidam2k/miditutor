@@ -131,3 +131,45 @@ describe('ScoreFollower graze and velocity filtering (#5516)', () => {
     expect(follower.noteOn(60, 1010)).toMatchObject({ kind: 'advance', from: 1, to: 2 });
   });
 });
+
+describe('a tied chord struck just after the melody note (#5568)', () => {
+  // Sorcerer's Apprentice bar 32, the loop's first step: the left hand's B2-Eb3-G3 is
+  // tied over from bar 31 and ends before the next eighth. He re-strikes it with the G4.
+  const bar32 = (): ScoreStep[] => [
+    { notes: [67], beat: 0, measure: 32, ringing: [47, 51, 55] },
+    { notes: [65], beat: 0.5, measure: 32, ringing: [] },
+    { notes: [63, 55, 51, 58], beat: 1, measure: 32, ringing: [] },
+  ];
+
+  it('is not a graze when it lands a few ms after the G4 (logged 11/5: 31 lost laps)', () => {
+    const follower = new ScoreFollower(bar32());
+    follower.setRange(0, 2);
+    expect(follower.noteOn(67, 1000)).toMatchObject({ kind: 'advance', from: 0, to: 1 });
+    expect(follower.noteOn(55, 1005)).toMatchObject({ kind: 'ignored' });
+    expect(follower.noteOn(51, 1007)).toMatchObject({ kind: 'ignored' });
+    expect(follower.noteOn(47, 1009)).toMatchObject({ kind: 'ignored' });
+    expect(follower.noteOn(65, 1300)).toMatchObject({ kind: 'advance', from: 1, to: 2 });
+  });
+
+  it('is ignored when struck before the G4, as it always was', () => {
+    const follower = new ScoreFollower(bar32());
+    follower.setRange(0, 2);
+    expect(follower.noteOn(55, 1000)).toMatchObject({ kind: 'ignored' });
+    expect(follower.noteOn(67, 1004)).toMatchObject({ kind: 'advance', to: 1 });
+  });
+
+  it('still calls a key outside the chord a graze', () => {
+    const follower = new ScoreFollower(bar32());
+    follower.setRange(0, 2);
+    follower.noteOn(67, 1000);
+    expect(follower.noteOn(57, 1006)).toMatchObject({ kind: 'stray', reason: 'graze' });
+  });
+
+  it('counts again once he has played on: a late re-strike two steps on is wrong', () => {
+    const follower = new ScoreFollower(bar32());
+    follower.setRange(0, 2);
+    follower.noteOn(67, 1000);
+    follower.noteOn(65, 1300);
+    expect(follower.noteOn(47, 1600)).toMatchObject({ kind: 'wrong' });
+  });
+});

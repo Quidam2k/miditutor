@@ -43,6 +43,55 @@ SCORE = f"""<?xml version="1.0" encoding="UTF-8"?>
 </part></score-partwise>"""
 
 
+# #5568, Sorcerer's Apprentice bar 32: a left-hand B2-Eb3-G3 tied in from bar 1 under a
+# right-hand G4 F4 Eb4 D4. He strikes the chord just after the G4 (strike() spaces keys 20 ms).
+def lh(step: str, octave: int, kind: str, tie: str | None = None, chord: bool = False, alter: int = 0) -> str:
+    alt = f"<alter>{alter}</alter>" if alter else ""
+    return note(step, octave, kind, tie, chord).replace("<voice>1</voice>", "<voice>5</voice><staff>2</staff>").replace(
+        f"<step>{step}</step>", f"<step>{step}</step>{alt}")
+
+
+LH_CHORD = lambda kind, tie: lh("B", 2, kind, tie) + lh("E", 3, kind, tie, True, -1) + lh("G", 3, kind, tie, True)
+REST = '<note><rest/><duration>{d}</duration><voice>{v}</voice><type>{t}</type>{s}</note>'
+SCORE2 = f"""<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1"><part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+<part id="P1">
+<measure number="1"><attributes><divisions>4</divisions><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves>
+<clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>
+{REST.format(d=16, v=1, t="whole", s="")}<backup><duration>16</duration></backup>{LH_CHORD("whole", "start")}</measure>
+<measure number="2">{"".join(note(s_, 4, "quarter") for s_ in "GFED")}<backup><duration>16</duration></backup>
+{LH_CHORD("quarter", "stop")}{REST.format(d=12, v=5, t="half", s="<dot/><staff>2</staff>")}</measure>
+</part></score-partwise>"""
+
+
+def blue_marks(page) -> int:
+    return page.eval_on_selector_all("[data-testid=played-overlay] ellipse", "els => els.filter(e => e.getAttribute('fill') === '#2563eb').length")
+
+
+def restrike_check(page) -> None:
+    tc.load_piece("Tied restrike (e2e)", SCORE2)
+    time.sleep(3)
+    tc.request("POST", "/loop", {"firstBar": 2, "lastBar": 2})
+    time.sleep(1)
+    since = tc.state().get("eventSeq", 0)
+    strike([67, 47, 51, 55])  # G4, then the tied chord 20-60 ms later
+    for _ in range(20):  # a hidden window paints lazily
+        if blue_marks(page) >= 4:
+            break
+        time.sleep(0.1)
+    check(blue_marks(page) == 4, "G4 plus the struck tied chord are blue", blue_marks(page))
+    events = tc.request("GET", f"/events?since={since}")["events"]
+    results = [e.get("result") for e in events if e.get("kind") == "follow"]
+    check("stray" not in results and "wrong" not in results, "the chord is no graze", results)
+    for n in (65, 64, 62):
+        strike([n])
+        time.sleep(0.15)
+    time.sleep(0.4)
+    chunk = [e for e in tc.request("GET", f"/events?since={since}")["events"] if e.get("kind") == "lap"]
+    check(len(chunk) == 1, "lap wrapped", chunk)
+    tc.request("DELETE", "/loop")
+
+
 def tied(page) -> list[int]:
     return sorted(int(v) for v in page.eval_on_selector_all("[data-tied]", "els => els.map(e => e.dataset.tied)"))
 
@@ -79,6 +128,7 @@ def main() -> int:
         time.sleep(1)
         check(tied(page) == [], "a bar with no tie shows nothing", tied(page))
         tc.request("DELETE", "/loop")
+        restrike_check(page)
 
     print("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
     return 1 if FAILS else 0
