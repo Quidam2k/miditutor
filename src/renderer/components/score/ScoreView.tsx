@@ -39,6 +39,8 @@ import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
 import { startBare, bareNote, bareMiss, closeBar, BARE_MS, type BareRun } from '../../engine/TrainingWheels';
 import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
+import { ZoneOverlay, type ZoneBand, type ZoneMark } from './ZoneOverlay';
+import { fishingShifts, handZones, type Shift } from '../../engine/HandZones';
 import { MixBuilder } from './MixBuilder';
 import { OriginalScan, useScanLayout } from './OriginalScan';
 import { holdsOf, setFingering, setHold, type Digit, type FingerTarget } from '../../../shared/fingering';
@@ -592,6 +594,11 @@ export function ScoreView() {
   const freshRef = useRef<{ id: string; key: string; label: string } | null>(null);
   // #11354 item 3: five minutes on this piece with every hint off (see startBareRun).
   const [bare, setBare] = useState<BareRun | null>(null);
+  // #11354 item 4: hand zones on the score (see the effect by startBlock).
+  const [zonesOn, setZonesOn] = useState(false);
+  // A finger swapped in place (no re-layout) can still move a position boundary.
+  const [zoneTick, setZoneTick] = useState(0);
+  const [zones, setZones] = useState<{ bands: ZoneBand[]; marks: ZoneMark[]; right: number; left: number; shifts: Shift[] } | null>(null);
   const bareRef = useRef<BareRun | null>(null);
   const [bareLeft, setBareLeft] = useState(0);
   const [bareMsg, setBareMsg] = useState('');
@@ -913,6 +920,9 @@ export function ScoreView() {
             };
           })()
         : null,
+      handZones: zones
+        ? { right: zones.right, left: zones.left, bands: zones.bands.length, shifts: zones.shifts.map((z) => ({ hand: z.hand, bar: z.bar, semitones: z.semitones })) }
+        : null,
       pickingLoop: picking === 'off' ? null : picking,
       playedMarks: marks.length,
       wrongMarks: marks.filter((m) => m.wrong).length,
@@ -920,7 +930,7 @@ export function ScoreView() {
       expressionMarks: exprMarks.slice(0, 40),
       expression: exprFindings,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block]);
+  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1267,12 +1277,11 @@ export function ScoreView() {
   };
 
   // #5657c: the loop's notes grouped into hand positions; `at` resumes after a fingering reload.
-  const startBlock = useCallback((bars: { first: number; last: number }, at = 0) => {
-    const f = followerRef.current;
-    if (!f) return;
+  // The follower's steps in bars first..last, each note with its hand and written finger.
+  const blockSteps = useCallback((first: number, last: number): BlockStep[] => {
     const steps: BlockStep[] = [];
-    f.steps.forEach((s, i) => {
-      if (s.measure < bars.first || s.measure > bars.last) return;
+    followerRef.current?.steps.forEach((s, i) => {
+      if (s.measure < first || s.measure > last) return;
       const notes = (stepNotesRef.current[i] ?? []).filter((n) => !n.IsGraceNote).map((n) => ({
         midi: toMidi(n),
         hand: staffOf(n) === 0 ? ('R' as const) : ('L' as const),
@@ -1280,14 +1289,98 @@ export function ScoreView() {
       }));
       steps.push({ step: i, bar: s.measure, notes });
     });
-    const positions = groupPositions(steps);
+    return steps;
+  }, []);
+  const startBlock = useCallback((bars: { first: number; last: number }, at = 0) => {
+    if (!followerRef.current) return;
+    const positions = groupPositions(blockSteps(bars.first, bars.last));
     if (!positions.length) return;
     const held = useMidiStore.getState().held;
     const i = Math.min(at, positions.length - 1);
     setBlock({ ...startBlocking(positions, held), at: i, armed: !positions[i].keys.some((k) => held.has(k)) });
     moveCursorTo(positions[i].firstStep);
     reportEvent('block', { on: true, firstBar: bars.first, lastBar: bars.last, positions: positions.length, at: i });
-  }, [moveCursorTo, setBlock]);
+  }, [moveCursorTo, setBlock, blockSteps]);
+
+  // #11354 item 4 (JP homework 11/6: "see which fingers are moving where and how to set things
+  // down so that you can reach the most notes possible without fishing"): each hand's positions
+  // shaded on its staff, and a mark where a hand jumps 5+ keys with no rest before it.
+  useEffect(() => {
+    const osmd = osmdRef.current;
+    const container = containerRef.current;
+    const layer = layerRef.current;
+    const f = followerRef.current;
+    // The photo view hides the score: nothing to measure until it's back.
+    if (!zonesOn || !osmd || !container || !layer || !f || status !== 'ready' || view !== 'score') {
+      setZones(null);
+      return;
+    }
+    try {
+      const handOf = (n: OsmdNote) => (staffOf(n) === 0 ? 'R' : 'L');
+      const layerRect = layer.getBoundingClientRect();
+      const space = 10 * osmd.Zoom;
+      // A step's first head for one hand: its x, and the top line of its staff, px in the layer.
+      const placeOf = (step: number, h: 'L' | 'R') => {
+        const bar = f.steps[step]?.measure;
+        const note = (stepNotesRef.current[step] ?? []).find((n) => !n.IsGraceNote && handOf(n) === h);
+        if (bar === undefined || !note) return null;
+        const svg = pageSvgOf(osmd, container, bar - 1);
+        const gm = osmd.GraphicSheet.MeasureList[bar - 1]?.[staffOf(note)] as unknown as OsmdMeasure | undefined;
+        const top = gm?.ParentStaffLine?.PositionAndShape.AbsolutePosition.y;
+        const g = osmd.EngravingRules.GNote(note as never) as unknown as OsmdGraphicalNote | undefined;
+        const el = g?.getSVGGElement?.();
+        const head = el?.querySelector('.vf-notehead') ?? el;
+        if (!svg || top === undefined || !head) return null;
+        const r = head.getBoundingClientRect();
+        return { x: r.left + r.width / 2 - layerRect.left, top: svg.getBoundingClientRect().top - layerRect.top + top * space };
+      };
+      const steps = blockSteps(1, Number.MAX_SAFE_INTEGER);
+      const bands: ZoneBand[] = [];
+      const marks: ZoneMark[] = [];
+      const shifts: Shift[] = [];
+      const count = { R: 0, L: 0 };
+      for (const h of ['R', 'L'] as const) {
+        const zs = handZones(steps, h);
+        count[h] = zs.length;
+        for (const z of zs) {
+          // One band per line of music the position runs across.
+          let run: { x0: number; x1: number; top: number } | null = null;
+          const flush = () => {
+            if (run) bands.push({ x: run.x0 - space, y: run.top - space, w: run.x1 - run.x0 + 2 * space, h: 6 * space, hand: h, index: z.index });
+          };
+          for (const st of z.steps) {
+            const pl = placeOf(st, h);
+            if (!pl) continue;
+            if (run && Math.abs(pl.top - run.top) < 1 && pl.x >= run.x0) run.x1 = Math.max(run.x1, pl.x);
+            else {
+              flush();
+              run = { x0: pl.x, x1: pl.x, top: pl.top };
+            }
+          }
+          flush();
+        }
+        const rests = new Set<number>();
+        stepRestsRef.current.forEach((rs, i) => {
+          if (rs?.some((r) => handOf(r) === h)) rests.add(i);
+        });
+        for (const sh of fishingShifts(zs, rests)) {
+          shifts.push(sh);
+          const pl = placeOf(sh.step, h);
+          if (!pl) continue;
+          marks.push({
+            x: pl.x - space * 1.2,
+            y: h === 'R' ? pl.top - space * 1.8 : pl.top + space * 5.8,
+            size: space * 0.7,
+            title: `${h === 'R' ? 'Right' : 'Left'} hand jumps ${sh.semitones} keys here (bar ${sh.bar}) with no rest before it: plan where it lands`,
+          });
+        }
+      }
+      setZones({ bands, marks, right: count.R, left: count.L, shifts });
+    } catch (err) {
+      console.warn('[zones] could not draw hand zones', err);
+      setZones(null);
+    }
+  }, [zonesOn, status, layoutTick, stepsVersion, blockSteps, view, zoneTick]);
   const startBlockRef = useRef(startBlock);
   startBlockRef.current = startBlock;
   const toggleBlock = () => {
@@ -2320,7 +2413,10 @@ export function ScoreView() {
     if (mark && digit) {
       const was = mark.value;
       mark.value = digit;
-      if (swapFingerLabel(osmd, note, was, digit)) return true;
+      if (swapFingerLabel(osmd, note, was, digit)) {
+        setZoneTick((t) => t + 1);
+        return true;
+      }
     } else if (mark) {
       marks.splice(marks.indexOf(mark), 1);
       note.Fingering = null;
@@ -3027,6 +3123,22 @@ export function ScoreView() {
               {block ? 'Block: on' : 'Block'}
             </button>
           )}
+          <button
+            onClick={() => setZonesOn((z) => !z)}
+            disabled={status !== 'ready'}
+            aria-pressed={zonesOn}
+            className={`${btn} ${zonesOn ? 'ring-2 ring-sky-400' : ''}`}
+            title="JP: see which fingers move where. Each hand position is shaded on its staff; a red mark is a jump of 5+ keys with no rest before it, where you'd be fishing."
+            data-testid="hand-zones"
+          >
+            Hand zones
+          </button>
+          {zones && (
+            <span data-testid="zones-msg" className="text-xs text-sky-300">
+              Right {zones.right} position{zones.right === 1 ? '' : 's'}, left {zones.left};{' '}
+              {zones.shifts.length ? `${zones.shifts.length} jump${zones.shifts.length === 1 ? '' : 's'} to plan` : 'no jumps'}
+            </span>
+          )}
           {/* While it plays for him, the timer owns the cursor. */}
           <button onClick={prevStep} disabled={status !== 'ready' || watching} className={btn}>
             ◀ Prev
@@ -3229,6 +3341,7 @@ export function ScoreView() {
               alignItems: 'start',
             } : undefined}
           />
+          {zones && <ZoneOverlay bands={zones.bands} marks={zones.marks} />}
           <PlayedOverlay marks={marks} bands={bands} />
           {wave && <WaveOverlay key={wave.key} dots={wave.dots} peak={wave.peak} />}
         </div>
