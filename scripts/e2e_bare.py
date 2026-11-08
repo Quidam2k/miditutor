@@ -106,6 +106,15 @@ def main():
         # The tune shows a beat before its notes are judged; let it settle.
         time.sleep(1.5)
         check(fresh_ready(), "fresh tune is ready")
+        # Key first (JP 10/9): every pitch class clears any signature's gate.
+        if page.get_by_test_id("key-first").count():
+            for n in range(60, 72):
+                send("noteon", n)
+                send("noteoff", n)
+                time.sleep(0.15)
+                if not page.get_by_test_id("key-first").count():
+                    break
+        check(page.get_by_test_id("key-first").count() == 0, "key-first gate cleared")
         next_notes = page.get_by_test_id("next-notes")
         check("…" in next_notes.inner_text(), "new-piece hints are hidden")
 

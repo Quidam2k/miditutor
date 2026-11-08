@@ -67,6 +67,11 @@ def open_notes(page) -> None:
     page.get_by_role("button", name="Practice", exact=True).click()
     page.get_by_role("button", name="Notes", exact=True).click()
     page.wait_for_selector("[data-testid=note-trainer][data-note-id]", timeout=15000)
+    # Key first (JP 10/9) is on by default; these drills test the notes, so it goes off (e2e_key_first.py tests it).
+    toggle = page.get_by_text("Key first:")
+    if "on" in toggle.inner_text():
+        toggle.click()
+        page.wait_for_timeout(200)
 
 
 def opened(p):

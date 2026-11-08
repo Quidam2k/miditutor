@@ -20,6 +20,7 @@ import { dueNotes, pickWithReview, recordReview } from '../../engine/Review';
 import { drillPool, liveMixUps, mixUpKind, mixUpLabel, recordMixUp, recordRight } from '../../engine/MixUps';
 import { MajorKey, midiNumberToPitch, pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
 import { Pitch } from '../../types/music';
+import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
 import { EMPTY_RECORD, TrainerRecord, readRecord, saveRecord } from '../../store/noteRecord';
 import { playNote, initAudio, isInitialized } from '../../audio/AudioEngine';
 
@@ -63,6 +64,9 @@ export function NoteExercise() {
   const [drillDone, setDrillDone] = useState(false);
   // #5652 A: the note the ladder last added, said once in its panel.
   const [ladderNew, setLadderNew] = useState<string | null>(null);
+  // JP 10/9 "Key first": a new key's sharps or flats are played before its first note shows.
+  const [gate, setGate] = useState<KeyGate | null>(null);
+  const gateRef = useRef<KeyGate | null>(null);
 
   const ask = useCallback((isTimed: boolean) => {
     if (timer.current) clearTimeout(timer.current);
@@ -111,6 +115,9 @@ export function NoteExercise() {
     answering.current = true;
     // A new signature takes reading first: that isn't this note's time.
     timed.current = isTimed && !newKey;
+    const kf = newKey && keyRef.current && useSettingsStore.getState().keyFirst ? keyGate(keyRef.current.fifths) : null;
+    gateRef.current = kf;
+    setGate(kf);
     presentedAt.current = Date.now();
     setMusicKey(keyRef.current);
     setCurrent(next);
@@ -139,6 +146,15 @@ export function NoteExercise() {
     if (timer.current) clearTimeout(timer.current);
   }, []);
 
+  // Key first switched off mid-gate: show the note now.
+  const keyFirst = useSettingsStore((st) => st.keyFirst);
+  useEffect(() => {
+    if (keyFirst || !gateRef.current) return;
+    gateRef.current = null;
+    setGate(null);
+    presentedAt.current = Date.now();
+  }, [keyFirst]);
+
   // Audio needs a click (autoplay policy), and there's no Start button to supply one any more.
   // Listen whether Audio is on or not: the click that turns it on is the one that has to count.
   useEffect(() => {
@@ -160,6 +176,20 @@ export function NoteExercise() {
       const ev = state.lastNoteOn;
       const asked = currentRef.current;
       if (!ev || ev === prev.lastNoteOn || !asked || !answering.current) return;
+      if (gateRef.current) {
+        const { gate: g, event } = keyGateInput(gateRef.current, ev.note);
+        if (event === 'done') {
+          // He has the key now: the note shows, and its time counts.
+          gateRef.current = null;
+          setGate(null);
+          timed.current = true;
+          presentedAt.current = Date.now();
+          return;
+        }
+        gateRef.current = g;
+        setGate(g);
+        return;
+      }
       answering.current = false;
 
       const correct = ev.note === asked.pitch.midiNumber;
@@ -258,16 +288,31 @@ export function NoteExercise() {
       data-midi={current?.pitch.midiNumber}
       data-key={musicKey?.name}
       data-drilling={drilling ? '1' : undefined}
+      data-gate={gate ? '1' : undefined}
     >
       <div className="relative w-full max-w-2xl">
         <StaffDisplay
-          notes={current ? [current.pitch] : []}
+          notes={current && !gate ? [current.pitch] : []}
           clef={current?.clef ?? (trainerClef === 'bass' ? 'bass' : 'treble')}
           highlightColor={feedback?.correct ? 'green' : null}
           wrongNotes={feedback?.wrong}
           musicKey={musicKey}
         />
       </div>
+
+      {gate && musicKey && (
+        <div data-testid="note-key-first" className="flex items-center gap-3 text-lg">
+          <span className="text-gray-200">
+            {musicKey.name} major: {gateAsk(gate.fifths)}
+          </span>
+          {gateShown(gate).map((n, i) => (
+            <span key={i} className={`w-10 text-center rounded py-0.5 font-semibold ${n === '?' ? 'bg-gray-700 text-gray-400' : 'bg-emerald-700 text-white'}`}>
+              {n}
+            </span>
+          ))}
+          {gate.wrong !== null && <span className="text-red-400 text-sm">not in this key</span>}
+        </div>
+      )}
 
       <div
         data-testid="note-feedback"

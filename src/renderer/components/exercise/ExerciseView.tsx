@@ -10,7 +10,7 @@ export function ExerciseView() {
   const {
     exerciseType, setExerciseType, clef, setClef, audioEnabled, setAudioEnabled, showNoteNames, setShowNoteNames,
     trainerClef, setTrainerClef, trainerAccidentals, setTrainerAccidentals, trainerLadder, setTrainerLadder,
-    intervalNameIt, setIntervalNameIt,
+    intervalNameIt, setIntervalNameIt, keyFirst, setPrefs,
   } = useSettingsStore();
 
   return (
@@ -46,6 +46,12 @@ export function ExerciseView() {
                   title="On: a random key signature, and notes flagged only when the key needs it. Off: C major, white keys only."
                   checked={trainerAccidentals}
                   onChange={setTrainerAccidentals}
+                />
+                <Toggle
+                  label="Key first"
+                  title="With Keys on: each new key's sharps or flats are played first (any octave, any order) before its first note shows. JP 10/9: work the key out before you read."
+                  checked={keyFirst}
+                  onChange={(on) => setPrefs({ keyFirst: on })}
                 />
                 <Toggle
                   label="Ladder"

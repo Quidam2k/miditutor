@@ -64,6 +64,8 @@ interface SettingsState {
   trainingWheels: boolean;
   /** #11354: Fresh tunes and Sight-read picks start with no hints; a miss brings them back. */
   hintsOffNew: boolean;
+  /** JP 10/9: before reading in a new key, play its sharps or flats (Notes Keys mode, new pieces in Score). */
+  keyFirst: boolean;
   /** #5521 clean-run celebrations, each on its own: a ding per clean lap, a glow wave, a finale. */
   celebrateChime: boolean;
   celebrateWave: boolean;
@@ -110,7 +112,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -152,6 +154,7 @@ export const useSettingsStore = create<SettingsState>()(
       keepAwake: true,
       trainingWheels: false,
       hintsOffNew: true,
+      keyFirst: true,
       celebrateChime: true,
       celebrateWave: false,
       celebrateFinale: true,

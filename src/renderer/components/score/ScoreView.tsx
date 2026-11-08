@@ -24,6 +24,7 @@ import { orderChordFingers } from './chordFingers';
 import { renderBinderHtml } from './binderRender';
 import { fingersLowToHigh, nextFinger, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, grewLabel, lapDone, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
+import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
 import { blockInput, blockLabel, current as blockPosition, groupPositions, showKeys, startBlocking, type BlockState, type BlockStep } from '../../engine/Blocking';
 import { BarInput } from './BarInput';
 import { loadStartupSnapshot, restorable, type SessionSnapshot } from './sessionSnapshot';
@@ -872,6 +873,30 @@ export function ScoreView() {
   const latestXmlRef = useRef(piece.xml);
   latestXmlRef.current = piece.xml;
   const fifths = useMemo(() => fifthsOf(piece.xml), [piece.xml]);
+  // JP 10/9 "Key first": a new piece (fresh tune, sight-read pick) opens with its key signature's
+  // sharps or flats to play before the score takes notes. Armed once per piece.
+  const [keyGateNow, setKeyGateState] = useState<KeyGate | null>(null);
+  const keyGateRef = useRef<KeyGate | null>(null);
+  const setKeyGate = useCallback((g: KeyGate | null) => {
+    keyGateRef.current = g;
+    setKeyGateState(g);
+  }, []);
+  const keyGateForRef = useRef<string | null>(null);
+  // The last key the gate took, so the follower never also judges it (listener order isn't fixed).
+  const keyGateEvRef = useRef<unknown>(null);
+  const keyFirst = useSettingsStore((s) => s.keyFirst);
+  useEffect(() => {
+    if (keyGateForRef.current === piece.id) {
+      if (!keyFirst && keyGateRef.current) setKeyGate(null);
+      return;
+    }
+    if (keyGateRef.current) setKeyGate(null);
+    if (!quietNew || !keyFirst) return;
+    keyGateForRef.current = piece.id;
+    const g = keyGate(fifths);
+    setKeyGate(g);
+    if (g) reportEvent('key-first', { event: 'asked', fifths });
+  }, [piece.id, quietNew, keyFirst, fifths, setKeyGate]);
   const pieceLabelRef = useRef(piece.label);
   pieceLabelRef.current = piece.label;
 
@@ -2024,6 +2049,8 @@ export function ScoreView() {
       if (!f || status !== 'ready') return;
       // #5657c: while blocking, the hand-position judge below takes every key.
       if (blockRef.current) return;
+      // Key first: the signature's accidentals come before the piece.
+      if (keyGateRef.current || ev === keyGateEvRef.current) return;
       // Notes played for an unsolved chord task are not attempts at the piece.
       const task = useTutorStore.getState().task;
       if (task && task.result?.verdict !== 'correct') return;
@@ -2208,6 +2235,26 @@ export function ScoreView() {
       syncUi();
     });
   }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong, noteCredit, spoilLap, bumpBare]);
+
+  // Key first: every press goes to the gate until the signature's accidentals are all played.
+  const gateOn = !!keyGateNow;
+  useEffect(() => {
+    if (!gateOn) return;
+    return useMidiStore.subscribe((state, prev) => {
+      const g = keyGateRef.current;
+      const ev = state.lastNoteOn;
+      if (!g || !ev || ev === prev.lastNoteOn) return;
+      keyGateEvRef.current = ev;
+      const { gate, event } = keyGateInput(g, ev.note);
+      if (event === 'wrong') flashWrong();
+      if (event === 'done') {
+        reportEvent('key-first', { event: 'done', fifths: g.fifths, misses: gate.misses });
+        setKeyGate(null);
+        return;
+      }
+      setKeyGate(gate);
+    });
+  }, [gateOn, setKeyGate, flashWrong]);
 
   // #5657c: while blocking, every press and release is judged against the hand position.
   const blockOn = !!block;
@@ -3308,6 +3355,16 @@ export function ScoreView() {
           {chunk && (
             <span className="font-semibold text-yellow-300" data-testid="backwards-status">
               {chunkLabel(chunk)}
+            </span>
+          )}
+          {keyGateNow && (
+            <span className="flex items-center gap-1.5 font-semibold text-yellow-300" data-testid="key-first">
+              Key first: {gateAsk(keyGateNow.fifths)}
+              {gateShown(keyGateNow).map((n, i) => (
+                <span key={i} className={`w-8 text-center rounded ${n === '?' ? 'bg-gray-700 text-gray-400' : 'bg-emerald-700 text-white'}`}>
+                  {n}
+                </span>
+              ))}
             </span>
           )}
           {block && (

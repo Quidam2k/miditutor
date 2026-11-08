@@ -114,6 +114,18 @@ def main():
 
         # The tune shows a beat before its notes are judged; let it settle.
         time.sleep(1.5)
+        # Key first (JP 10/9): G major's one sharp before the piece takes notes.
+        gate = page.get_by_test_id("key-first")
+        check("key-first gate asks for G major's sharp", gate.count() == 1 and "play its sharp" in gate.inner_text())
+        held = screen().get("remaining")
+        send("noteon", 61)  # C#: not in G major
+        send("noteoff", 61)
+        time.sleep(0.2)
+        check("a wrong key doesn't open the piece or move it", gate.count() == 1 and screen().get("remaining") == held)
+        send("noteon", 78)  # F#5: any octave
+        send("noteoff", 78)
+        time.sleep(0.3)
+        check("F# opens the piece", gate.count() == 0)
         s = screen()
         check("G-major label", s["piece"].endswith("(G major)"))
         remaining = s["remaining"]
