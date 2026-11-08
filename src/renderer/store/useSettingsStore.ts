@@ -71,6 +71,8 @@ interface SettingsState {
   eyesUp: EyesUpMode;
   /** The timer window now; shrinks as he gets faster, grows after a miss. */
   eyesUpMs: number;
+  /** #5652 C Read ahead (experimental): the notes at the cursor blank out, so they must be read in advance. */
+  readAhead: boolean;
   /** #5652 K Keep going: a click on every beat, and +4 after a clean lap (JP 9/11). */
   keepClick: boolean;
   keepStepUp: boolean;
@@ -123,7 +125,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -168,6 +170,7 @@ export const useSettingsStore = create<SettingsState>()(
       keyFirst: true,
       eyesUp: 'off',
       eyesUpMs: EYES_UP_START_MS,
+      readAhead: false,
       keepClick: true,
       keepStepUp: true,
       keepBpms: {},

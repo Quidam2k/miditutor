@@ -574,6 +574,8 @@ export function ScoreView() {
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [following, setFollowing] = useState(true);
   const [watching, setWatching] = useState(false);
+  /** #5652 C: how many note groups Read ahead has blanked right now (for tests and live checks). */
+  const [blanked, setBlanked] = useState(0);
   // Keep going (#5652 K): the cursor runs on the beat; his notes are tallied, nothing waits.
   const [keep, setKeep] = useState<{ bpm: number; lap: number; count: number; hit: number; wrong: number } | null>(null);
   const keepRef = useRef<{ run: KeepRun; timer: number; beat: number; step: number } | null>(null);
@@ -816,7 +818,9 @@ export function ScoreView() {
   const sightReadPiece = useSettingsStore((s) => s.sightReadPiece);
   const bareNow = bare?.pieceId === piece.id ? bare : null;
   const quietNew = hintsOffNew && (!!freshNow || sightReadPiece === piece.id);
-  const hintsOff = !!bareNow || quietNew;
+  // #5652 C Read ahead (experimental): the notes at the cursor blank out, and no hint names them.
+  const readAhead = useSettingsStore((s) => s.readAhead);
+  const hintsOff = !!bareNow || quietNew || readAhead;
   // #5259: a homework line opens its piece and starts on the range he last set there.
   const pieceRequest = useTutorStore((s) => s.pieceRequest);
   const [pendingOpen, setPendingOpen] = useState<{ pieceId: string; backwards: boolean } | null>(null);
@@ -970,8 +974,10 @@ export function ScoreView() {
       redAccidentals: marks.flatMap((m) => (m.accidental ? [m.accidental] : [])),
       expressionMarks: exprMarks.slice(0, 40),
       expression: exprFindings,
+      // #5652 C: Read ahead on, and how many note groups are blanked at the cursor now.
+      readAhead: readAhead ? { blanked } : null,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords]);
+  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -2571,6 +2577,30 @@ export function ScoreView() {
     }
   }, [drawn, layoutTick]);
 
+  // #5652 C Read ahead: the notes at the cursor vanish as it reaches them, so he has to have read
+  // them already. Not the run's first step (nothing came before it to read from), and they come
+  // back after a wrong note or a pause, the way hints do.
+  const blankStep = readAhead && status === 'ready' && feedback.kind !== 'complete' && !hesitating && !watching
+    && cursorStep !== (followerRef.current?.range?.first ?? 0)
+    ? cursorStep
+    : null;
+  useEffect(() => {
+    const osmd = osmdRef.current;
+    if (!osmd || blankStep === null) return;
+    const blanked: SVGGElement[] = [];
+    for (const n of stepNotesRef.current[blankStep] ?? []) {
+      const el = gNoteOf(osmd, n)?.getSVGGElement?.();
+      if (!el || blanked.includes(el)) continue;
+      el.style.visibility = 'hidden';
+      blanked.push(el);
+    }
+    setBlanked(blanked.length);
+    return () => {
+      for (const el of blanked) el.style.visibility = '';
+      setBlanked(0);
+    };
+  }, [blankStep, drawn, layoutTick]);
+
   // Paint the note being edited, and take the paint off afterwards so its colour survives.
   useEffect(() => {
     const osmd = osmdRef.current;
@@ -2866,6 +2896,8 @@ export function ScoreView() {
   const atRunStart = lapStartRef.current === null || followerRef.current?.steps[cursorStep]?.measure === runStartBarRef.current;
   const hints = !keeping && (bareNow
     ? watching
+    : readAhead
+    ? watching || hesitating
     : quietNew
     ? watching || hesitating || !!wheelLive
     : !trainingWheels || watching || hesitating || atRunStart || !!wheelLive);
@@ -2911,7 +2943,7 @@ export function ScoreView() {
   // #5657c: while blocking, the keyboard shows the whole hand position with its fingers;
   // with training wheels it fades after his first clean hold and comes back on a slip.
   const blockPos = block ? blockPosition(block) : null;
-  const blockHints = !!block && !bareNow && (quietNew ? hesitating : !trainingWheels || showKeys(block, hesitating));
+  const blockHints = !!block && !bareNow && !readAhead && (quietNew ? hesitating : !trainingWheels || showKeys(block, hesitating));
   const blockLabels = blockPos && blockHints
     ? new Map(blockPos.fingers.flatMap((n) => (n.finger ? [[n.midi, n.finger] as [number, string]] : [])))
     : undefined;
@@ -3241,6 +3273,18 @@ export function ScoreView() {
             Mini staff
           </label>
         )}
+        <label
+          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+          title="Experimental: the notes at the cursor blank out as it reaches them, so you have to read ahead. They come back after a wrong note. No key or note-name hints while it's on"
+        >
+          <input
+            type="checkbox"
+            data-testid="read-ahead"
+            checked={readAhead}
+            onChange={(e) => useSettingsStore.getState().setPrefs({ readAhead: e.target.checked })}
+          />
+          Read ahead <span className="text-amber-300/80 text-xs">(experimental)</span>
+        </label>
         <label
           className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
           title="A very faint tick the moment a lap stops being clean (a wrong note or a grazed key), so you know it won't count"
