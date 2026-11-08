@@ -1,9 +1,11 @@
 """#5657c end-to-end check of Block (hand-position blocking) against a RUNNING hidden app.
 
 Launch a packaged, muted, hidden copy (see memory hidden-test-copy-must-be-muted):
-    MIDITUTOR_ALLOW_INJECT=1 MIDITUTOR_HIDDEN=1 MIDITUTOR_PORT=47811 ./out/MidiTutor-win32-x64/MidiTutor.exe         --mute-audio --user-data-dir=<scratch>/ud --remote-debugging-port=9347
+    MIDITUTOR_ALLOW_INJECT=1 MIDITUTOR_HIDDEN=1 MIDITUTOR_PORT=47811 ./out/MidiTutor-win32-x64/MidiTutor.exe
+        --mute-audio --user-data-dir=<scratch>/ud --remote-debugging-port=9347   (one line)
 then, with a python that has playwright:
-    MIDITUTOR_URL=http://127.0.0.1:47811 MIDITUTOR_TOKEN_FILE=<scratch>/ud/api-token         MIDITUTOR_CDP=http://127.0.0.1:9347 python scripts/e2e_blocking.py
+    MIDITUTOR_URL=http://127.0.0.1:47811 MIDITUTOR_TOKEN_FILE=<scratch>/ud/api-token
+        MIDITUTOR_CDP=http://127.0.0.1:9347 python scripts/e2e_blocking.py   (one line)
 
 A fingered two-bar fixture (finger 1 moves C4 -> G4) gives two hand positions. Three clean
 holds each; a partial hold or a hold after a wrong key doesn't count; the follower ignores it all.

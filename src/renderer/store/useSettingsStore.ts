@@ -43,6 +43,9 @@ interface SettingsState {
   sightDrilled: Record<string, number>;
   /** The piece Sight-read last opened, while he's still on it. */
   sightReadPiece: string | null;
+  /** #11354 Fresh tune: the key he is drilling ("G", lower-case = minor) and the tunes he has had. */
+  freshKey: string;
+  freshSeen: string[];
   /** The drill he left for Sight-read, by piece id; going back to the piece puts it back. */
   parkedDrills: Record<string, SessionSnapshot>;
   /** #10254: the wheel off a note in Strip moves the other way. */
@@ -75,6 +78,8 @@ interface SettingsState {
   setReverseWheel: (on: boolean) => void;
   toggleSimplePiece: (title: string) => void;
   markSightRead: (id: string, title: string) => void;
+  setFreshKey: (key: string) => void;
+  markFreshSeen: (id: string) => void;
   clearSightRead: () => void;
   parkDrill: (snapshot: SessionSnapshot) => void;
   unparkDrill: (id: string) => void;
@@ -128,6 +133,8 @@ export const useSettingsStore = create<SettingsState>()(
       simplePieces: [],
       sightDrilled: {},
       sightReadPiece: null,
+      freshKey: 'C',
+      freshSeen: [],
       parkedDrills: {},
       reverseWheel: false,
       grazeMs: GRAZE_MS,
@@ -157,6 +164,8 @@ export const useSettingsStore = create<SettingsState>()(
           sightDrilled: { ...s.sightDrilled, [title]: (s.sightDrilled[title] ?? 0) + 1 },
         })),
       clearSightRead: () => set({ sightReadPiece: null }),
+      setFreshKey: (freshKey) => set({ freshKey }),
+      markFreshSeen: (id) => set((s) => ({ freshSeen: s.freshSeen.includes(id) ? s.freshSeen : [...s.freshSeen, id] })),
       parkDrill: (snapshot) => set((s) => ({ parkedDrills: { ...s.parkedDrills, [snapshot.pieceId]: snapshot } })),
       unparkDrill: (id) =>
         set((s) => {

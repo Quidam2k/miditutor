@@ -28,6 +28,8 @@ import { blockInput, blockLabel, current as blockPosition, groupPositions, showK
 import { BarInput } from './BarInput';
 import { loadStartupSnapshot, restorable, type SessionSnapshot } from './sessionSnapshot';
 import { pickBars, pickHand, pickSightPiece } from '../../engine/SightRead';
+import { FRESH_KEYS, freshTuneXml, pickFreshTune, type FreshTune } from '../../engine/FreshTune';
+import freshTunesJson from '../../assets/fresh-tunes.json';
 import { useTutorStore } from '../../store/useTutorStore';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustBadge, trustMark, trustTitle } from '../../../shared/trust';
@@ -471,6 +473,13 @@ function barBoxes(osmd: OpenSheetMusicDisplay): Map<number, Band> {
   return boxes;
 }
 
+// #11354: "Bb" -> "B♭ major", "f" -> "F minor".
+function keyTitle(name: string): string {
+  const minor = name.charAt(0) === name.charAt(0).toLowerCase();
+  const tonic = name.charAt(0).toUpperCase() + name.slice(1).replace('b', '♭').replace('#', '♯');
+  return `${tonic} ${minor ? 'minor' : 'major'}`;
+}
+
 type Feedback =
   | { kind: 'idle' }
   | { kind: 'wrong'; played: number; expected: number[]; remaining: number[]; hint: string }
@@ -576,6 +585,11 @@ export function ScoreView() {
   const [measure, setMeasure] = useState(1);
   const [feedback, setFeedback] = useState<Feedback>({ kind: 'idle' });
   const [wrongCount, setWrongCount] = useState(0);
+  // #11354: read by the MIDI handler, whose closure would see a stale count.
+  const wrongCountRef = useRef(0);
+  // #11354: the fresh tune on screen, if any (see freshTune below).
+  const freshRef = useRef<{ id: string; key: string; label: string } | null>(null);
+  wrongCountRef.current = wrongCount;
   const [pace, setPace] = useState<number | null>(null);
   const [wrongFlash, setWrongFlash] = useState(false);
   // Loop range (#5004): 'start'/'end' while he is clicking bars to set it.
@@ -764,6 +778,7 @@ export function ScoreView() {
     setMixing(false);
   };
   const pieceName = piece.group ? `${piece.label} (${piece.group.label})` : piece.label;
+  const freshNow = freshRef.current?.label === piece.label ? freshRef.current : null;
   // #5259: a homework line opens its piece and starts on the range he last set there.
   const pieceRequest = useTutorStore((s) => s.pieceRequest);
   const [pendingOpen, setPendingOpen] = useState<{ pieceId: string; backwards: boolean } | null>(null);
@@ -1529,6 +1544,32 @@ export function ScoreView() {
     setSightMsg('');
     setPieceId(pick.id);
   };
+  // #11354 Fresh tune (JP, lesson 11/6: easy pieces "will help too"; Todd: ones he has never heard).
+  // A short folk melody from the bundled corpus, in the key he is drilling, never the same one twice.
+  // Hints start off; a wrong note brings them back. Its run is logged as a fresh-tune event.
+  const freshKey = useSettingsStore((s) => s.freshKey);
+  const freshTune = () => {
+    commitWheelRef.current();
+    const s = useSettingsStore.getState();
+    if (onScreen && status === 'ready' && drawnPieceRef.current === piece.id && !freshRef.current) {
+      s.parkDrill(takeSnapshot(onScreen));
+    }
+    const k = FRESH_KEYS.find((x) => x.name === s.freshKey) ?? FRESH_KEYS[0];
+    const pick = pickFreshTune(freshTunesJson as FreshTune[], k.mode, new Set(s.freshSeen));
+    if (!pick) {
+      setSightMsg(`No fresh ${k.mode} tune left: try a ${k.mode === 'minor' ? 'major' : 'minor'} key.`);
+      return;
+    }
+    s.markFreshSeen(pick.id);
+    const label = `Fresh tune ${s.freshSeen.length + 1} (${keyTitle(k.name)})`;
+    freshRef.current = { id: pick.id, key: k.name, label };
+    handRef.current = 'both';
+    setHand('both');
+    setSightMsg('');
+    useTutorStore.getState().addPiece({ label, xml: freshTuneXml(pick, k.name, label) });
+    reportEvent('fresh-tune', { id: pick.id, key: k.name, label });
+  };
+
   // The drill to go back to: the one he left most recently.
   const backTo = Object.values(parkedDrills)
     .sort((a, b) => b.at - a.at)
@@ -1903,12 +1944,23 @@ export function ScoreView() {
           chunkLap();
           break;
         }
-        case 'complete':
+        case 'complete': {
           paintHeldTies(result.from, f.steps.length - 1);
+          const fresh = freshRef.current;
+          const begun = lapStartRef.current;
+          if (fresh && fresh.label === pieceLabelRef.current && begun !== null && ev.timestamp > begun) {
+            const ms = ev.timestamp - begun;
+            const beats = f.steps[result.from].beat - f.steps[f.range?.first ?? 0].beat;
+            reportEvent('fresh-done', {
+              id: fresh.id, key: fresh.key, label: fresh.label, ms, wrong: wrongCountRef.current,
+              bpm: beats > 0 ? Math.round(beats / (ms / 60000)) : null,
+            });
+          }
           setFeedback({ kind: 'complete' });
           // #5521: the whole piece with no wrong note since Restart: the ding.
           if (lapWrongRef.current === 0 && useSettingsStore.getState().celebrateChime) void playLapChime();
           break;
+        }
         case 'wrong': {
           setWrongCount((c) => c + 1);
           spoilLap();
@@ -2429,7 +2481,9 @@ export function ScoreView() {
   // #5519: with training wheels, the keys he's to play show only in his run's first bar,
   // on a hesitation, or after a wrong note. Red and his own held keys always show.
   const atRunStart = lapStartRef.current === null || followerRef.current?.steps[cursorStep]?.measure === runStartBarRef.current;
-  const hints = !trainingWheels || watching || hesitating || atRunStart || !!wheelLive;
+  const hints = freshNow
+    ? watching || hesitating || !!wheelLive
+    : !trainingWheels || watching || hesitating || atRunStart || !!wheelLive;
 
   // #5624: the notes to play now, as written, on a scrap of staff above the keyboard;
   // one small staff over each hand's keys (#11091), with the notes as written (#11092).
@@ -2438,7 +2492,7 @@ export function ScoreView() {
     const osmd = osmdRef.current;
     const notes = (stepNotesRef.current[cursorStep] ?? []).filter((n) => !n.IsGraceNote);
     const rests = stepRestsRef.current[cursorStep] ?? [];
-    if (!miniStaff || status !== 'ready' || !osmd || notes.length === 0) return null;
+    if (!miniStaff || status !== 'ready' || !osmd || notes.length === 0 || (freshNow && !hints)) return null;
     const lengthOf = (n: OsmdNote) => miniDuration(n.TypeLength?.RealValue, n.DotsXml, n.Length?.RealValue);
     const bar = followerRef.current?.steps[cursorStep]?.measure ?? 1;
     const part = (staff: number): MiniStaffPart & { pct: number } => {
@@ -2468,7 +2522,7 @@ export function ScoreView() {
       };
     };
     return miniStaffPlacements(part(0), part(1));
-  }, [miniStaff, status, cursorStep, stepsVersion]);
+  }, [miniStaff, status, cursorStep, stepsVersion, freshNow, hints]);
   // #5657c: while blocking, the keyboard shows the whole hand position with its fingers;
   // with training wheels it fades after his first clean hold and comes back on a slip.
   const blockPos = block ? blockPosition(block) : null;
@@ -2567,6 +2621,28 @@ export function ScoreView() {
         >
           Sight-read
         </button>
+        <button
+          onClick={freshTune}
+          disabled={status === 'loading'}
+          title="A short folk tune you have never had, in this key. No hints until you miss."
+          data-testid="fresh-tune"
+          className={btn}
+        >
+          Fresh tune
+        </button>
+        <select
+          value={freshKey}
+          onChange={(e) => useSettingsStore.getState().setFreshKey(e.target.value)}
+          title="The key for fresh tunes"
+          data-testid="fresh-key"
+          className="rounded-md border border-gray-700 bg-gray-900 px-1 py-1 text-sm text-gray-200"
+        >
+          {FRESH_KEYS.map((k) => (
+            <option key={k.name} value={k.name}>
+              {keyTitle(k.name)}
+            </option>
+          ))}
+        </select>
         {backTo && backTo.id !== piece.id && (
           <button onClick={() => setPieceId(backTo.id)} data-testid="sight-back" className={btn}>
             Back to {backTo.label}
@@ -2910,9 +2986,9 @@ export function ScoreView() {
             <span className="text-gray-400" data-testid="next-notes">
               Play:{' '}
               <span className="font-mono font-semibold text-indigo-300">
-                {finished ? '—' : remaining.length ? namesOf(remaining) : '—'}
+                {finished ? '—' : freshNow && !hints ? '…' : remaining.length ? namesOf(remaining) : '—'}
               </span>
-              {!finished && playHint && <span className="text-indigo-200/80"> ({playHint})</span>}
+              {!finished && playHint && (!freshNow || hints) && <span className="text-indigo-200/80"> ({playHint})</span>}
             </span>
           )}
           <span className="text-gray-400">
