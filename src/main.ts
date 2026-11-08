@@ -19,7 +19,8 @@ import {
   scoreTitle,
   titleFromPath,
 } from './shared/pieceFiles';
-import { TrustMap, parseTrust, trustFor } from './shared/trust';
+import { TrustMap, parseTrust, trustFor, verifiedHolds } from './shared/trust';
+import { contentSha256 } from './main/contentSha';
 import { confirmedLines, paperPageStarts } from './shared/binderPrint';
 import { SavedMix, VersionMap, applyTrust, groupOf, mixPlanOf, parseMixes, parseVersions, withMixes } from './shared/versions';
 
@@ -220,8 +221,9 @@ const listPieces = async () => {
       try {
         const musicxml = await readScoreFile(path.join(dir, name));
         let entry = mixTrust.get(name) ?? trustFor(trust, name);
-        // His "Verified by you" holds only for the exact file he reviewed (#9664).
-        if (entry?.status === 'verified' && entry.sha !== await fileSha256(path.join(dir, name))) entry = undefined;
+        // His "Verified by you" holds for the file he reviewed, finger edits aside (#9664, #11358).
+        if (entry?.status === 'verified' &&
+            !verifiedHolds(entry, await fileSha256(path.join(dir, name)), contentSha256(musicxml))) entry = undefined;
         const group = groupOf(versions, name);
         pieces.push({
           file: name,

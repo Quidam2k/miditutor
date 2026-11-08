@@ -15,6 +15,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Layout, MarkCheck, MarkState, Proposal, ReviewEvent, ReviewState, foldReview, markCheck, orderEvents } from '../shared/review';
 import { scoreTitle, titleFromPath } from '../shared/pieceFiles';
+import { contentSha256 } from './contentSha';
 
 export interface ReviewConfig {
   library: string;
@@ -721,6 +722,7 @@ export class Review {
       const systems = Object.keys(piece.state.confirmed).map(Number).sort((a, b) => a - b);
       const last = Math.max(...Object.values(piece.state.confirmed));
       const day = new Date(last).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+      const content = contentSha256(piece.musicxml);
       const entry = {
         status: 'verified',
         source: TRUST_SOURCE,
@@ -728,9 +730,12 @@ export class Review {
         date: new Date(last).toISOString(),
         systems,
         score_sha256: piece.sha,
+        // #11358: lets the Mac keep it through his finger edits there (src/shared/trust.ts verifiedHolds).
+        ...(content ? { content_sha256: content } : {}),
         ...(previous ? { previous } : {}),
       };
-      if (mine && current.score_sha256 === entry.score_sha256 && current.date === entry.date) return;
+      if (mine && current.score_sha256 === entry.score_sha256 && current.date === entry.date &&
+          current.content_sha256 === entry.content_sha256) return;
       trust[file] = entry;
     } else if (mine) {
       if (current.previous) trust[file] = current.previous;

@@ -7,6 +7,8 @@ export interface PieceTrust {
   note: string;
   /** sha256 of the score he verified ('verified' only). */
   sha?: string;
+  /** #11358: sha256 of its scoreContentKey (fingers left out), so a finger edit keeps it. */
+  contentSha?: string;
   /** trust.json "hide": true: leave this version out of its song's switch (#9794). */
   hide?: true;
   /** trust.json "no_mix": why My mix is off while this is the Harder source (#9794). */
@@ -23,14 +25,17 @@ export function parseTrust(json: unknown): TrustMap {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) continue;
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== Object.prototype && prototype !== null) continue;
-    const { status, note, score_sha256: sha, hide, no_mix: noMix } = value as Record<string, unknown>;
+    const { status, note, score_sha256: sha, content_sha256: contentSha, hide, no_mix: noMix } = value as Record<string, unknown>;
     if (status !== 'checked' && status !== 'issues' && status !== 'unverified' && status !== 'verified') continue;
     // A verified entry without the score's hash can't be checked against the file: not trusted.
     if (status === 'verified' && typeof sha !== 'string') continue;
     const text = typeof note === 'string' ? note : '';
     if (status === 'verified') {
       // His own review wins: a verified file is never hidden or kept out of a mix.
-      entries.push([file, { status, note: text, sha: sha as string }]);
+      entries.push([file, {
+        status, note: text, sha: sha as string,
+        ...(typeof contentSha === 'string' ? { contentSha } : {}),
+      }]);
       continue;
     }
     entries.push([file, {
@@ -41,6 +46,15 @@ export function parseTrust(json: unknown): TrustMap {
     }]);
   }
   return Object.fromEntries(entries);
+}
+
+/**
+ * #9664/#11358: his "Verified by you" holds for the exact file he reviewed, or for one
+ * that differs from it only in fingers and hold marks (contentSha: the file's
+ * scoreContentKey hash, undefined when it could not be read).
+ */
+export function verifiedHolds(trust: PieceTrust, fileSha: string, contentSha: string | undefined): boolean {
+  return trust.sha === fileSha || (trust.contentSha !== undefined && trust.contentSha === contentSha);
 }
 
 /** Return the trust entry owned by the map for a file. */
