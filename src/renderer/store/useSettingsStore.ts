@@ -39,6 +39,8 @@ interface SettingsState {
   trainerAccidentals: boolean;
   /** #5652 A: Notes asks only the ladder's notes, landmarks first. */
   trainerLadder: boolean;
+  /** #5652 J: Intervals asks him to name the interval (JP's "require quality"). */
+  intervalNameIt: boolean;
   /** #10262 Sight-read: pieces he marked simple, by displayed title. */
   simplePieces: string[];
   /** Times Sight-read has picked each piece, by displayed title. */
@@ -90,6 +92,7 @@ interface SettingsState {
   setTrainerClef: (clef: TrainerClef) => void;
   setTrainerAccidentals: (on: boolean) => void;
   setTrainerLadder: (on: boolean) => void;
+  setIntervalNameIt: (on: boolean) => void;
   setClef: (clef: Clef) => void;
   setExerciseType: (type: ExerciseType) => void;
   setAudioEnabled: (enabled: boolean) => void;
@@ -136,6 +139,7 @@ export const useSettingsStore = create<SettingsState>()(
       trainerClef: 'treble',
       trainerAccidentals: true,
       trainerLadder: false,
+      intervalNameIt: true,
       simplePieces: [],
       sightDrilled: {},
       sightReadPiece: null,
@@ -182,6 +186,7 @@ export const useSettingsStore = create<SettingsState>()(
       setTrainerClef: (clef) => set({ trainerClef: clef }),
       setTrainerAccidentals: (on) => set({ trainerAccidentals: on }),
       setTrainerLadder: (on) => set({ trainerLadder: on }),
+      setIntervalNameIt: (on) => set({ intervalNameIt: on }),
       setClef: (clef) => set({ clef }),
       setShowKeyboard: (show) => set({ showKeyboard: show }),
       setExerciseType: (type) => set({ exerciseType: type }),

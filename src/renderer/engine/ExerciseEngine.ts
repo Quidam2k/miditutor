@@ -1,5 +1,6 @@
 import { Exercise, ExerciseType, ExerciseResult } from '../types/exercise';
 import { Clef } from '../types/music';
+import { IntervalSpec } from './MusicTheory';
 import { DifficultyManager } from './DifficultyManager';
 import { generateJpInterval } from './NoteGenerator';
 import { evaluate } from './Evaluator';
@@ -30,10 +31,11 @@ export class ExerciseEngine {
     return this.difficulty;
   }
 
-  generateExercise(): Exercise {
+  /** `chosen`: the interval to ask (#5652 J weights it); else one at random. */
+  generateExercise(chosen?: IntervalSpec): Exercise {
     const id = `ex-${++exerciseCounter}`;
     // JP's assigned set (m2..P8) rather than random semitone pairs, which were mostly half steps.
-    const { interval, notes: [first, second] } = generateJpInterval(this.clef, this.lastInterval);
+    const { interval, notes: [first, second] } = generateJpInterval(this.clef, this.lastInterval, chosen);
     this.lastInterval = interval.short;
     return {
       id,
@@ -42,6 +44,7 @@ export class ExerciseEngine {
       expectedMidiNumbers: [first.midiNumber, second.midiNumber],
       clef: this.clef,
       intervalName: interval.name,
+      intervalShort: interval.short,
     };
   }
 

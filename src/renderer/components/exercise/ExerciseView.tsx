@@ -10,6 +10,7 @@ export function ExerciseView() {
   const {
     exerciseType, setExerciseType, clef, setClef, audioEnabled, setAudioEnabled, showNoteNames, setShowNoteNames,
     trainerClef, setTrainerClef, trainerAccidentals, setTrainerAccidentals, trainerLadder, setTrainerLadder,
+    intervalNameIt, setIntervalNameIt,
   } = useSettingsStore();
 
   return (
@@ -54,15 +55,23 @@ export function ExerciseView() {
                 />
               </>
             ) : (
-              <ToggleGroup
-                label="Clef"
-                options={[
-                  { value: 'treble', label: 'Treble' },
-                  { value: 'bass', label: 'Bass' },
-                ]}
-                selected={clef}
-                onChange={(v) => setClef(v as 'treble' | 'bass')}
-              />
+              <>
+                <ToggleGroup
+                  label="Clef"
+                  options={[
+                    { value: 'treble', label: 'Treble' },
+                    { value: 'bass', label: 'Bass' },
+                  ]}
+                  selected={clef}
+                  onChange={(v) => setClef(v as 'treble' | 'bass')}
+                />
+                <Toggle
+                  label="Name it"
+                  title="JP's 'require quality': the interval's name is hidden and you pick it (m3, P5...) as well as playing both notes. Off: the name is shown and you just play it."
+                  checked={intervalNameIt}
+                  onChange={setIntervalNameIt}
+                />
+              </>
             )}
             <Toggle
               label="Audio"

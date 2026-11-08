@@ -12,6 +12,8 @@ export interface Exercise {
   clef: Clef;
   /** Interval drill: the interval asked for, e.g. "Major 3rd". */
   intervalName?: string;
+  /** JP's short name for it, e.g. "m3" (#5652 J). */
+  intervalShort?: string;
 }
 
 export interface ExerciseResult {

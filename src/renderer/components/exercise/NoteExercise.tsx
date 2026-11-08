@@ -3,14 +3,10 @@ import { StaffDisplay } from '../staff/StaffDisplay';
 import { useMidiStore } from '../../store/useMidiStore';
 import { useSettingsStore, localDay } from '../../store/useSettingsStore';
 import {
-  DayTally,
-  NoteStats,
   KEY_HOLD_NOTES,
   TrainerNote,
   keyPool,
   notePool,
-  parseDayTally,
-  parseNoteStats,
   pickInKey,
   pickKey,
   pickNext,
@@ -18,12 +14,13 @@ import {
   recordDay,
   slowestNotes,
 } from '../../engine/NoteTrainer';
-import { LADDER_FAST_MS, LADDER_RUN, LadderLevels, isKnown, ladderLevel, ladderOrder, landmarkCount, parseLadder } from '../../engine/Ladder';
-import { Slices, parseSlices, recordSlices, sliceKeys, slowestSlices, stepsOffStaff } from '../../engine/Hesitation';
-import { ReviewSchedule, dueNotes, parseReview, pickWithReview, recordReview } from '../../engine/Review';
-import { MixUps, drillPool, liveMixUps, mixUpKind, mixUpLabel, parseMixUps, recordMixUp, recordRight } from '../../engine/MixUps';
+import { LADDER_FAST_MS, LADDER_RUN, isKnown, ladderLevel, ladderOrder, landmarkCount } from '../../engine/Ladder';
+import { recordSlices, sliceKeys, slowestSlices, stepsOffStaff } from '../../engine/Hesitation';
+import { dueNotes, pickWithReview, recordReview } from '../../engine/Review';
+import { drillPool, liveMixUps, mixUpKind, mixUpLabel, recordMixUp, recordRight } from '../../engine/MixUps';
 import { MajorKey, midiNumberToPitch, pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
 import { Pitch } from '../../types/music';
+import { EMPTY_RECORD, TrainerRecord, readRecord, saveRecord } from '../../store/noteRecord';
 import { playNote, initAudio, isInitialized } from '../../audio/AudioEngine';
 
 const HIT_HOLD_MS = 800;
@@ -39,54 +36,8 @@ interface Feedback {
   wrong: Pitch[];
 }
 
-interface TrainerRecord {
-  stats: NoteStats;
-  today: DayTally | null;
-  /** #5652 D: what he played instead, per asked note. */
-  mixups: MixUps;
-  /** #5652 A: notes in play on the ladder, per clef setting. Only ever grows. */
-  ladder: LadderLevels;
-  /** #5652 I: per-note due day across days. */
-  review: ReviewSchedule;
-  /** #5652 E: timed hits by clef, staff position, accidental and kind of key. */
-  slices: Slices;
-}
-
-const EMPTY: TrainerRecord = { stats: {}, today: null, mixups: {}, ladder: {}, review: {}, slices: {} };
+const EMPTY = EMPTY_RECORD;
 const MIXUPS_SHOWN = 5;
-
-// One read per launch: this tab remounts on every switch, and a re-read could land before
-// the last answer's write.
-let record: Promise<TrainerRecord> | null = null;
-
-function readRecord(): Promise<TrainerRecord> {
-  record ??= (window.tutorBridge?.noteStatsLoad?.() ?? Promise.resolve(null))
-    .catch((err: unknown) => {
-      console.warn('[note-stats] load failed:', err);
-      return null;
-    })
-    .then((raw) => {
-      const saved = raw as { stats?: unknown; today?: unknown; mixups?: unknown; ladder?: unknown; review?: unknown; slices?: unknown } | null;
-      return {
-        stats: parseNoteStats(saved?.stats),
-        today: parseDayTally(saved?.today),
-        mixups: parseMixUps(saved?.mixups),
-        ladder: parseLadder(saved?.ladder),
-        review: parseReview(saved?.review),
-        slices: parseSlices(saved?.slices),
-      };
-    });
-  return record;
-}
-
-/**
- * Every answer goes straight to main, which writes it atomically: localStorage can lose its
- * last writes to a kill, and this record is the point of the drill.
- */
-function saveRecord(next: TrainerRecord): void {
-  record = Promise.resolve(next);
-  window.tutorBridge?.noteStatsSave?.(next);
-}
 
 export function NoteExercise() {
   const { trainerClef, trainerAccidentals, trainerLadder, showNoteNames } = useSettingsStore();
@@ -226,6 +177,7 @@ export function NoteExercise() {
       const level = settings.trainerLadder ? ladderLevel(clef, stats, was) : was;
       if (level > was) setLadderNew(ladderOrder(clef)[level - 1]?.id ?? null);
       keep({
+        ...mineRef.current,
         stats,
         today: recordDay(mineRef.current.today, localDay(), correct, ms),
         mixups: correct ? recordRight(mixups, asked.id) : recordMixUp(mixups, asked.id, pitchToDisplayName(played), localDay()),
@@ -259,7 +211,8 @@ export function NoteExercise() {
     if (!window.confirm('Clear your speed, hit rate, mix-ups and review days for every note?')) return;
     drillingRef.current = false;
     setDrilling(false);
-    keep(EMPTY);
+    // Intervals keep their record: this is the Notes reset.
+    keep({ ...EMPTY, intervals: mineRef.current.intervals });
   };
 
   const toggleDrill = () => {
