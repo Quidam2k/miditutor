@@ -41,6 +41,8 @@ import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
 import { ZoneOverlay, type ZoneBand, type ZoneMark } from './ZoneOverlay';
 import { fishingShifts, handZones, type Shift } from '../../engine/HandZones';
+import { ChordOverlay, type ChordRing, type ChordTag } from './ChordOverlay';
+import { chordChanges, movedBy } from '../../engine/ChordMoves';
 import { MixBuilder } from './MixBuilder';
 import { OriginalScan, useScanLayout } from './OriginalScan';
 import { holdsOf, setFingering, setHold, type Digit, type FingerTarget } from '../../../shared/fingering';
@@ -599,6 +601,9 @@ export function ScoreView() {
   // A finger swapped in place (no re-layout) can still move a position boundary.
   const [zoneTick, setZoneTick] = useState(0);
   const [zones, setZones] = useState<{ bands: ZoneBand[]; marks: ZoneMark[]; right: number; left: number; shifts: Shift[] } | null>(null);
+  // #11354 item 6: who stays and who moves from chord to chord (see the effect after hand zones).
+  const [chordsOn, setChordsOn] = useState(false);
+  const [chords, setChords] = useState<{ rings: ChordRing[]; tags: ChordTag[]; changes: number; kept: number; same: number; shifts: number } | null>(null);
   const bareRef = useRef<BareRun | null>(null);
   const [bareLeft, setBareLeft] = useState(0);
   const [bareMsg, setBareMsg] = useState('');
@@ -923,6 +928,9 @@ export function ScoreView() {
       handZones: zones
         ? { right: zones.right, left: zones.left, bands: zones.bands.length, shifts: zones.shifts.map((z) => ({ hand: z.hand, bar: z.bar, semitones: z.semitones })) }
         : null,
+      chordMoves: chords
+        ? { changes: chords.changes, kept: chords.kept, same: chords.same, shifts: chords.shifts, rings: chords.rings.length }
+        : null,
       pickingLoop: picking === 'off' ? null : picking,
       playedMarks: marks.length,
       wrongMarks: marks.filter((m) => m.wrong).length,
@@ -930,7 +938,7 @@ export function ScoreView() {
       expressionMarks: exprMarks.slice(0, 40),
       expression: exprFindings,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones]);
+  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1381,6 +1389,68 @@ export function ScoreView() {
       setZones(null);
     }
   }, [zonesOn, status, layoutTick, stepsVersion, blockSteps, view, zoneTick]);
+
+  // #11354 item 6 (JP 10/23, Sorcerer's Apprentice: "Who's moving where? Who stays the same? Is
+  // there a bigger pattern across multiple chords?").
+  useEffect(() => {
+    const osmd = osmdRef.current;
+    const layer = layerRef.current;
+    if (!chordsOn || !osmd || !layer || status !== 'ready' || view !== 'score') {
+      setChords(null);
+      return;
+    }
+    try {
+      const layerRect = layer.getBoundingClientRect();
+      const space = 10 * osmd.Zoom;
+      const headAt = (step: number, h: 'L' | 'R', midi: number) => {
+        const note = (stepNotesRef.current[step] ?? []).find(
+          (n) => !n.IsGraceNote && (staffOf(n) === 0 ? 'R' : 'L') === h && toMidi(n) === midi,
+        );
+        const r = note && headOf(osmd.EngravingRules.GNote(note as never) as unknown as OsmdGraphicalNote | undefined)?.getBoundingClientRect();
+        return r ? { x: r.left + r.width / 2 - layerRect.left, y: r.top + r.height / 2 - layerRect.top } : null;
+      };
+      const steps = blockSteps(1, Number.MAX_SAFE_INTEGER);
+      const rings: ChordRing[] = [];
+      const tags: ChordTag[] = [];
+      let changes = 0;
+      let kept = 0;
+      let same = 0;
+      let shifts = 0;
+      for (const h of ['R', 'L'] as const) {
+        const handName = h === 'R' ? 'Right' : 'Left';
+        for (const c of chordChanges(steps, h)) {
+          changes++;
+          if (c.voices.some((v) => v.kind === 'stay')) kept++;
+          if (c.same) same++;
+          if (c.shift !== null) shifts++;
+          let top: { x: number; y: number } | null = null;
+          for (const v of c.voices) {
+            const at = headAt(c.step, h, v.midi);
+            if (!at) continue;
+            if (!top || at.y < top.y) top = at;
+            rings.push({
+              x: at.x,
+              y: at.y,
+              r: space * 0.75,
+              kind: v.kind,
+              label: v.kind === 'move' ? movedBy(v.by) : '',
+              title: v.kind === 'stay'
+                ? `${handName} hand: ${noteName(v.midi)} stays (bar ${c.bar})`
+                : v.kind === 'move'
+                  ? `${handName} hand: moves ${Math.abs(v.by)} key${Math.abs(v.by) === 1 ? '' : 's'} ${v.by > 0 ? 'up' : 'down'} to ${noteName(v.midi)} (bar ${c.bar})`
+                  : `${handName} hand: ${noteName(v.midi)} is added (bar ${c.bar})`,
+            });
+          }
+          const text = c.shift !== null ? `all ${movedBy(c.shift)}` : c.same ? 'same move' : '';
+          if (text && top) tags.push({ x: top.x, y: top.y - space * 2.2, text });
+        }
+      }
+      setChords({ rings, tags, changes, kept, same, shifts });
+    } catch (err) {
+      console.warn('[chords] could not draw chord moves', err);
+      setChords(null);
+    }
+  }, [chordsOn, status, layoutTick, stepsVersion, blockSteps, view, zoneTick, noteName]);
   const startBlockRef = useRef(startBlock);
   startBlockRef.current = startBlock;
   const toggleBlock = () => {
@@ -3133,6 +3203,22 @@ export function ScoreView() {
           >
             Hand zones
           </button>
+          <button
+            onClick={() => setChordsOn((c) => !c)}
+            disabled={status !== 'ready'}
+            aria-pressed={chordsOn}
+            className={`${btn} ${chordsOn ? 'ring-2 ring-violet-400' : ''}`}
+            title="JP: who moves, who stays? From each chord to the next in the same hand: blue = the key stays, amber = it moves (+2 = two keys up). 'same move' = the change repeats; 'all +5' = the whole hand shifts."
+            data-testid="chord-moves"
+          >
+            Chord moves
+          </button>
+          {chords && (
+            <span data-testid="chords-msg" className="text-xs text-violet-300">
+              {chords.changes} chord change{chords.changes === 1 ? '' : 's'}
+              {chords.changes > 0 && `, ${chords.kept} keep a note, ${chords.same} repeat the last move`}
+            </span>
+          )}
           {zones && (
             <span data-testid="zones-msg" className="text-xs text-sky-300">
               Right {zones.right} position{zones.right === 1 ? '' : 's'}, left {zones.left};{' '}
@@ -3342,6 +3428,7 @@ export function ScoreView() {
             } : undefined}
           />
           {zones && <ZoneOverlay bands={zones.bands} marks={zones.marks} />}
+          {chords && <ChordOverlay rings={chords.rings} tags={chords.tags} />}
           <PlayedOverlay marks={marks} bands={bands} />
           {wave && <WaveOverlay key={wave.key} dots={wave.dots} peak={wave.peak} />}
         </div>
