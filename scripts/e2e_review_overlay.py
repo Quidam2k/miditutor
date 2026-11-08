@@ -93,6 +93,36 @@ with sync_playwright() as p:
     page.wait_for_timeout(800)
     check(label(page).startswith("Page 2, line 1, 1st bar [bar 23]"), "page 2 starts at bar 23", label(page))
 
+    # #11353: one-handed on the trackball, real Chromium mouse input through CDP.
+    while page.locator("[data-testid=review-prev]").is_enabled():
+        page.locator("[data-testid=review-prev]").click()
+    page.wait_for_timeout(600)
+    cdp = page.context.new_cdp_session(page)
+
+    def click(button, buttons):
+        for kind in ("mousePressed", "mouseReleased"):
+            cdp.send("Input.dispatchMouseEvent", {"type": kind, "x": 700, "y": 500, "button": button,
+                                                  "buttons": buttons if kind == "mousePressed" else 0,
+                                                  "clickCount": 1})
+        page.wait_for_timeout(300)
+
+    url = page.url
+    start = label(page)
+    page.keyboard.press(".")
+    one_on = label(page)
+    page.keyboard.press(",")
+    click("forward", 16)
+    check(label(page) == one_on != start, "mouse forward steps a bar, like .", f"{start} -> {label(page)}")
+    click("back", 8)
+    check(label(page) == start, "mouse back steps back, like ,", label(page))
+    check(page.url == url, "mouse back does not navigate away", page.url)
+    click("middle", 4)
+    check(page.locator("[data-testid=review-digital-layer]").count() == 0, "middle button hides the overlay")
+    click("middle", 4)
+    check(page.locator("[data-testid=review-digital-layer]").count() == 1, "middle button shows it again")
+    click("right", 2)
+    check(label(page) == start, "right-click changes no bar", label(page))
+
     # Line 1 for the picture, handle part-way so the bare scan shows on the right.
     while page.locator("[data-testid=review-prev]").is_enabled():
         page.locator("[data-testid=review-prev]").click()

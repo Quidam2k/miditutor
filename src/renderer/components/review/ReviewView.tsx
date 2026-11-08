@@ -441,13 +441,13 @@ const suspectBars = (s: LayoutSystem | undefined): number[] =>
 
 const KEYS: [string, string][] = [
   ['Space / C', 'this line matches, next line'],
-  ['O', 'score over the scan, on / off'],
-  [', / .', 'previous / next bar'],
+  ['O / middle button', 'score over the scan, on / off'],
+  [', / . or mouse back / forward', 'previous / next bar'],
   ['Shift ← / →', 'slide the overlay'],
   ['J / K', 'next / previous suspect bar'],
   ['← / →', 'previous / next line'],
   ['Enter', 'save the circled marks'],
-  ['Esc', 'drop the last circle'],
+  ['Esc / right-click', 'drop the last circle'],
 ];
 
 function nextUnconfirmed(p: Piece, from: number): number {
@@ -536,11 +536,29 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
 
   // Keys run whatever this render's handlers are (set below, once they exist).
   const keyRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
+  const mouseRef = useRef<(button: number) => void>(() => undefined);
   useEffect(() => {
     if (!hasLines) return;
     const onKey = (e: KeyboardEvent) => keyRef.current(e);
+    // #11353: one-handed on his trackball. Mouse back / forward step bars, the middle button
+    // toggles the overlay, right-click drops the last circle. Pressing them is swallowed so
+    // back does not navigate and middle does not start autoscroll.
+    const onMouse = (e: MouseEvent) => {
+      if (e.button === 0) return;
+      e.preventDefault();
+      if (e.type === 'mouseup') mouseRef.current(e.button);
+    };
+    const noMenu = (e: MouseEvent) => e.preventDefault();
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onMouse);
+    window.addEventListener('mouseup', onMouse);
+    window.addEventListener('contextmenu', noMenu);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onMouse);
+      window.removeEventListener('mouseup', onMouse);
+      window.removeEventListener('contextmenu', noMenu);
+    };
   }, [hasLines]);
 
   // Crop for the current line.
@@ -830,6 +848,12 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     else if (key === 'Enter' && !onButton) void (pending.length ? submitMarks() : confirmLine());
     else return;
     e.preventDefault();
+  };
+  mouseRef.current = (button: number) => {
+    if (button === 3) moveBar(-1);
+    else if (button === 4) moveBar(1);
+    else if (button === 1) setOverlay((v) => !v);
+    else if (button === 2) dropLast();
   };
 
   if (loadError || !piece) {
