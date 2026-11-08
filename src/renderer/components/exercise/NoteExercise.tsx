@@ -19,6 +19,7 @@ import {
   slowestNotes,
 } from '../../engine/NoteTrainer';
 import { LADDER_FAST_MS, LADDER_RUN, LadderLevels, isKnown, ladderLevel, ladderOrder, landmarkCount, parseLadder } from '../../engine/Ladder';
+import { Slices, parseSlices, recordSlices, sliceKeys, slowestSlices, stepsOffStaff } from '../../engine/Hesitation';
 import { ReviewSchedule, dueNotes, parseReview, pickWithReview, recordReview } from '../../engine/Review';
 import { MixUps, drillPool, liveMixUps, mixUpKind, mixUpLabel, parseMixUps, recordMixUp, recordRight } from '../../engine/MixUps';
 import { MajorKey, midiNumberToPitch, pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
@@ -31,13 +32,6 @@ const MISS_HOLD_MS = 1500;
 const MAX_DRAWN_LEDGER_STEPS = 9;
 
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
-
-/** Diatonic steps outside the staff: the top and bottom lines are 0. */
-function stepsOffStaff(pitch: Pitch, clef: TrainerNote['clef']): number {
-  const step = pitch.octave * 7 + 'CDEFGAB'.indexOf(pitch.note);
-  const [bottom, top] = clef === 'treble' ? [4 * 7 + 2, 5 * 7 + 3] : [2 * 7 + 4, 3 * 7 + 5]; // E4-F5, G2-A3
-  return Math.max(bottom - step, step - top, 0);
-}
 
 interface Feedback {
   correct: boolean;
@@ -54,9 +48,11 @@ interface TrainerRecord {
   ladder: LadderLevels;
   /** #5652 I: per-note due day across days. */
   review: ReviewSchedule;
+  /** #5652 E: timed hits by clef, staff position, accidental and kind of key. */
+  slices: Slices;
 }
 
-const EMPTY: TrainerRecord = { stats: {}, today: null, mixups: {}, ladder: {}, review: {} };
+const EMPTY: TrainerRecord = { stats: {}, today: null, mixups: {}, ladder: {}, review: {}, slices: {} };
 const MIXUPS_SHOWN = 5;
 
 // One read per launch: this tab remounts on every switch, and a re-read could land before
@@ -70,13 +66,14 @@ function readRecord(): Promise<TrainerRecord> {
       return null;
     })
     .then((raw) => {
-      const saved = raw as { stats?: unknown; today?: unknown; mixups?: unknown; ladder?: unknown; review?: unknown } | null;
+      const saved = raw as { stats?: unknown; today?: unknown; mixups?: unknown; ladder?: unknown; review?: unknown; slices?: unknown } | null;
       return {
         stats: parseNoteStats(saved?.stats),
         today: parseDayTally(saved?.today),
         mixups: parseMixUps(saved?.mixups),
         ladder: parseLadder(saved?.ladder),
         review: parseReview(saved?.review),
+        slices: parseSlices(saved?.slices),
       };
     });
   return record;
@@ -222,7 +219,7 @@ export function NoteExercise() {
       const played = key
         ? midiNumberToPitch(ev.note, key.fifths < 0)
         : wrongPitches([ev.note], [asked.pitch.midiNumber], [asked.pitch])[0];
-      const { mixups, ladder, review } = mineRef.current;
+      const { mixups, ladder, review, slices } = mineRef.current;
       const stats = recordAnswer(mineRef.current.stats, asked.id, correct, ms);
       const clef = settings.trainerClef;
       const was = ladder[clef] ?? landmarkCount(clef);
@@ -234,6 +231,7 @@ export function NoteExercise() {
         mixups: correct ? recordRight(mixups, asked.id) : recordMixUp(mixups, asked.id, pitchToDisplayName(played), localDay()),
         ladder: level > was ? { ...ladder, [clef]: level } : ladder,
         review: recordReview(review, asked.id, correct, ms, localDay()),
+        slices: recordSlices(slices, sliceKeys(asked.pitch, asked.clef, key), correct, ms),
       });
 
       const name = pitchToDisplayName(asked.pitch);
@@ -274,6 +272,7 @@ export function NoteExercise() {
   const day = mine?.today?.day === localDay() ? mine.today : null;
   const hitRate = day && day.attempts > 0 ? Math.round((day.hits / day.attempts) * 100) : null;
   const slowest = useMemo(() => slowestNotes(mine?.stats ?? {}, 5), [mine]);
+  const slowSpots = useMemo(() => slowestSlices(mine?.slices ?? {}), [mine]);
   const mixUps = useMemo(() => liveMixUps(mine?.mixups ?? {}), [mine]);
   // The notes this setting can ask: the ladder's set, every spelling in Keys, else the white keys.
   const dueCount = useMemo(() => {
@@ -351,6 +350,21 @@ export function NoteExercise() {
             </div>
           ))}
         </div>
+        {slowSpots.length > 0 && (
+          <div data-testid="note-hesitation">
+            <div className="text-gray-500 text-xs uppercase tracking-wider mb-1">Where you slow down</div>
+            {slowSpots.map((h) => (
+              <div key={h.key} className="flex gap-3 text-gray-200" data-testid="note-slow-spot" data-key={h.key}>
+                <span className="w-44">{h.label}</span>
+                <span className="w-12 font-mono">{seconds(h.avgMs)}</span>
+                <span className="font-mono text-amber-300/80">+{seconds(h.overMs)}</span>
+              </div>
+            ))}
+            {mine?.slices.all && (
+              <div className="text-gray-500 text-xs mt-1">+ is slower than your usual {seconds(mine.slices.all.avgMs)} a note</div>
+            )}
+          </div>
+        )}
         {ladder && (
           <div data-testid="note-ladder" data-level={ladder.level}>
             <div className="text-gray-500 text-xs uppercase tracking-wider mb-1">Ladder</div>
