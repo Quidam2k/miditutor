@@ -24,6 +24,7 @@ import { orderChordFingers } from './chordFingers';
 import { renderBinderHtml } from './binderRender';
 import { fingersLowToHigh, nextFinger, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, grewLabel, lapDone, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
+import { blockInput, blockLabel, current as blockPosition, groupPositions, showKeys, startBlocking, type BlockState, type BlockStep } from '../../engine/Blocking';
 import { BarInput } from './BarInput';
 import { loadStartupSnapshot, restorable, type SessionSnapshot } from './sessionSnapshot';
 import { pickBars, pickHand, pickSightPiece } from '../../engine/SightRead';
@@ -587,6 +588,13 @@ export function ScoreView() {
   const [chunk, setChunk] = useState<ChunkState | null>(null);
   const chunkRef = useRef<ChunkState | null>(null);
   chunkRef.current = chunk;
+  // #5657c blocking: his loop pressed one hand position at a time, as a chord, no timing.
+  const [block, setBlockState] = useState<BlockState | null>(null);
+  const blockRef = useRef<BlockState | null>(null);
+  const setBlock = useCallback((b: BlockState | null) => {
+    blockRef.current = b;
+    setBlockState(b);
+  }, []);
   // #5382: the whole range hit its clean-lap target. The loop stops until he restarts.
   const [reached, setReached] = useState<string | null>(null);
   const [grewTip, setGrewTip] = useState('');
@@ -861,6 +869,17 @@ export function ScoreView() {
       backwards: chunk
         ? { firstBar: chunk.first, lastBar: chunk.last, startBar: chunk.start, clean: chunk.clean, need: chunk.need, done: chunk.done, reached: reached !== null }
         : null,
+      // #5657c: blocking on his loop, one hand position at a time.
+      block: block
+        ? (() => {
+            const pos = block.positions[block.at];
+            return {
+              position: block.at + 1, of: block.positions.length, firstBar: pos.firstBar, lastBar: pos.lastBar,
+              keys: pos.keys.map(noteName), fingers: pos.fingers.map((n) => `${n.hand}${n.finger ?? '?'}`),
+              clean: block.clean, need: block.need, armed: block.armed, spoiled: block.spoiled, done: block.done,
+            };
+          })()
+        : null,
       pickingLoop: picking === 'off' ? null : picking,
       playedMarks: marks.length,
       wrongMarks: marks.filter((m) => m.wrong).length,
@@ -868,7 +887,7 @@ export function ScoreView() {
       expressionMarks: exprMarks.slice(0, 40),
       expression: exprFindings,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached]);
+  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1070,6 +1089,9 @@ export function ScoreView() {
     else osmd.cursor.cursorElement?.scrollIntoView?.({ block: 'center' });
     setFeedback({ kind: 'idle' });
     setReached(null);
+    // #5657c: Restart while blocking goes back to the first hand position.
+    const b = blockRef.current;
+    if (b) setBlock(startBlocking(b.positions, useMidiStore.getState().held, b.need));
     setWrongCount(0);
     setLap(f.lap);
     lapStartRef.current = null;
@@ -1164,7 +1186,10 @@ export function ScoreView() {
     (bars: { first: number; last: number } | null, keepChunk = false) => {
       const f = followerRef.current;
       if (!f) return;
-      if (!keepChunk) setChunk(null);
+      if (!keepChunk) {
+        setChunk(null);
+        setBlock(null);
+      }
       if (bars) {
         const first = Math.min(bars.first, bars.last);
         const last = Math.max(bars.first, bars.last);
@@ -1185,7 +1210,7 @@ export function ScoreView() {
       setLapBpm(null);
       restart();
     },
-    [restart],
+    [restart, setBlock],
   );
 
   const chunkEvent = (c: ChunkState, extra: Record<string, unknown> = {}) =>
@@ -1206,6 +1231,39 @@ export function ScoreView() {
       chunkEvent(chunk, { on: false });
       applyLoop({ first: chunk.first, last: chunk.last });
     } else if (loopBars) startBackwards(loopBars);
+  };
+
+  // #5657c: the loop's notes grouped into hand positions; `at` resumes after a fingering reload.
+  const startBlock = useCallback((bars: { first: number; last: number }, at = 0) => {
+    const f = followerRef.current;
+    if (!f) return;
+    const steps: BlockStep[] = [];
+    f.steps.forEach((s, i) => {
+      if (s.measure < bars.first || s.measure > bars.last) return;
+      const notes = (stepNotesRef.current[i] ?? []).filter((n) => !n.IsGraceNote).map((n) => ({
+        midi: toMidi(n),
+        hand: staffOf(n) === 0 ? ('R' as const) : ('L' as const),
+        finger: n.Fingering?.value?.trim() || undefined,
+      }));
+      steps.push({ step: i, bar: s.measure, notes });
+    });
+    const positions = groupPositions(steps);
+    if (!positions.length) return;
+    const held = useMidiStore.getState().held;
+    const i = Math.min(at, positions.length - 1);
+    setBlock({ ...startBlocking(positions, held), at: i, armed: !positions[i].keys.some((k) => held.has(k)) });
+    moveCursorTo(positions[i].firstStep);
+    reportEvent('block', { on: true, firstBar: bars.first, lastBar: bars.last, positions: positions.length, at: i });
+  }, [moveCursorTo, setBlock]);
+  const startBlockRef = useRef(startBlock);
+  startBlockRef.current = startBlock;
+  const toggleBlock = () => {
+    const b = blockRef.current;
+    if (b) {
+      reportEvent('block', { on: false, at: b.at, done: b.done });
+      setBlock(null);
+      restart();
+    } else if (loopBars) startBlock(loopBars);
   };
 
   // #10236: he typed a new overall range. The cursor only jumps if the loop itself changed.
@@ -1604,6 +1662,10 @@ export function ScoreView() {
         resumeLoopRef.current = null;
         // A real piece switch ends Build backwards; a fingering/hold reload keeps it with the loop.
         if (resume === null || !resumeLoop) setChunk(null);
+        // #5657c: blocking too; a reload rebuilds its positions (fingers decide them) where he was.
+        const blockAt = resume !== null && resumeLoop ? (blockRef.current?.at ?? null) : null;
+        blockRef.current = null;
+        setBlockState(null);
         if (resume !== null && followerRef.current) {
           // Keep his loop too (#10134): Restart then still goes to the loop's first bar.
           const range = resumeLoop && stepRangeOf(followerRef.current.steps, resumeLoop.first, resumeLoop.last);
@@ -1627,6 +1689,7 @@ export function ScoreView() {
           // Straight there: a relaunch should look like a flicker, not a slide across the piece.
           if (restored) centerCursor('auto');
           syncUi();
+          if (blockAt !== null && range && resumeLoop) startBlockRef.current(resumeLoop, blockAt);
         }
         drawnPieceRef.current = piece.id;
         setStatus('ready');
@@ -1701,6 +1764,8 @@ export function ScoreView() {
       if (!ev || ev === prev.lastNoteOn) return;
       const f = followerRef.current;
       if (!f || status !== 'ready') return;
+      // #5657c: while blocking, the hand-position judge below takes every key.
+      if (blockRef.current) return;
       // Notes played for an unsolved chord task are not attempts at the piece.
       const task = useTutorStore.getState().task;
       if (task && task.result?.verdict !== 'correct') return;
@@ -1870,6 +1935,35 @@ export function ScoreView() {
       syncUi();
     });
   }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong, noteCredit, spoilLap]);
+
+  // #5657c: while blocking, every press and release is judged against the hand position.
+  const blockOn = !!block;
+  useEffect(() => {
+    if (!blockOn) return;
+    return useMidiStore.subscribe((state, prev) => {
+      const b = blockRef.current;
+      if (!b || b.done) return;
+      const ev = state.lastNoteOn;
+      const pressed = ev && ev !== prev.lastNoteOn ? ev.note : undefined;
+      if (pressed === undefined && state.held === prev.held) return;
+      const { state: next, event } = blockInput(b, state.held, pressed);
+      setBlock(next);
+      if (event === 'none') return;
+      const pos = b.positions[b.at];
+      reportEvent('block', {
+        event, position: b.at + 1, of: b.positions.length, firstBar: pos.firstBar, lastBar: pos.lastBar, clean: next.clean,
+        ...(event === 'wrong' && pressed !== undefined ? { played: pressed, name: noteName(pressed) } : {}),
+      });
+      if (event === 'wrong' || event === 'spoiled-hold') {
+        flashWrong();
+        setHesitating(true);
+        return;
+      }
+      noteCredit(null);
+      if (event === 'next') moveCursorTo(next.positions[next.at].firstStep);
+      if (event === 'done' && useSettingsStore.getState().celebrateChime) void playLapChime();
+    });
+  }, [blockOn, setBlock, flashWrong, noteCredit, moveCursorTo, noteName]);
 
   // Key releases, for the length of a fermata on the last note. A wrong note shows
   // only while its key is down (#9630), so the score doesn't fill up with red.
@@ -2375,6 +2469,13 @@ export function ScoreView() {
     };
     return miniStaffPlacements(part(0), part(1));
   }, [miniStaff, status, cursorStep, stepsVersion]);
+  // #5657c: while blocking, the keyboard shows the whole hand position with its fingers;
+  // with training wheels it fades after his first clean hold and comes back on a slip.
+  const blockPos = block ? blockPosition(block) : null;
+  const blockHints = !!block && (!trainingWheels || showKeys(block, hesitating));
+  const blockLabels = blockPos && blockHints
+    ? new Map(blockPos.fingers.flatMap((n) => (n.finger ? [[n.midi, n.finger] as [number, string]] : [])))
+    : undefined;
   const finished = feedback.kind === 'complete';
   const lastBar = followerRef.current?.steps.at(-1)?.measure;
   const keyLabels = fingersOf(stepNotesRef.current[cursorStep]);
@@ -2716,7 +2817,10 @@ export function ScoreView() {
           </label>
         )}
         <div className="ml-auto flex items-center gap-2">
-          <PracticeReport btn={btn} piece={pieceName} onLoopBar={(bar) => applyLoop({ first: bar, last: bar })} disabled={watching || status !== 'ready'} />
+          <PracticeReport btn={btn} piece={pieceName} onLoopBar={(bar) => applyLoop({ first: bar, last: bar })} onBlockBar={(bar) => {
+            applyLoop({ first: bar, last: bar });
+            startBlock({ first: bar, last: bar });
+          }} disabled={watching || status !== 'ready'} />
           <PracticeSettings btn={btn} />
           <button
             onClick={() => {
@@ -2737,7 +2841,7 @@ export function ScoreView() {
           {loopBars && (
             <button
               onClick={toggleBackwards}
-              disabled={watching || (!chunk && loopBars.first === loopBars.last)}
+              disabled={watching || !!block || (!chunk && loopBars.first === loopBars.last)}
               className={`${btn} ${chunk ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
               title="Loop the last bar; after enough clean laps, add the bar before it, until the whole loop"
               data-testid="build-backwards"
@@ -2755,6 +2859,17 @@ export function ScoreView() {
                 data-testid="backwards-targets"
               />
             </label>
+          )}
+          {loopBars && !chunk && (
+            <button
+              onClick={toggleBlock}
+              disabled={watching}
+              className={`${btn} ${block ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+              title="Press each hand position of the loop as one chord: hold, let go, three clean holds, then the next position. No timing."
+              data-testid="block"
+            >
+              {block ? 'Block: on' : 'Block'}
+            </button>
           )}
           {/* While it plays for him, the timer owns the cursor. */}
           <button onClick={prevStep} disabled={status !== 'ready' || watching} className={btn}>
@@ -2785,13 +2900,21 @@ export function ScoreView() {
             Bar
             <BarInput testId="bar-now" value={measure} last={lastBar} onCommit={jumpToBar} disabled={watching} title="Type a bar number to go there" />
           </label>
-          <span className="text-gray-400" data-testid="next-notes">
-            Play:{' '}
-            <span className="font-mono font-semibold text-indigo-300">
-              {finished ? '—' : remaining.length ? namesOf(remaining) : '—'}
+          {blockPos ? (
+            // #5657c: the whole position, held together; hidden with the keys once he has it.
+            <span className="text-gray-400" data-testid="next-notes">
+              Hold together:{' '}
+              <span className="font-mono font-semibold text-indigo-300">{blockHints ? namesOf(blockPos.keys) : '…'}</span>
             </span>
-            {!finished && playHint && <span className="text-indigo-200/80"> ({playHint})</span>}
-          </span>
+          ) : (
+            <span className="text-gray-400" data-testid="next-notes">
+              Play:{' '}
+              <span className="font-mono font-semibold text-indigo-300">
+                {finished ? '—' : remaining.length ? namesOf(remaining) : '—'}
+              </span>
+              {!finished && playHint && <span className="text-indigo-200/80"> ({playHint})</span>}
+            </span>
+          )}
           <span className="text-gray-400">
             Wrong notes: <span className="font-mono text-gray-200">{wrongCount}</span>
           </span>
@@ -2831,6 +2954,11 @@ export function ScoreView() {
           {chunk && (
             <span className="font-semibold text-yellow-300" data-testid="backwards-status">
               {chunkLabel(chunk)}
+            </span>
+          )}
+          {block && (
+            <span className="font-semibold text-yellow-300" data-testid="block-status">
+              {blockLabel(block)}
             </span>
           )}
           {/* His live tempo, big enough to read from the bench (#8979). */}
@@ -3015,13 +3143,13 @@ export function ScoreView() {
           )}
           <PianoKeyboard88
             heightRatio={20}
-            green={new Set(watching ? watchNotes : hints ? stepKeys : [])}
-            red={wrongKeys}
+            green={new Set(watching ? watchNotes : blockPos ? (blockHints ? blockPos.keys : []) : hints ? stepKeys : [])}
+            red={blockPos ? new Set([...held].filter((k) => !blockPos.keys.includes(k))) : wrongKeys}
             held={held}
-            tied={hints ? tiedKeys : undefined}
-            tiedLabels={hints ? tiedLabels : undefined}
-            fadeMs={hints ? undefined : 500}
-            labels={hints ? keyLabels : undefined}
+            tied={hints && !blockPos ? tiedKeys : undefined}
+            tiedLabels={hints && !blockPos ? tiedLabels : undefined}
+            fadeMs={(blockPos ? blockHints : hints) ? undefined : 500}
+            labels={blockPos ? blockLabels : hints ? keyLabels : undefined}
             yellow={wheelTarget && hoverKey === wheelTarget.midi ? hoverKey : null}
             onKeyHover={setHoverKey}
             onKeyClick={onKeyClick}

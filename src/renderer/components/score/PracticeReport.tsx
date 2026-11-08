@@ -8,8 +8,8 @@ const getBridge = () =>
 const pct = (rate: number) => `${Math.round(rate * 100)}%`;
 const HAND = { L: 'Left', R: 'Right', '?': '' } as const;
 
-export function PracticeReport({ btn, piece, onLoopBar, disabled }: {
-  btn: string; piece: string; onLoopBar: (bar: number) => void; disabled?: boolean;
+export function PracticeReport({ btn, piece, onLoopBar, onBlockBar, disabled }: {
+  btn: string; piece: string; onLoopBar: (bar: number) => void; onBlockBar?: (bar: number) => void; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<PieceRollup | null | 'none'>(null);
@@ -54,17 +54,30 @@ export function PracticeReport({ btn, piece, onLoopBar, disabled }: {
                 <div className="mb-1 text-xs uppercase tracking-wide text-gray-500">Bars you miss most</div>
                 {data.worstBars.length === 0 && <p>None stand out.</p>}
                 {data.worstBars.map((b) => (
-                  <button
-                    key={b.bar}
-                    onClick={() => onLoopBar(b.bar)}
-                    disabled={disabled}
-                    className="flex w-full justify-between rounded px-1 text-left hover:bg-gray-800 disabled:opacity-40"
-                    title="Loop this bar"
-                    data-testid="report-bar"
-                  >
-                    <span>Bar {b.bar}</span>
-                    <span className="text-gray-400">{b.misses} of {b.strikes} ({pct(b.rate)})</span>
-                  </button>
+                  <div key={b.bar} className="flex items-center gap-1">
+                    <button
+                      onClick={() => onLoopBar(b.bar)}
+                      disabled={disabled}
+                      className="flex flex-1 justify-between rounded px-1 text-left hover:bg-gray-800 disabled:opacity-40"
+                      title="Loop this bar"
+                      data-testid="report-bar"
+                    >
+                      <span>Bar {b.bar}</span>
+                      <span className="text-gray-400">{b.misses} of {b.strikes} ({pct(b.rate)})</span>
+                    </button>
+                    {/* #5657c: a bar he keeps missing is the one to block. */}
+                    {onBlockBar && (
+                      <button
+                        onClick={() => onBlockBar(b.bar)}
+                        disabled={disabled}
+                        className="rounded px-1 text-xs text-yellow-300 hover:bg-gray-800 disabled:opacity-40"
+                        title="Block this bar: each hand position as one chord, three clean holds each"
+                        data-testid="report-block-bar"
+                      >
+                        Block
+                      </button>
+                    )}
+                  </div>
                 ))}
               </div>
               <div>
