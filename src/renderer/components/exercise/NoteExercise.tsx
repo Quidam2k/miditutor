@@ -7,6 +7,7 @@ import {
   NoteStats,
   KEY_HOLD_NOTES,
   TrainerNote,
+  keyPool,
   notePool,
   parseDayTally,
   parseNoteStats,
@@ -18,6 +19,7 @@ import {
   slowestNotes,
 } from '../../engine/NoteTrainer';
 import { LADDER_FAST_MS, LADDER_RUN, LadderLevels, isKnown, ladderLevel, ladderOrder, landmarkCount, parseLadder } from '../../engine/Ladder';
+import { ReviewSchedule, dueNotes, parseReview, pickWithReview, recordReview } from '../../engine/Review';
 import { MixUps, drillPool, liveMixUps, mixUpKind, mixUpLabel, parseMixUps, recordMixUp, recordRight } from '../../engine/MixUps';
 import { MajorKey, midiNumberToPitch, pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
 import { Pitch } from '../../types/music';
@@ -50,9 +52,11 @@ interface TrainerRecord {
   mixups: MixUps;
   /** #5652 A: notes in play on the ladder, per clef setting. Only ever grows. */
   ladder: LadderLevels;
+  /** #5652 I: per-note due day across days. */
+  review: ReviewSchedule;
 }
 
-const EMPTY: TrainerRecord = { stats: {}, today: null, mixups: {}, ladder: {} };
+const EMPTY: TrainerRecord = { stats: {}, today: null, mixups: {}, ladder: {}, review: {} };
 const MIXUPS_SHOWN = 5;
 
 // One read per launch: this tab remounts on every switch, and a re-read could land before
@@ -66,12 +70,13 @@ function readRecord(): Promise<TrainerRecord> {
       return null;
     })
     .then((raw) => {
-      const saved = raw as { stats?: unknown; today?: unknown; mixups?: unknown; ladder?: unknown } | null;
+      const saved = raw as { stats?: unknown; today?: unknown; mixups?: unknown; ladder?: unknown; review?: unknown } | null;
       return {
         stats: parseNoteStats(saved?.stats),
         today: parseDayTally(saved?.today),
         mixups: parseMixUps(saved?.mixups),
         ladder: parseLadder(saved?.ladder),
+        review: parseReview(saved?.review),
       };
     });
   return record;
@@ -115,8 +120,9 @@ export function NoteExercise() {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     const { trainerClef: clef, trainerAccidentals: useKeys, trainerLadder: onLadder } = useSettingsStore.getState();
-    const { stats, mixups, ladder } = mineRef.current;
+    const { stats, mixups, ladder, review } = mineRef.current;
     const avoid = currentRef.current?.id;
+    const today = localDay();
     let next: TrainerNote | null = null;
     let newKey = false;
     if (drillingRef.current) {
@@ -134,7 +140,8 @@ export function NoteExercise() {
     if (!next && onLadder) {
       keyRef.current = null;
       keyNotesLeft.current = 0;
-      next = pickNext(ladderOrder(clef).slice(0, ladderLevel(clef, stats, ladder[clef])), stats, avoid);
+      const pool = ladderOrder(clef).slice(0, ladderLevel(clef, stats, ladder[clef]));
+      next = pickWithReview(pool, stats, review, today, avoid) ?? pickNext(pool, stats, avoid);
     }
     if (next) {
       // A drill or ladder note: no key signature, so each note carries its own accidental.
@@ -145,10 +152,12 @@ export function NoteExercise() {
         newKey = true;
       }
       keyNotesLeft.current--;
-      next = pickInKey(clef, keyRef.current, stats, avoid);
+      const { inKey, outOfKey } = keyPool(clef, keyRef.current);
+      next = pickWithReview([...inKey, ...outOfKey], stats, review, today, avoid) ?? pickInKey(clef, keyRef.current, stats, avoid);
     } else {
       keyRef.current = null;
-      next = pickNext(notePool(clef, false), stats, avoid);
+      const pool = notePool(clef, false);
+      next = pickWithReview(pool, stats, review, today, avoid) ?? pickNext(pool, stats, avoid);
     }
     currentRef.current = next;
     answering.current = true;
@@ -213,7 +222,7 @@ export function NoteExercise() {
       const played = key
         ? midiNumberToPitch(ev.note, key.fifths < 0)
         : wrongPitches([ev.note], [asked.pitch.midiNumber], [asked.pitch])[0];
-      const { mixups, ladder } = mineRef.current;
+      const { mixups, ladder, review } = mineRef.current;
       const stats = recordAnswer(mineRef.current.stats, asked.id, correct, ms);
       const clef = settings.trainerClef;
       const was = ladder[clef] ?? landmarkCount(clef);
@@ -224,6 +233,7 @@ export function NoteExercise() {
         today: recordDay(mineRef.current.today, localDay(), correct, ms),
         mixups: correct ? recordRight(mixups, asked.id) : recordMixUp(mixups, asked.id, pitchToDisplayName(played), localDay()),
         ladder: level > was ? { ...ladder, [clef]: level } : ladder,
+        review: recordReview(review, asked.id, correct, ms, localDay()),
       });
 
       const name = pitchToDisplayName(asked.pitch);
@@ -248,7 +258,7 @@ export function NoteExercise() {
   }, [ask, keep]);
 
   const resetStats = () => {
-    if (!window.confirm('Clear your speed, hit rate and mix-ups for every note?')) return;
+    if (!window.confirm('Clear your speed, hit rate, mix-ups and review days for every note?')) return;
     drillingRef.current = false;
     setDrilling(false);
     keep(EMPTY);
@@ -265,6 +275,14 @@ export function NoteExercise() {
   const hitRate = day && day.attempts > 0 ? Math.round((day.hits / day.attempts) * 100) : null;
   const slowest = useMemo(() => slowestNotes(mine?.stats ?? {}, 5), [mine]);
   const mixUps = useMemo(() => liveMixUps(mine?.mixups ?? {}), [mine]);
+  // The notes this setting can ask: the ladder's set, every spelling in Keys, else the white keys.
+  const dueCount = useMemo(() => {
+    if (!mine) return 0;
+    const pool = trainerLadder
+      ? ladderOrder(trainerClef).slice(0, ladderLevel(trainerClef, mine.stats, mine.ladder[trainerClef]))
+      : notePool(trainerClef, trainerAccidentals);
+    return dueNotes(pool, mine.review, localDay()).length;
+  }, [mine, trainerClef, trainerAccidentals, trainerLadder]);
   const ladder = useMemo(() => {
     if (!trainerLadder) return null;
     const order = ladderOrder(trainerClef);
@@ -317,6 +335,9 @@ export function NoteExercise() {
           ) : (
             <div className="text-gray-500">Nothing yet</div>
           )}
+          <div data-testid="note-due" data-due={dueCount} className={`mt-1 ${dueCount ? 'text-amber-300' : 'text-gray-500'}`}>
+            Due today: {dueCount}
+          </div>
         </div>
         <div data-testid="note-slowest">
           <div className="text-gray-500 text-xs uppercase tracking-wider mb-1">Your slowest notes</div>

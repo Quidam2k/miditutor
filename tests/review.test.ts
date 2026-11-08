@@ -1,185 +1,72 @@
-import { describe, expect, it } from 'vitest';
-import { Layout, LayoutSystem, MarkState, Proposal, ReviewEvent, cropToPage, foldReview, markCheck, measureAtX, orderEvents, staffAtY, systemOfMeasure, systemRange } from '../src/shared/review';
+import { describe, it, expect } from 'vitest';
+import {
+  DUE_SHARE, MAX_INTERVAL_DAYS, REVIEW_FAST_MS, addDays, dueNotes, isDue, parseReview, pickWithReview, recordReview, ReviewSchedule,
+} from '../src/renderer/engine/Review';
+import { notePool } from '../src/renderer/engine/NoteTrainer';
 
-const system = (index: number, measures: [number, number] | null, over: Partial<LayoutSystem> = {}): LayoutSystem => ({
-  index, page: '01.png', y0: 0, y1: 100, spacing: 20, staves: [], x_left: 100, x_right: 500,
-  barlines: [100, 200, 300, 400, 500], bars: 4, measures,
-  numbers: measures ? [String(measures[0]), String(measures[1])] : null, crop: `review-pages/x/s0${index}.jpg`,
-  ...over,
-});
+const T = '2026-11-08';
+const G = 'treble:G4';
 
-const layout = (systems: LayoutSystem[], over: Partial<Layout> = {}): Layout => ({
-  version: 1, slug: 'x', score: 'x.musicxml', score_sha256: 'A', crop_scale: 0.5,
-  xml: { measures: 8, breaks: [1, 5], staves_per_system: 2 }, scan: { bars: 8, systems: 2 },
-  match: 'exact', systems, ...over,
-});
-
-const two = layout([system(1, [1, 4]), system(2, [5, 8])]);
-let n = 0;
-const ev = (e: Record<string, unknown>): ReviewEvent =>
-  ({ id: `e${String(++n).padStart(3, '0')}`, origin: 'solace', ts: n, ...e }) as ReviewEvent;
-
-describe('foldReview', () => {
-  it('verifies only when every line is confirmed and no mark is open', () => {
-    const events = [ev({ kind: 'confirm_system', system: 1, sha: 'A' })];
-    expect(foldReview(events, two, 'A').verified).toBe(false);
-    events.push(ev({ kind: 'confirm_system', system: 2, sha: 'A' }));
-    expect(foldReview(events, two, 'A').verified).toBe(true);
+describe('across-days review', () => {
+  it('adds days across month and year ends', () => {
+    expect(addDays('2026-11-30', 1)).toBe('2026-12-01');
+    expect(addDays('2026-12-31', 2)).toBe('2027-01-02');
+    expect(addDays('2027-03-01', -1)).toBe('2027-02-28');
   });
 
-  it('a later mark on a line voids its confirm; withdrawing the mark does not bring it back', () => {
-    const events = [
-      ev({ kind: 'confirm_system', system: 1, sha: 'A' }),
-      ev({ kind: 'confirm_system', system: 2, sha: 'A' }),
-      ev({ kind: 'mark', system: 2, measure: 6 }),
-    ];
-    const state = foldReview(events, two, 'A');
-    expect(state.confirmed).toEqual({ 1: expect.any(Number) });
-    expect(state.verified).toBe(false);
-    const markId = state.marks[0].id;
-    events.push(ev({ kind: 'withdraw', mark: markId }));
-    expect(foldReview(events, two, 'A').verified).toBe(false);
-    events.push(ev({ kind: 'confirm_system', system: 2, sha: 'A' }));
-    expect(foldReview(events, two, 'A').verified).toBe(true);
+  it('pushes a fast right out 1, 2, 4 days, each time it comes due', () => {
+    let s: ReviewSchedule = recordReview({}, G, true, 1000, T);
+    expect(s[G]).toEqual({ interval: 1, due: '2026-11-09' });
+    s = recordReview(s, G, true, 1000, '2026-11-09');
+    expect(s[G]).toEqual({ interval: 2, due: '2026-11-11' });
+    s = recordReview(s, G, true, REVIEW_FAST_MS, '2026-11-11');
+    expect(s[G]).toEqual({ interval: 4, due: '2026-11-15' });
   });
 
-  it('an applied fix keeps other lines confirmed and needs its own line re-confirmed', () => {
-    const fixed = layout(two.systems, { score_sha256: 'B' });
-    const events = [
-      ev({ kind: 'confirm_system', system: 1, sha: 'A' }),
-      ev({ kind: 'mark', system: 2, measure: 6 }),
-    ];
-    const markId = foldReview(events, two, 'A').marks[0].id;
-    events.push(ev({ kind: 'accept', mark: markId, before: 'A', after: 'B', proposal: 'p1' }));
-    let state = foldReview(events, fixed, 'B');
-    expect(state.marks[0].status).toBe('applied');
-    expect(Object.keys(state.confirmed)).toEqual(['1']);
-    events.push(ev({ kind: 'confirm_system', system: 2, sha: 'B' }));
-    state = foldReview(events, fixed, 'B');
-    expect(state.verified).toBe(true);
-    expect(state.externalChange).toBe(false);
+  it('does not cram: a fast right before it is due changes nothing', () => {
+    const s = recordReview({}, G, true, 1000, T);
+    expect(recordReview(s, G, true, 900, T)).toBe(s);
   });
 
-  it('a change outside review (re-ingest) drops every confirm', () => {
-    const events = [
-      ev({ kind: 'confirm_system', system: 1, sha: 'A' }),
-      ev({ kind: 'confirm_system', system: 2, sha: 'A' }),
-    ];
-    const state = foldReview(events, layout(two.systems, { score_sha256: 'C' }), 'C');
-    expect(state.confirmed).toEqual({});
-    expect(state.externalChange).toBe(true);
-    expect(state.verified).toBe(false);
+  it('caps the interval', () => {
+    const s = recordReview({ [G]: { interval: 40, due: T } }, G, true, 800, T);
+    expect(s[G].interval).toBe(MAX_INTERVAL_DAYS);
   });
 
-  it('a stale layout (score changed since it was made) never verifies', () => {
-    const events = [
-      ev({ kind: 'confirm_system', system: 1, sha: 'B' }),
-      ev({ kind: 'confirm_system', system: 2, sha: 'B' }),
-    ];
-    expect(foldReview(events, two, 'B').verified).toBe(false);
+  it('a wrong makes it due today and resets it', () => {
+    const s = recordReview({ [G]: { interval: 16, due: '2026-11-20' } }, G, false, null, T);
+    expect(s[G]).toEqual({ interval: 0, due: T });
+    expect(isDue(s, G, T)).toBe(true);
   });
 
-  it('a partial layout never verifies, even with every line confirmed', () => {
-    const partial = layout([system(1, [1, 4]), system(2, null)], { match: 'partial' });
-    const events = [
-      ev({ kind: 'confirm_system', system: 1, sha: 'A' }),
-      ev({ kind: 'confirm_system', system: 2, sha: 'A' }),
-    ];
-    expect(foldReview(events, partial, 'A').verified).toBe(false);
+  it('a slow right pulls it in, never pushes it later', () => {
+    const s = recordReview({ [G]: { interval: 8, due: '2026-11-30' } }, G, true, REVIEW_FAST_MS + 1, T);
+    expect(s[G]).toEqual({ interval: 4, due: '2026-11-12' });
+    const soon = recordReview({ [G]: { interval: 8, due: '2026-11-09' } }, G, true, 5000, T);
+    expect(soon[G].due).toBe('2026-11-09');
+    // Slow at interval 0 still leaves today, so one hard note can't loop.
+    expect(recordReview({ [G]: { interval: 0, due: T } }, G, true, 5000, T)[G].due).toBe('2026-11-09');
   });
 
-  it('"still wrong" keeps the mark open and collects his notes', () => {
-    const events = [ev({ kind: 'mark', system: 1, measure: 2, note: 'left hand' })];
-    const markId = foldReview(events, two, 'A').marks[0].id;
-    events.push(ev({ kind: 'reject', mark: markId, note: 'the G is still an A' }));
-    const mark = foldReview(events, two, 'A').marks[0];
-    expect(mark.status).toBe('open');
-    expect(mark.rejections).toEqual(['the G is still an A']);
-  });
-});
-
-describe('orderEvents', () => {
-  it('merges two origins by time then id and drops duplicate ids', () => {
-    const a = { id: 'b', origin: 'pinocchio', ts: 5, kind: 'mark', system: 1, measure: 1 } as ReviewEvent;
-    const b = { id: 'a', origin: 'solace', ts: 5, kind: 'mark', system: 1, measure: 2 } as ReviewEvent;
-    const c = { id: 'c', origin: 'solace', ts: 1, kind: 'mark', system: 1, measure: 3 } as ReviewEvent;
-    expect(orderEvents([a, b, c, a]).map((e) => e.id)).toEqual(['c', 'a', 'b']);
-  });
-});
-
-describe('measureAtX', () => {
-  it('maps x between barlines to the score position', () => {
-    const s = system(2, [5, 8]);
-    expect(measureAtX(s, 150)).toBe(5);
-    expect(measureAtX(s, 499)).toBe(8);
-    expect(measureAtX(s, 50)).toBeNull();
-    expect(measureAtX(s, 520)).toBeNull();
+  it('an untimed right does not move it', () => {
+    const s: ReviewSchedule = { [G]: { interval: 2, due: T } };
+    expect(recordReview(s, G, true, null, T)).toBe(s);
   });
 
-  it('an unmapped system maps nothing', () => {
-    expect(measureAtX(system(1, null), 150)).toBeNull();
-  });
-});
-
-describe('systemOfMeasure', () => {
-  it('finds the line holding a bar', () => {
-    expect(systemOfMeasure(two, 6)?.index).toBe(2);
-    expect(systemOfMeasure(two, 9)).toBeUndefined();
-  });
-});
-
-describe('systemRange', () => {
-  const gappy = layout([system(1, [1, 4]), system(2, null), system(3, null), system(4, [13, 16])], { xml: { measures: 20, breaks: [], staves_per_system: 2 } });
-
-  it('a mapped line shows its own bars', () => {
-    expect(systemRange(gappy, 1)).toEqual({ from: 1, to: 4, mapped: true });
+  it('picks due notes first, but not every time, and not the one just asked', () => {
+    const pool = notePool('treble', false);
+    const sched: ReviewSchedule = { [G]: { interval: 0, due: T }, 'treble:E4': { interval: 3, due: '2026-11-07' }, 'treble:A4': { interval: 2, due: '2026-11-09' } };
+    expect(dueNotes(pool, sched, T).map((n) => n.id).sort()).toEqual(['treble:E4', G]);
+    expect(pickWithReview(pool, {}, sched, T, G, () => 0)?.id).toBe('treble:E4');
+    expect(pickWithReview(pool, {}, sched, T, undefined, () => DUE_SHARE)).toBeNull();
+    expect(pickWithReview(pool, {}, { [G]: { interval: 0, due: T } }, T, G, () => 0)).toBeNull();
+    expect(pickWithReview(pool, {}, {}, T, undefined, () => 0)).toBeNull();
   });
 
-  it('an unmapped line shows every bar between the mapped lines around it', () => {
-    expect(systemRange(gappy, 2)).toEqual({ from: 5, to: 12, mapped: false });
-    expect(systemRange(gappy, 3)).toEqual({ from: 5, to: 12, mapped: false });
-  });
-
-  it('runs to the ends of the score at the edges, and is null for an unknown line or an empty gap', () => {
-    const edges = layout([system(1, null), system(2, [3, 6]), system(3, null)], { xml: { measures: 9, breaks: [], staves_per_system: 2 } });
-    expect(systemRange(edges, 1)).toEqual({ from: 1, to: 2, mapped: false });
-    expect(systemRange(edges, 3)).toEqual({ from: 7, to: 9, mapped: false });
-    expect(systemRange(edges, 9)).toBeNull();
-    const tight = layout([system(1, [1, 4]), system(2, null), system(3, [5, 8])]);
-    expect(systemRange(tight, 2)).toBeNull();
-  });
-});
-
-describe('scan coordinates', () => {
-  const s = system(1, [1, 4], { y0: 800, staves: [[900, 925, 950, 975, 1000], [1150, 1175, 1200, 1225, 1250]] });
-
-  it('a crop point scales back to page px below the system top', () => {
-    expect(cropToPage(two, s, 150, 40)).toEqual({ x: 300, y: 880 });
-  });
-
-  it('a click maps to bar and staff', () => {
-    const p = cropToPage(two, s, 125, 200); // page (250, 1200)
-    expect(measureAtX(s, p.x)).toBe(2);
-    expect(staffAtY(s, p.y)).toBe(2);
-    expect(staffAtY(s, 950)).toBe(1);
-    expect(staffAtY(s, 1060)).toBe(1); // nearer the top staff's bottom line
-    expect(staffAtY(system(1, null), 10)).toBeNull();
-  });
-});
-
-describe('markCheck', () => {
-  const mark = { id: 'm', rejections: [] as string[] } as MarkState;
-  const proposal = (over: Partial<Proposal> = {}) =>
-    ({ id: 'p', mark: 'm', status: 'ready', base_sha256: 'A', rejections_seen: 0, created: 1, ...over }) as Proposal;
-
-  it('needs a check until a proposal answers every "still wrong"', () => {
-    expect(markCheck(mark, undefined, 'A')).toBe('needed');
-    expect(markCheck(mark, proposal(), 'A')).toBe('done');
-    expect(markCheck({ ...mark, rejections: ['no, the bass'] }, proposal(), 'A')).toBe('needed');
-  });
-
-  it('a fix made against another version of the score is checked again; "no change" is not', () => {
-    expect(markCheck(mark, proposal(), 'B')).toBe('needed');
-    expect(markCheck(mark, proposal({ status: 'no_change' }), 'B')).toBe('done');
+  it('keeps only well-formed stored entries', () => {
+    const raw = JSON.parse('{"treble:G4":{"interval":2,"due":"2026-11-10"},"a":{"interval":-1,"due":"2026-11-10"},"b":{"interval":1.5,"due":"2026-11-10"},"c":{"interval":1,"due":"tomorrow"},"d":null,"__proto__":{"interval":1,"due":"2026-11-10"}}');
+    expect(parseReview(raw)).toEqual({ 'treble:G4': { interval: 2, due: '2026-11-10' } });
+    expect(parseReview([])).toEqual({});
+    expect(parseReview(null)).toEqual({});
   });
 });
