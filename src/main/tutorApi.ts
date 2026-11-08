@@ -119,6 +119,8 @@ export class TutorApi {
     recorder?: { status(): unknown; start(): unknown; stop(): Promise<string> };
     /** "Bring in the tutor" (#5154): `invite` and `lastNoteAt` in /state, which Pantheon polls. */
     invite?: { state(): InviteState; readonly lastNoteAt: number | null };
+    /** #5154: whether Roland notes bring the tutor in on this box (/state autoInvite). */
+    autoInvite?: () => boolean;
     /** #5522: `keepAwake` in /state = the display-sleep blocker is held right now. */
     keepAwake?: { readonly held: boolean };
   }) {
@@ -354,6 +356,7 @@ export class TutorApi {
         lastGestureId: this.lastGestureId, eventSeq: this.eventSeq,
         injectEnabled: this.opts.allowInject, recording: this.opts.recorder?.status() ?? null,
         invite: this.opts.invite?.state() ?? null, lastNoteAt: this.opts.invite?.lastNoteAt ?? null,
+        autoInvite: this.opts.autoInvite?.() ?? false,
         keepAwake: this.opts.keepAwake?.held ?? null });
     } else if (route === 'GET /events' || route === 'GET /gestures') {
       const since = this.number(url, 'since', 0);

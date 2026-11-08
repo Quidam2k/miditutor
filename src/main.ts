@@ -7,7 +7,7 @@ import JSZip from 'jszip';
 import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
 import { Recorder, outputSize } from './main/recorder';
-import { InviteTimer, postLive } from './main/invite';
+import { AutoInvite, InviteTimer, isKeyNote, postLive } from './main/invite';
 import { KeepAwake } from './main/keepAwake';
 import { onSomeDisplay, sessionFiles, WindowState } from './main/sessionFiles';
 import { Review, mirrorConfig, reviewConfig, sshRemote } from './main/review';
@@ -348,8 +348,13 @@ let inviteSentAt = 0;
 const keepAwake = new KeepAwake({
   blocker: { start: () => powerSaveBlocker.start('prevent-display-sleep'), stop: (id) => powerSaveBlocker.stop(id) },
 });
+const inviteIdleMs = Number(process.env.MIDITUTOR_INVITE_IDLE_MS ?? 10 * 60_000);
+// #5154 auto-invite: on by default on macOS (Pinocchio, the Mac at the piano). Review on Solace never
+// brings the tutor in (Todd msg 57814). Flip with an `auto-invite` file (on/off) in userData, or
+// MIDITUTOR_AUTO_INVITE. Set once the setting is read at startup.
+let autoInvite = new AutoInvite({ enabled: false, idleMs: inviteIdleMs });
 const invite = new InviteTimer({
-  idleMs: Number(process.env.MIDITUTOR_INVITE_IDLE_MS ?? 10 * 60_000),
+  idleMs: inviteIdleMs,
   onIdle: () => {
     endInvite('idle');
     mainWindow?.webContents.send('tutor:command', { type: 'invite', state: invite.state() });
@@ -372,15 +377,33 @@ const tellPantheon = async (action: 'on' | 'off') => {
   return result;
 };
 
+const beginInvite = (reason: 'button' | 'notes') => {
+  invite.start();
+  tutorApi?.onEvent({ kind: 'invite-on', timestamp: Date.now(), reason });
+  mainWindow?.webContents.send('tutor:command', { type: 'invite', state: invite.state() });
+};
+
+const autoStartInvite = async () => {
+  let ok = false;
+  try {
+    ok = (await tellPantheon('on')).ok;
+  } catch (err) {
+    console.warn('[invite] auto on failed:', (err as Error).message);
+  } finally {
+    autoInvite.settled(ok, Date.now());
+  }
+  if (ok && !invite.state().active) beginInvite('notes');
+};
+
 const toggleInvite = async () => {
   if (invite.state().active) {
+    autoInvite.manualOff(Date.now());
     endInvite('button');
     return { state: invite.state() };
   }
   const result = await tellPantheon('on');
   if (!result.ok) return { state: invite.state(), error: "Couldn't reach Pantheon" };
-  invite.start();
-  tutorApi?.onEvent({ kind: 'invite-on', timestamp: Date.now(), reason: 'button' });
+  beginInvite('button');
   return { state: invite.state() };
 };
 
@@ -453,6 +476,11 @@ const startTutorApi = () => {
   }
   const send = (cmd: RendererCommand) => mainWindow?.webContents.send('tutor:command', cmd);
   apiToken = loadOrCreateToken(app.getPath('userData'));
+  void readSetting('auto-invite', process.env.MIDITUTOR_AUTO_INVITE).then((v) => {
+    const on = v ? /^(on|1|true|yes)$/i.test(v) : process.platform === 'darwin';
+    autoInvite = new AutoInvite({ enabled: on, idleMs: inviteIdleMs });
+    console.log(`[invite] auto-invite on Roland notes: ${on ? 'on' : 'off'}`);
+  });
   tutorApi = new TutorApi({
     port: Number(process.env.MIDITUTOR_PORT ?? 47800),
     token: apiToken,
@@ -467,14 +495,18 @@ const startTutorApi = () => {
     },
     recorder: { status: () => recorder.status(), start: startTake, stop: () => recorder.stop() },
     invite,
+    autoInvite: () => autoInvite.enabled,
     keepAwake,
   });
   ipcMain.on('tutor:note', (_e, ev) => {
     tutorApi?.onNote(ev);
     recorder.noteEvent(ev);
     if (ev?.kind === 'noteon') {
-      invite.noteOn();
       keepAwake.noteOn();
+      // #5154: only real keys (the Roland) bring the tutor in or keep it; the on-screen keyboard doesn't.
+      if (!isKeyNote(ev.source)) return;
+      if (autoInvite.shouldStart(Date.now(), invite.state().active, invite.lastNoteAt)) void autoStartInvite();
+      invite.noteOn();
       // The button's "N min left" reads endsAt, which every note moves (#10171). It only
       // changes by the minute, so once a second is plenty for fast passages.
       const now = Date.now();

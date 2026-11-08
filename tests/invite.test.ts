@@ -6,7 +6,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import type { AddressInfo, Socket } from 'node:net';
-import { InviteTimer, postLive } from '../src/main/invite';
+import { AutoInvite, InviteTimer, isKeyNote, postLive } from '../src/main/invite';
 
 describe('InviteTimer', () => {
   const idleMs = 10 * 60_000;
@@ -335,5 +335,45 @@ describe('postLive', () => {
     });
 
     expect(result).toEqual({ ok: false, error: expect.any(String) });
+  });
+});
+
+describe('AutoInvite (#5154: Roland keys bring the tutor in)', () => {
+  const idleMs = 10 * 60_000;
+  const t0 = Date.UTC(2026, 10, 8, 23);
+
+  it('counts the Roland and test injects, never the on-screen keyboard', () => {
+    expect(isKeyNote('hardware')).toBe(true);
+    expect(isKeyNote('inject')).toBe(true);
+    expect(isKeyNote('virtual')).toBe(false);
+    expect(isKeyNote(undefined)).toBe(false);
+  });
+
+  it('starts on the first key, once, and not while active or disabled', () => {
+    const auto = new AutoInvite({ enabled: true, idleMs });
+    expect(auto.shouldStart(t0, false, null)).toBe(true);
+    expect(auto.shouldStart(t0 + 10, false, t0)).toBe(false); // "on" still in flight
+    auto.settled(true, t0 + 50);
+    expect(auto.shouldStart(t0 + 100, true, t0 + 10)).toBe(false); // already on
+    expect(auto.shouldStart(t0 + idleMs * 2, false, t0 + 100)).toBe(true); // back after idle-off
+    expect(new AutoInvite({ enabled: false, idleMs }).shouldStart(t0, false, null)).toBe(false);
+  });
+
+  it('waits a minute after a failed "on" before trying again', () => {
+    const auto = new AutoInvite({ enabled: true, idleMs });
+    expect(auto.shouldStart(t0, false, null)).toBe(true);
+    auto.settled(false, t0);
+    expect(auto.shouldStart(t0 + 30_000, false, t0)).toBe(false);
+    expect(auto.shouldStart(t0 + 60_000, false, t0 + 30_000)).toBe(true);
+  });
+
+  it('a button "off" holds until a quiet gap as long as the idle window', () => {
+    const auto = new AutoInvite({ enabled: true, idleMs });
+    auto.manualOff(t0);
+    expect(auto.shouldStart(t0 + 1000, false, t0 - 500)).toBe(false);
+    // keeps playing: each note is within the window of the last, so still held
+    expect(auto.shouldStart(t0 + idleMs + 5000, false, t0 + idleMs)).toBe(false);
+    // a 10-min quiet gap, then a key: auto is back
+    expect(auto.shouldStart(t0 + idleMs * 3, false, t0 + idleMs + 5000)).toBe(true);
   });
 });

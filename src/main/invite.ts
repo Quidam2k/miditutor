@@ -73,6 +73,46 @@ export class InviteTimer {
   }
 }
 
+/**
+ * #5154 auto-invite (Todd msg 57815): his first key on the Roland brings the tutor in, and
+ * 10 min without a key lets it go (InviteTimer). Only real keys count: on-screen keys and
+ * clicking around the app never do. Pressing the button off holds auto off until a quiet
+ * gap as long as the idle window, so a manual "off" is not undone by his next note.
+ */
+export class AutoInvite {
+  private offAt: number | null = null;
+  private pending = false;
+  private retryAt = 0;
+
+  constructor(private readonly opts: { enabled: boolean; idleMs: number; retryMs?: number }) {}
+
+  get enabled(): boolean {
+    return this.opts.enabled;
+  }
+
+  /** On a real key's note-on, before InviteTimer.noteOn(). True = send "on" now, then call settled(). */
+  shouldStart(now: number, active: boolean, prevNoteAt: number | null): boolean {
+    if (!this.opts.enabled) return false;
+    if (this.offAt !== null && now - Math.max(this.offAt, prevNoteAt ?? 0) >= this.opts.idleMs) this.offAt = null;
+    if (active || this.offAt !== null || this.pending || now < this.retryAt) return false;
+    this.pending = true;
+    return true;
+  }
+
+  /** A failed "on" waits retryMs (default 1 min) before a note tries again. */
+  settled(ok: boolean, now: number): void {
+    this.pending = false;
+    this.retryAt = ok ? 0 : now + (this.opts.retryMs ?? 60_000);
+  }
+
+  manualOff(now: number): void {
+    this.offAt = now;
+  }
+}
+
+/** Real keys: the Roland, or /inject in tests (gated). Not the on-screen keyboard. */
+export const isKeyNote = (source: unknown): boolean => source === 'hardware' || source === 'inject';
+
 type LiveResult =
   | { ok: true; status: number; body: unknown }
   | { ok: false; error: string };
