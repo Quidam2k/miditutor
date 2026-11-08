@@ -17,6 +17,7 @@ import {
   recordDay,
   slowestNotes,
 } from '../../engine/NoteTrainer';
+import { MixUps, drillPool, liveMixUps, mixUpKind, mixUpLabel, parseMixUps, recordMixUp, recordRight } from '../../engine/MixUps';
 import { MajorKey, midiNumberToPitch, pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
 import { Pitch } from '../../types/music';
 import { playNote, initAudio, isInitialized } from '../../audio/AudioEngine';
@@ -44,7 +45,12 @@ interface Feedback {
 interface TrainerRecord {
   stats: NoteStats;
   today: DayTally | null;
+  /** #5652 D: what he played instead, per asked note. */
+  mixups: MixUps;
 }
+
+const EMPTY: TrainerRecord = { stats: {}, today: null, mixups: {} };
+const MIXUPS_SHOWN = 5;
 
 // One read per launch: this tab remounts on every switch, and a re-read could land before
 // the last answer's write.
@@ -57,8 +63,8 @@ function readRecord(): Promise<TrainerRecord> {
       return null;
     })
     .then((raw) => {
-      const saved = raw as { stats?: unknown; today?: unknown } | null;
-      return { stats: parseNoteStats(saved?.stats), today: parseDayTally(saved?.today) };
+      const saved = raw as { stats?: unknown; today?: unknown; mixups?: unknown } | null;
+      return { stats: parseNoteStats(saved?.stats), today: parseDayTally(saved?.today), mixups: parseMixUps(saved?.mixups) };
     });
   return record;
 }
@@ -79,7 +85,7 @@ export function NoteExercise() {
   const [mine, setMine] = useState<TrainerRecord | null>(null);
   const [current, setCurrent] = useState<TrainerNote | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
-  const mineRef = useRef<TrainerRecord>({ stats: {}, today: null });
+  const mineRef = useRef<TrainerRecord>(EMPTY);
   const presentedAt = useRef(0);
   // The first note after opening the tab may have sat there for minutes: it counts, but isn't timed.
   const timed = useRef(false);
@@ -90,16 +96,34 @@ export function NoteExercise() {
   const [musicKey, setMusicKey] = useState<MajorKey | null>(null);
   const keyRef = useRef<MajorKey | null>(null);
   const keyNotesLeft = useRef(0);
+  // #5652 D: asking only the notes of his live mix-up pairs. Ends by itself when they're cleared.
+  const [drilling, setDrilling] = useState(false);
+  const drillingRef = useRef(false);
+  const [drillDone, setDrillDone] = useState(false);
 
   const ask = useCallback((isTimed: boolean) => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
     const { trainerClef: clef, trainerAccidentals: useKeys } = useSettingsStore.getState();
-    const { stats } = mineRef.current;
+    const { stats, mixups } = mineRef.current;
     const avoid = currentRef.current?.id;
-    let next: TrainerNote;
+    let next: TrainerNote | null = null;
     let newKey = false;
-    if (useKeys) {
+    if (drillingRef.current) {
+      const pool = drillPool(liveMixUps(mixups));
+      if (pool.length) {
+        keyRef.current = null;
+        keyNotesLeft.current = 0;
+        next = pickNext(pool, stats, avoid);
+      } else {
+        drillingRef.current = false;
+        setDrilling(false);
+        setDrillDone(true);
+      }
+    }
+    if (next) {
+      // A drill note: no key signature, so each note carries its own accidental.
+    } else if (useKeys) {
       if (keyNotesLeft.current <= 0 || !keyRef.current) {
         keyRef.current = pickKey(keyRef.current);
         keyNotesLeft.current = KEY_HOLD_NOTES;
@@ -170,9 +194,15 @@ export function NoteExercise() {
       // With the name printed he's reading a label, not the staff: it counts, but isn't timed.
       const settings = useSettingsStore.getState();
       const ms = timed.current && !settings.showNoteNames ? Date.now() - presentedAt.current : null;
+      const key = keyRef.current;
+      const played = key
+        ? midiNumberToPitch(ev.note, key.fifths < 0)
+        : wrongPitches([ev.note], [asked.pitch.midiNumber], [asked.pitch])[0];
+      const { mixups } = mineRef.current;
       keep({
         stats: recordAnswer(mineRef.current.stats, asked.id, correct, ms),
         today: recordDay(mineRef.current.today, localDay(), correct, ms),
+        mixups: correct ? recordRight(mixups, asked.id) : recordMixUp(mixups, asked.id, pitchToDisplayName(played), localDay()),
       });
 
       const name = pitchToDisplayName(asked.pitch);
@@ -181,10 +211,6 @@ export function NoteExercise() {
       if (correct) {
         setFeedback({ correct, line: names ? `You played ${name}` : ms === null ? '' : seconds(ms), wrong: [] });
       } else {
-        const key = keyRef.current;
-        const played = key
-          ? midiNumberToPitch(ev.note, key.fifths < 0)
-          : wrongPitches([ev.note], [asked.pitch.midiNumber], [asked.pitch])[0];
         const drawable = stepsOffStaff(played, asked.clef) <= MAX_DRAWN_LEDGER_STEPS;
         const words = ev.note < asked.pitch.midiNumber ? 'Much lower' : 'Much higher';
         setFeedback({
@@ -201,13 +227,23 @@ export function NoteExercise() {
   }, [ask, keep]);
 
   const resetStats = () => {
-    if (!window.confirm('Clear your speed and hit rate for every note?')) return;
-    keep({ stats: {}, today: null });
+    if (!window.confirm('Clear your speed, hit rate and mix-ups for every note?')) return;
+    drillingRef.current = false;
+    setDrilling(false);
+    keep(EMPTY);
+  };
+
+  const toggleDrill = () => {
+    drillingRef.current = !drillingRef.current;
+    setDrilling(drillingRef.current);
+    setDrillDone(false);
+    ask(false);
   };
 
   const day = mine?.today?.day === localDay() ? mine.today : null;
   const hitRate = day && day.attempts > 0 ? Math.round((day.hits / day.attempts) * 100) : null;
   const slowest = useMemo(() => slowestNotes(mine?.stats ?? {}, 5), [mine]);
+  const mixUps = useMemo(() => liveMixUps(mine?.mixups ?? {}), [mine]);
 
   return (
     <div
@@ -216,6 +252,7 @@ export function NoteExercise() {
       data-note-id={current?.id}
       data-midi={current?.pitch.midiNumber}
       data-key={musicKey?.name}
+      data-drilling={drilling ? '1' : undefined}
     >
       <div className="relative w-full max-w-2xl">
         <StaffDisplay
@@ -257,6 +294,37 @@ export function NoteExercise() {
               <span className="font-mono text-gray-400">{Math.round(n.hitRate * 100)}% right</span>
             </div>
           ))}
+        </div>
+        <div data-testid="note-mixups">
+          <div className="text-gray-500 text-xs uppercase tracking-wider mb-1">Your mix-ups</div>
+          {mixUps.length === 0 && (
+            <div className="text-gray-500">{drillDone ? 'All cleared' : 'None yet'}</div>
+          )}
+          {mixUps.slice(0, MIXUPS_SHOWN).map((m) => {
+            const [clef, name] = m.asked.split(':');
+            const why = mixUpLabel(mixUpKind(m.asked, m.played), clef as TrainerNote['clef']);
+            return (
+              <div key={`${m.asked}>${m.played}`} className="flex gap-3 text-gray-200" data-testid="note-mixup">
+                <span className="w-24">
+                  <span className="font-semibold">{name}</span> <span className="text-gray-400">{clef}</span>
+                </span>
+                <span className="w-24">
+                  you played <span className="font-semibold">{m.played}</span>
+                </span>
+                <span className="w-8 font-mono text-gray-400">{m.count}×</span>
+                {why && <span className="text-amber-300/80">{why}</span>}
+              </div>
+            );
+          })}
+          {(mixUps.length > 0 || drilling) && (
+            <button
+              onClick={toggleDrill}
+              data-testid="note-mixup-drill"
+              className="mt-2 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-100"
+            >
+              {drilling ? 'Back to all notes' : 'Drill my mix-ups'}
+            </button>
+          )}
         </div>
       </div>
 
