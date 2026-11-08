@@ -96,12 +96,15 @@ const RETRY_MS = 60_000;
 const BACKUP_DELAY_MS = 60_000;
 const PULL_MS = 2 * 60_000;
 const PUSH_DELAY_MS = 3_000;
-const EVENT_KINDS = new Set(['mark', 'confirm_system', 'accept', 'reject', 'withdraw', 'accept_request', 'recheck', 'request_failed', 'fingering', 'fingered']);
+const EVENT_KINDS = new Set(['mark', 'confirm_system', 'review_done', 'needs_us', 'accept', 'reject', 'withdraw', 'accept_request', 'recheck', 'request_failed', 'fingering', 'fingered']);
 /** What he can add with append() (accept and the Pinocchio requests have their own paths). */
-const USER_KINDS = new Set(['mark', 'confirm_system', 'reject', 'withdraw', 'fingering']);
+const USER_KINDS = new Set(['mark', 'confirm_system', 'review_done', 'reject', 'withdraw', 'fingering']);
 /** What the desk takes from Pinocchio's outbox. */
 const PINOCCHIO_KINDS = new Set([...USER_KINDS, 'accept_request', 'recheck']);
 const TRUST_SOURCE = 'todd-review';
+/** #5729: what our own second look tells the checker after a first look that couldn't fix his flag. */
+const SECOND_LOOK = 'Todd flagged this bar as not matching the scan, and the first look did not fix it. ' +
+  'Compare every note, rest, accidental, tie, dot and duration of the target bar with the scan, one at a time.';
 
 export interface ReviewPieceSummary {
   slug: string;
@@ -229,7 +232,8 @@ export class Review {
       const key = `${slug}/${mark.id}`;
       const held = this.held.get(key);
       const proposal = latest.get(mark.id);
-      if (mark.measure === null) checks[mark.id] = { state: 'waiting', reason: 'No bar was picked: withdraw it and circle the bar.' };
+      if (mark.needsUs !== null) checks[mark.id] = { state: 'us', reason: mark.needsUs };
+      else if (mark.measure === null) checks[mark.id] = { state: 'waiting', reason: 'No bar was picked: withdraw it and circle the bar.' };
       else if (this.mirror) checks[mark.id] = mirrorCheck(mark, proposal, sha, events);
       else if (held !== undefined) checks[mark.id] = { state: 'waiting', reason: held };
       else if (this.isQueued(slug, mark.id)) checks[mark.id] = { state: 'checking' };
@@ -323,7 +327,42 @@ export class Review {
         this.checking = null;
         this.markDirty(next.slug);
         this.pump();
+        void this.secondLook(next.slug, next.mark).catch((err) =>
+          console.warn(`[review] second look ${key}: ${(err as Error).message}`));
       });
+  }
+
+  /**
+   * #5729: a flag is enough. When a re-check finds nothing to change or fails, look once more
+   * by ourselves; when that can't fix it either, a worker takes it (needs_us), not Todd.
+   */
+  private async secondLook(slug: string, markId: string) {
+    if (this.mirror) return;
+    await this.serial(async () => {
+      const piece = await this.piece(slug);
+      const mark = piece.state.marks.find((m) => m.id === markId && m.status === 'open');
+      const check = piece.checks[markId];
+      if (!mark || check?.state !== 'done' || check.proposal.status === 'ready') return;
+      const base = { id: randomUUID(), origin: 'solace' as const, ts: Date.now() };
+      if (mark.autoRejections === 0) {
+        await this.writeEvents(slug, [{ ...base, kind: 'reject', mark: markId, note: SECOND_LOOK, auto: true }]);
+        this.queueChecks(await this.piece(slug));
+        return;
+      }
+      const p = check.proposal;
+      const reason = p.status === 'no_change'
+        ? `Two looks found nothing to change${p.explanation ? `: ${p.explanation}` : '.'}`
+        : `The re-check failed twice${p.reason ? `: ${p.reason}` : '.'}`;
+      await this.writeEvents(slug, [{ ...base, kind: 'needs_us', mark: markId, reason }]);
+      // The worker's list and one orch event; the log entry above is what the screen shows.
+      void this.queueScript(['needs-us', '--library', this.cfg.library, slug, markId, '--reason', reason])
+        .then(({ code, result }) => {
+          if (code !== 0 || (result.notice && result.notice !== 'sent')) {
+            console.warn(`[review] needs-us ${slug}/${markId}: ${String(result.error ?? result.notice ?? code)}`);
+          }
+        });
+    });
+    this.markDirty(slug);
   }
 
   /** Apply a proposal he accepted, then log it as an accept event. Never automatic. */
@@ -602,6 +641,10 @@ export class Review {
         }
         event.sha = piece.sha;
       }
+      if (event.kind === 'review_done') {
+        if (piece.layout?.score_sha256 !== piece.sha) throw new Error("the scan isn't lined up with this score yet");
+        event.sha = piece.sha;
+      }
       await this.writeEvents(slug, [event]);
       const next = await this.piece(slug);
       if (this.mirror) return next;
@@ -719,8 +762,12 @@ export class Review {
     // The entry his review replaced (the audit's), restored when the piece is no longer verified.
     const previous = mine ? current.previous : current;
     if (piece.state.verified) {
-      const systems = Object.keys(piece.state.confirmed).map(Number).sort((a, b) => a - b);
-      const last = Math.max(...Object.values(piece.state.confirmed));
+      // #5729: his "done reviewing" covers every line; before it, the lines he confirmed one by one.
+      const done = piece.state.doneAt;
+      const systems = done !== null
+        ? (piece.layout?.systems ?? []).map((s) => s.index)
+        : Object.keys(piece.state.confirmed).map(Number).sort((a, b) => a - b);
+      const last = done ?? Math.max(...Object.values(piece.state.confirmed));
       const day = new Date(last).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
       const content = contentSha256(piece.musicxml);
       const entry = {

@@ -424,3 +424,22 @@ def test_apply_does_not_wait_behind_a_running_check(lib):
     record = rq.run_propose(lib, SLUG, MARK, "m", 5, caller=_fake(FIX))[1]["proposal"]
     (lib / "review" / ".queue.lock").write_text(str(os.getpid()))
     assert rq.run_apply(lib, SLUG, record["id"])[0] == 0
+
+
+# ---- needs us (#5729) ----------------------------------------------------------------------
+
+def test_needs_us_lists_once_with_page_line_bar_and_notifies(lib):
+    sent = []
+    code, out = rq.run_needs_us(lib, SLUG, MARK, "Two looks found nothing to change.", notify=lambda c: sent.append(c) or "sent")
+    assert code == 0 and out["notice"] == "sent"
+    assert out["where"] == "page 1, line 1, bar 2 in the line [app bar 2]"
+    lines = (lib / "review" / f"{SLUG}.needs-us.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and json.loads(lines[0])["mark"] == MARK
+    assert "page 1, line 1, bar 2" in sent[0] and "needs-us.jsonl" in sent[0]
+    code, out = rq.run_needs_us(lib, SLUG, MARK, "again", notify=lambda c: sent.append(c) or "sent")
+    assert out == {"ok": True, "already": True} and len(sent) == 1
+
+
+def test_needs_us_unknown_mark(lib):
+    with pytest.raises(rq.QueueError):
+        rq.run_needs_us(lib, SLUG, "nope", "x", notify=lambda c: "sent")

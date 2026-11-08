@@ -40,7 +40,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(lib, { recursive: true, force: true });
+  await rm(lib, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 describe('Review', () => {
@@ -91,6 +91,47 @@ describe('Review', () => {
     await expect(review.crop('tiny', 'review-pages/other/s01.jpg')).rejects.toThrow(/bad crop path/);
   });
 
+  // #5729 (Todd msg 57828): lines are presumed right; Submit review is the one act that verifies.
+  it('submit with nothing flagged = Verified by you, for every line', async () => {
+    const done = await review.append('tiny', { kind: 'review_done' });
+    expect(done.state.verified).toBe(true);
+    expect(done.state.doneAt).not.toBeNull();
+    const entry = (await trust())['tiny.musicxml'];
+    expect(entry).toMatchObject({ status: 'verified', source: 'todd-review', systems: [1, 2], score_sha256: sha });
+    expect(entry.note).toMatch(/, all 2 lines$/);
+    expect(done.events.find((e) => e.kind === 'review_done')).toMatchObject({ sha, origin: 'solace' });
+  });
+
+  it('submit with a flag stays unverified until the flag is resolved', async () => {
+    const flagged = await review.append('tiny', { kind: 'mark', system: 1, measure: 2 });
+    const mark = flagged.state.marks[0].id;
+    const sub = await review.append('tiny', { kind: 'review_done' });
+    expect(sub.state.doneAt).not.toBeNull();
+    expect(sub.state.verified).toBe(false);
+    expect((await trust())['tiny.musicxml'].status).toBe('issues');
+    // Resolved (here: he took it back): verified with no second submit.
+    const fine = await review.append('tiny', { kind: 'withdraw', mark });
+    expect(fine.state.verified).toBe(true);
+  });
+
+  it('a flag after submitting voids it, unless he takes it back', async () => {
+    await review.append('tiny', { kind: 'review_done' });
+    const late = await review.append('tiny', { kind: 'mark', system: 2, measure: 3 });
+    expect(late.state.verified).toBe(false);
+    expect(late.state.doneAt).toBeNull();
+    expect((await trust())['tiny.musicxml'].status).toBe('issues');
+    const back = await review.append('tiny', { kind: 'withdraw', mark: late.state.marks[0].id });
+    expect(back.state.verified).toBe(true);
+  });
+
+  it('a re-ingested score drops a submit too', async () => {
+    await review.append('tiny', { kind: 'review_done' });
+    await writeFile(path.join(lib, 'tiny.musicxml'), SCORE.replace('Tiny', 'Tiny2'));
+    const piece = await review.piece('tiny');
+    expect(piece.state.verified).toBe(false);
+    expect(piece.state.doneAt).toBeNull();
+  });
+
   it('a re-ingested score drops his badge', async () => {
     await review.append('tiny', { kind: 'confirm_system', system: 1 });
     await review.append('tiny', { kind: 'confirm_system', system: 2 });
@@ -115,11 +156,17 @@ if cmd == 'propose':
         print(json.dumps({'ok': False, 'error': 'Solace is short of memory; the check will wait.'})); sys.exit(4)
     os.makedirs(props, exist_ok=True)
     open(os.path.join(lib, 'calls.txt'), 'a').write(ident + ' ')
-    rec = {'id': 'p1', 'mark': ident, 'status': 'ready', 'reason': None, 'explanation': 'C5 should be C4.',
-           'edits': [], 'measure': 3, 'staff': 1, 'base_sha256': sha(), 'crop': '', 'proposed': '',
-           'created': int(time.time() * 1000), 'rejections_seen': 0}
-    json.dump(rec, open(os.path.join(props, 'p1.json'), 'w'))
+    log = [json.loads(l) for l in open(os.path.join(lib, 'review', slug + '.events.jsonl')) if l.strip()]
+    seen = sum(1 for e in log if e.get('kind') == 'reject' and e.get('mark') == ident)
+    pid = 'p%d' % (seen + 1)
+    rec = {'id': pid, 'mark': ident, 'status': 'no_change' if mode == 'nochange' else 'ready', 'reason': None,
+           'explanation': 'C5 should be C4.', 'edits': [], 'measure': 3, 'staff': 1, 'base_sha256': sha(),
+           'crop': '', 'proposed': '', 'created': int(time.time() * 1000), 'rejections_seen': seen}
+    json.dump(rec, open(os.path.join(props, pid + '.json'), 'w'))
     print(json.dumps({'ok': True, 'proposal': rec}))
+elif cmd == 'needs-us':
+    open(os.path.join(lib, 'needs-us.txt'), 'a').write(ident + ' ' + sys.argv[7] + '\n')
+    print(json.dumps({'ok': True}))
 else:
     rec = json.load(open(os.path.join(props, ident + '.json')))
     before = sha()
@@ -181,6 +228,31 @@ describe.runIf(existsSync(PYTHON))('vision re-checks', () => {
     await settle(mark);
     await writeFile(path.join(lib, 'tiny.musicxml'), SCORE.replace('Tiny', 'Tiny2'));
     await expect(review.accept('tiny', 'p1')).rejects.toThrow(/changed since this was checked/);
+  });
+
+  it('a fix to a bar flagged before submitting keeps the submit: verified once fixed', async () => {
+    const mark = (await review.append('tiny', { kind: 'mark', system: 2, measure: 3, staff: 1 })).state.marks[0].id;
+    expect((await review.append('tiny', { kind: 'review_done' })).state.verified).toBe(false);
+    await settle(mark);
+    const fixed = await review.accept('tiny', 'p1');
+    expect(fixed.state.verified).toBe(true);
+  });
+
+  it('nothing found twice: our own second look, then the bar is ours, not his', async () => {
+    await writeFile(path.join(lib, 'mode.txt'), 'nochange');
+    const mark = (await review.append('tiny', { kind: 'mark', system: 2, measure: 3, staff: 1 })).state.marks[0].id;
+    let piece = await review.piece('tiny');
+    for (let i = 0; i < 100 && piece.checks[mark]?.state !== 'us'; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      piece = await review.piece('tiny');
+    }
+    expect(piece.checks[mark]).toMatchObject({ state: 'us', reason: expect.stringMatching(/^Two looks found nothing/) });
+    const m = piece.state.marks[0];
+    expect(m).toMatchObject({ status: 'open', autoRejections: 1, ownRejections: [] });
+    expect((await readFile(path.join(lib, 'calls.txt'), 'utf8')).trim().split(' ')).toEqual([mark, mark]);
+    for (let i = 0; i < 50 && !existsSync(path.join(lib, 'needs-us.txt')); i++) await new Promise((r) => setTimeout(r, 100));
+    expect(await readFile(path.join(lib, 'needs-us.txt'), 'utf8')).toMatch(new RegExp(`^${mark} Two looks found nothing`));
+    expect(piece.state.verified).toBe(false);
   });
 
   it('low memory holds the check and says why', async () => {

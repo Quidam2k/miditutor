@@ -59,12 +59,16 @@ interface EventBase {
 
 export type ReviewEvent = EventBase & (
   | { kind: 'mark'; system: number; measure: number | null; staff?: number | null; note?: string; circle?: Circle; notes?: MarkNote[] }
-  /** "This line matches", against the score file as it was then. */
+  /** "This line matches", against the score file as it was then (before #5729; still read). */
   | { kind: 'confirm_system'; system: number; sha: string }
+  /** #5729: he pressed Submit review: every bar he didn't flag is presumed right. */
+  | { kind: 'review_done'; sha: string }
   /** A proposal applied: the score went from `before` to `after`. */
   | { kind: 'accept'; mark: string; before: string; after: string; proposal: string }
-  /** "Still wrong": the mark stays open and is re-checked with his note. */
-  | { kind: 'reject'; mark: string; note?: string }
+  /** "Still wrong": the mark stays open and is re-checked with his note. `auto`: our own second look (#5729). */
+  | { kind: 'reject'; mark: string; note?: string; auto?: boolean }
+  /** #5729: two re-checks couldn't fix his flag, so a worker takes it (review/<slug>.needs-us.jsonl). */
+  | { kind: 'needs_us'; mark: string; reason: string }
   /** He withdrew the mark (it was fine after all). */
   | { kind: 'withdraw'; mark: string }
   // Pinocchio can't run the checks or apply a fix: it asks Solace to (#9666).
@@ -96,6 +100,12 @@ export interface MarkState {
   status: MarkStatus;
   /** Each "still wrong" note, oldest first; the re-check sees them all. */
   rejections: string[];
+  /** Of those, how many were our own automatic second look (#5729). */
+  autoRejections: number;
+  /** Just his own "still wrong" notes, for the screen. */
+  ownRejections: string[];
+  /** Set when the re-checks gave up and a worker has it: why (#5729). */
+  needsUs: string | null;
 }
 
 /** A vision re-check of one mark, from scripts/review_queue.py (review/<slug>.proposals/<id>.json). */
@@ -123,7 +133,9 @@ export type MarkCheck =
   | { state: 'checking' }
   | { state: 'waiting'; reason: string }
   | { state: 'needed' }
-  | { state: 'done'; proposal: Proposal };
+  | { state: 'done'; proposal: Proposal }
+  /** #5729: we couldn't fix it automatically; a worker will. Not his job. */
+  | { state: 'us'; reason: string };
 
 /**
  * An open mark's latest proposal still answers it when it saw every "still wrong"
@@ -140,6 +152,8 @@ export interface ReviewState {
   confirmed: Record<number, number>;
   /** The score changed outside review since some confirms: those were dropped. */
   externalChange: boolean;
+  /** When he submitted the review, while it still stands (#5729), else null. */
+  doneAt: number | null;
   verified: boolean;
 }
 
@@ -154,8 +168,11 @@ export function orderEvents(events: ReviewEvent[]): ReviewEvent[] {
  * Fold the log against the score as it is now (`currentSha`).
  * A confirm stands only while nothing on that system came after it (a mark or an
  * applied fix) and the score only changed through review since. Any other change
- * to the score (a re-ingest) drops every confirm. Verified = every system mapped
- * and confirmed, and no mark open.
+ * to the score (a re-ingest) drops every confirm. Verified = no mark open, and either
+ * his submit stands or (the old rule) every system is mapped and confirmed. A submit
+ * stands until a later flag (one he didn't withdraw) or a change to the score outside
+ * review; fixes to the bars he flagged (accept) keep it, so it verifies once they're
+ * all fixed (#5729, Todd msg 57828).
  */
 export function foldReview(events: ReviewEvent[], layout: Layout | null, currentSha: string): ReviewState {
   const marks = new Map<string, MarkState>();
@@ -163,9 +180,11 @@ export function foldReview(events: ReviewEvent[], layout: Layout | null, current
   let externalChange = false;
   // The score file as review last knew it; undefined until an event pins it.
   let lineage: string | undefined;
+  let doneAt: number | null = null;
   const pin = (sha: string) => {
     if (lineage !== undefined && sha !== lineage) {
       confirmed = {};
+      doneAt = null;
       externalChange = true;
     }
   };
@@ -175,7 +194,7 @@ export function foldReview(events: ReviewEvent[], layout: Layout | null, current
       case 'mark':
         marks.set(e.id, {
           id: e.id, system: e.system, measure: e.measure, staff: e.staff ?? null, note: e.note ?? '',
-          circle: e.circle, notes: e.notes ?? [], origin: e.origin, ts: e.ts, status: 'open', rejections: [],
+          circle: e.circle, notes: e.notes ?? [], origin: e.origin, ts: e.ts, status: 'open', rejections: [], autoRejections: 0, ownRejections: [], needsUs: null,
         });
         delete confirmed[e.system];
         break;
@@ -183,6 +202,11 @@ export function foldReview(events: ReviewEvent[], layout: Layout | null, current
         pin(e.sha);
         lineage = e.sha;
         confirmed[e.system] = e.ts;
+        break;
+      case 'review_done':
+        pin(e.sha);
+        lineage = e.sha;
+        doneAt = e.ts;
         break;
       case 'accept': {
         pin(e.before);
@@ -201,7 +225,19 @@ export function foldReview(events: ReviewEvent[], layout: Layout | null, current
         break;
       case 'reject': {
         const mark = marks.get(e.mark);
-        if (mark && mark.status === 'open') mark.rejections.push(e.note ?? '');
+        if (mark && mark.status === 'open') {
+          mark.rejections.push(e.note ?? '');
+          if (e.auto) mark.autoRejections++;
+          else {
+            mark.ownRejections.push(e.note ?? '');
+            mark.needsUs = null; // his own "still wrong" asks the checker again
+          }
+        }
+        break;
+      }
+      case 'needs_us': {
+        const mark = marks.get(e.mark);
+        if (mark && mark.status === 'open') mark.needsUs = e.reason;
         break;
       }
       case 'withdraw': {
@@ -214,12 +250,15 @@ export function foldReview(events: ReviewEvent[], layout: Layout | null, current
   pin(currentSha);
 
   const list = [...marks.values()];
+  // A flag after "done" voids it, unless he took it back (a stray click).
+  const done = doneAt;
+  if (done !== null && list.some((m) => m.ts > done && m.status !== 'withdrawn')) doneAt = null;
   const systems = layout?.systems ?? [];
   const verified = layout !== null && layout.match === 'exact' && systems.length > 0 &&
     layout.score_sha256 === currentSha &&
-    systems.every((s) => confirmed[s.index] !== undefined) &&
+    (doneAt !== null || systems.every((s) => confirmed[s.index] !== undefined)) &&
     list.every((m) => m.status !== 'open');
-  return { marks: list, confirmed, externalChange, verified };
+  return { marks: list, confirmed, externalChange, doneAt, verified };
 }
 
 /**

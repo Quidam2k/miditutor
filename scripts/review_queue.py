@@ -647,6 +647,69 @@ def _apply(library, slug, pid):
                 "mark": record.get("mark"), "log": lines}
 
 
+# ---- needs us (#5729) --------------------------------------------------------------------------
+
+# Where Pantheon lives on this box (scripts/local_config.json "pantheon_root", or PANTHEON_ROOT); none = no notice.
+PANTHEON_ROOT = localcfg.get("pantheon_root", "PANTHEON_ROOT", "")
+
+
+def _notify_pantheon(content):
+    """One open orch event for Jarvis, so a worker picks the bar up. Best effort: the list is the record."""
+    src = Path(PANTHEON_ROOT) / "src" if PANTHEON_ROOT else None
+    if src is None or not (src / "db.py").exists():
+        return "no Pantheon here"
+    sys.path.insert(0, str(src))
+    try:
+        from db import execute_with_retry, execute_insert_with_retry
+        proj = execute_with_retry("SELECT id FROM orch_projects WHERE name = ?", ("miditutor",), fetch_one=True)
+        if not proj:
+            return "no orch project 'miditutor'"
+        execute_insert_with_retry(
+            """INSERT INTO orch_events (project_id, owner_persona, event_type, content, status, reporting_team)
+               VALUES (?, 'jarvis', 'escalation', ?, 'open', 'miditutor-review')""", (proj["id"], content))
+        return "sent"
+    except Exception as error:  # never let the notice break the list
+        return f"not sent ({error})"
+    finally:
+        sys.path.remove(str(src))
+
+
+def run_needs_us(library, slug, mark_id, reason, notify=_notify_pantheon):
+    """A flagged bar our re-checks couldn't fix: add it to review/<slug>.needs-us.jsonl, once, and tell Jarvis."""
+    _check_ids(slug, mark_id, "mark")
+    review = library / "review"
+    events = _read_events(review / f"{slug}.events.jsonl")
+    mark = next((e for e in events if e.get("kind") == "mark" and e.get("id") == mark_id), None)
+    if mark is None:
+        raise QueueError(2, "That mark isn't in the log.")
+    out = review / f"{slug}.needs-us.jsonl"
+    for line in (out.read_text(encoding="utf-8").splitlines() if out.exists() else []):
+        try:
+            if json.loads(line).get("mark") == mark_id:
+                return 0, {"ok": True, "already": True}
+        except ValueError:
+            continue
+    where = f"line {mark.get('system')}, bar {mark.get('measure')}"
+    try:
+        layout = json.loads((review / f"{slug}.layout.json").read_text(encoding="utf-8"))
+        systems = layout.get("systems", [])
+        system = next((x for x in systems if x.get("index") == mark.get("system")), None)
+        if system and system.get("measures") and isinstance(mark.get("measure"), int):
+            pages = list(dict.fromkeys(x.get("page") for x in systems))
+            line_no = [x for x in systems if x.get("page") == system.get("page")].index(system) + 1
+            where = (f"page {pages.index(system.get('page')) + 1}, line {line_no}, "
+                     f"bar {mark['measure'] - system['measures'][0] + 1} in the line [app bar {mark['measure']}]")
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    entry = {"mark": mark_id, "system": mark.get("system"), "measure": mark.get("measure"),
+             "staff": mark.get("staff"), "where": where, "reason": reason, "ts": int(time.time() * 1000)}
+    with open(out, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry, ensure_ascii=True) + "\n")
+    sent = notify(f"MidiTutor Review: Todd flagged {slug} {where}; two automatic re-checks couldn't fix it "
+                  f"({reason}). Fix the score, log it as an accept, see review/{slug}.needs-us.jsonl (#5729).")
+    return 0, {"ok": True, "where": where, "notice": sent}
+
+
 # ---- command line --------------------------------------------------------------------------
 
 def _parser():
@@ -662,6 +725,11 @@ def _parser():
     apply.add_argument("--library", type=Path, default=DEFAULT_LIBRARY)
     apply.add_argument("slug")
     apply.add_argument("proposal_id")
+    needs = sub.add_parser("needs-us")
+    needs.add_argument("--library", type=Path, default=DEFAULT_LIBRARY)
+    needs.add_argument("--reason", default="")
+    needs.add_argument("slug")
+    needs.add_argument("mark_id")
     return parser
 
 
@@ -670,6 +738,8 @@ def main(argv=None):
         args = _parser().parse_args(argv)
         if args.command == "propose":
             code, payload = run_propose(args.library, args.slug, args.mark_id, args.model, args.timeout)
+        elif args.command == "needs-us":
+            code, payload = run_needs_us(args.library, args.slug, args.mark_id, args.reason)
         else:
             code, payload = run_apply(args.library, args.slug, args.proposal_id)
     except QueueError as error:

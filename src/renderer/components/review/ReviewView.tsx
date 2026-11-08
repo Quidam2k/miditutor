@@ -10,6 +10,7 @@ import {
   ReviewEvent,
   ReviewState,
   cropToPage,
+  measureAtX,
   staffAtY,
   systemRange,
 } from '../../../shared/review';
@@ -20,8 +21,9 @@ import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustMark } from '../../../shared/trust';
 
 // Scan review (#9664): check an OMR'd score against the scan, one printed line at
-// a time. He circles what's wrong on either side (as many as he likes; a circle
-// over a bar line marks each bar), or confirms the line. The app only appends
+// a time. Lines are presumed right (#5729): a click on a bar flags it (click again
+// to take it back), a circle points at particular notes, and Submit review at the
+// end says he's been through it. The app only appends
 // events through the bridge; everything shown is the returned state.
 
 interface Summary {
@@ -48,8 +50,8 @@ interface Piece {
 }
 
 type AppendEvent =
-  | { kind: 'mark'; system: number; measure: number | null; staff: number | null; note: string; circle: Circle; notes?: MarkNote[] }
-  | { kind: 'confirm_system'; system: number }
+  | { kind: 'mark'; system: number; measure: number | null; staff: number | null; note: string; circle?: Circle; notes?: MarkNote[] }
+  | { kind: 'review_done' }
   | { kind: 'withdraw'; mark: string }
   | { kind: 'reject'; mark: string; note: string };
 
@@ -302,8 +304,10 @@ function DrawOverlay(props: {
   circles: Circle[];
   tints: Tint[];
   onCircle: (c: { cx: number; cy: number; r: number }) => void;
+  /** A plain click (no stroke), at frame coordinates: flags or unflags the bar (#5729). */
+  onClick?: (p: Pt) => void;
 }) {
-  const { testId, frame, disabled, circles, tints, onCircle } = props;
+  const { testId, frame, disabled, circles, tints, onCircle, onClick } = props;
   const [stroke, setStroke] = useState<Pt[] | null>(null);
   const strokeRef = useRef<Pt[] | null>(null);
 
@@ -336,7 +340,8 @@ function DrawOverlay(props: {
     const ys = pts.map((p) => p.y);
     const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
     if ((x1 - x0) / scale < CLICK_PX && (y1 - y0) / scale < CLICK_PX) {
-      onCircle({ cx: pts[pts.length - 1].x, cy: pts[pts.length - 1].y, r: CLICK_RADIUS_PX * scale });
+      if (onClick) onClick(pts[pts.length - 1]);
+      else onCircle({ cx: pts[pts.length - 1].x, cy: pts[pts.length - 1].y, r: CLICK_RADIUS_PX * scale });
     } else {
       onCircle({ cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, r: Math.max(x1 - x0, y1 - y0) / 2 });
     }
@@ -478,24 +483,15 @@ const suspectBars = (s: LayoutSystem | undefined): number[] =>
   [...new Set((s?.suspects ?? []).map((f) => f.measure))].sort((a, b) => a - b);
 
 const KEYS: [string, string][] = [
-  ['Space / C', 'this line matches, next line'],
+  ['click a bar', "flag it (click again: take it back)"],
   ['O / middle button', 'score over the scan, on / off'],
   [', / . or mouse back / forward', 'previous / next bar'],
   ['Shift ← / →', 'slide the overlay'],
   ['J / K', 'next / previous suspect bar'],
-  ['← / → (Page Down)', 'previous / next line'],
+  ['← / → (Page Down)', 'previous / next line (past the last: Submit)'],
   ['Enter', 'save the circled marks'],
   ['Esc / right-click', 'drop the last circle'],
 ];
-
-function nextUnconfirmed(p: Piece, from: number): number {
-  const systems = p.layout?.systems ?? [];
-  for (let k = 1; k <= systems.length; k++) {
-    const i = (from + k) % systems.length;
-    if (p.state.confirmed[systems[i].index] === undefined) return i;
-  }
-  return -1;
-}
 
 function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   const [piece, setPiece] = useState<Piece | null>(null);
@@ -538,9 +534,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
       .then((p) => {
         if (disposed) return;
         setPiece(p);
-        const systems = p.layout?.systems ?? [];
-        const first = systems.findIndex((s) => p.state.confirmed[s.index] === undefined);
-        setLineIdx(first >= 0 ? first : 0);
+        setLineIdx(0);
       })
       .catch((e) => !disposed && setLoadError(errText(e)));
     return () => {
@@ -557,7 +551,6 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   const mapped = !!range?.mapped;
   const sha = piece?.sha ?? '';
 
-  const canConfirmRef = useRef(false);
   const go = useCallback(
     (i: number) => setLineIdx(Math.max(0, Math.min(i, systems.length - 1))),
     [systems.length],
@@ -800,6 +793,41 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     })));
   };
 
+  // #5729: a click on a bar flags it at once (red); a click on a flagged bar takes it back.
+  // One toggle per bar at a time: a quick double click must not flag it twice.
+  const flagging = useRef(new Set<number>());
+  const toggleFlag = (measure: number | null, staff: number | null) => {
+    if (!sys || measure === null) {
+      setNotice("That isn't on a bar of this line.");
+      return;
+    }
+    if (flagging.current.has(measure)) return;
+    setNotice('');
+    const flags = openHere.filter((m) => m.measure === measure);
+    flagging.current.add(measure);
+    void (async () => {
+      try {
+        if (flags.length) {
+          for (const m of flags) if (!(await append({ kind: 'withdraw', mark: m.id }))) return;
+        } else {
+          await append({ kind: 'mark', system: sys.index, measure, staff, note: '' });
+        }
+      } finally {
+        flagging.current.delete(measure);
+      }
+    })();
+  };
+  const onScanClick = (pt: { x: number; y: number }) => {
+    if (!layout || !sys) return;
+    const page = cropToPage(layout, sys, pt.x, pt.y);
+    toggleFlag(measureAtX(sys, page.x), staffAtY(sys, page.y));
+  };
+  const onScoreClick = (pt: { x: number; y: number }) => {
+    const boxes = (score?.boxes ?? []).filter((b) => pt.x >= b.x && pt.x < b.x + b.w);
+    const measure = boxes[0]?.measure ?? null;
+    toggleFlag(measure, measure === null ? null : scoreHit(boxes, pt.x, pt.y).staff);
+  };
+
   // One save at a time (a held Enter or Enter-then-click would save the rest twice).
   const savingRef = useRef(false);
   const submitMarks = async () => {
@@ -829,23 +857,37 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     setNotice(`Dropped the circle on bar ${last.measure}; it wasn't saved.`);
   };
 
-  const confirmLine = async () => {
-    if (!sys || !piece || busy) return;
-    if (!canConfirmRef.current) {
-      if (openHere.length) setNotice("This line has an open mark, so it can't be confirmed yet.");
-      else if (pending.length) setNotice('Save or drop the circled marks first.');
-      else if (!mapped) setNotice("This line doesn't line up with the score, so it can't be confirmed.");
-      else if (piece.state.confirmed[sys.index] !== undefined) {
-        const next = nextUnconfirmed(piece, lineIdx);
-        if (next >= 0) go(next);
-        else setNotice('Every line is confirmed.');
-      }
+  // #5729 (Todd msg 57828): "Submit review" at the end. Nothing flagged: verified. Flagged bars
+  // go to our second look, and it's verified once they're fixed. Only the button submits.
+  const submitRef = useRef<HTMLButtonElement>(null);
+  const submitNotice = (st: ReviewState) => {
+    const open = st.marks.filter((m) => m.status === 'open').length;
+    return st.verified || open === 0
+      ? 'Submitted. Verified by you.'
+      : `Submitted. We're taking a second look at ${open} flagged bar${open === 1 ? '' : 's'}; it's verified once ${open === 1 ? "it's" : "they're"} fixed.`;
+  };
+  const submitReview = async () => {
+    if (!piece || busy) return;
+    if (pending.length) {
+      setNotice('Save or drop the circled marks first.');
       return;
     }
-    const p = await append({ kind: 'confirm_system', system: sys.index });
-    if (!p) return;
-    const next = nextUnconfirmed(p, lineIdx);
-    if (next >= 0) go(next);
+    if (piece.state.doneAt !== null) {
+      setNotice(submitNotice(piece.state));
+      return;
+    }
+    const p = await append({ kind: 'review_done' });
+    if (p) setNotice(submitNotice(p.state));
+  };
+  // Past the last line lands him on Submit; it doesn't submit by itself.
+  const forward = () => {
+    if (lineIdx < systems.length - 1) {
+      go(lineIdx + 1);
+      return;
+    }
+    submitRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    submitRef.current?.focus();
+    if (piece?.state.doneAt === null) setNotice("That's the last line. Press Submit review when you're done.");
   };
 
   // J/K: the next or previous lint-flagged bar, across lines. Only moves; never confirms.
@@ -867,8 +909,8 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   keyRef.current = (e: KeyboardEvent) => {
     // A circle's note box handles its own Enter / Esc.
     if (isTyping(e.target) || e.ctrlKey || e.altKey || e.metaKey) return;
-    // A held key repeats: that may move, never confirm or save one line after another.
-    if (e.repeat && (e.key === ' ' || e.key === 'Enter' || e.key.toLowerCase() === 'c')) {
+    // A held key repeats: that may move, never save one after another.
+    if (e.repeat && e.key === 'Enter') {
       e.preventDefault();
       return;
     }
@@ -877,22 +919,21 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     if (e.shiftKey && (key === 'ArrowLeft' || key === 'ArrowRight')) {
       setWipe((w) => Math.max(0, Math.min(1, w + (key === 'ArrowLeft' ? -0.05 : 0.05))));
     } else if (key === 'ArrowLeft') go(lineIdx - 1);
-    else if (key === 'ArrowRight' || key === 'PageDown') go(lineIdx + 1);
+    else if (key === 'ArrowRight' || key === 'PageDown') forward();
     else if (key === 'o') setOverlay((v) => !v);
     else if (key === '.') moveBar(1);
     else if (key === ',') moveBar(-1);
     else if (key === 'j') jumpSuspect(1);
     else if (key === 'k') jumpSuspect(-1);
     else if (key === 'Escape') dropLast();
-    else if (key === ' ' || key === 'c') void confirmLine();
-    else if (key === 'Enter' && !onButton) void (pending.length ? submitMarks() : confirmLine());
+    else if (key === 'Enter' && !onButton && pending.length) void submitMarks();
     else return;
     e.preventDefault();
   };
   mouseRef.current = (button: number) => {
     // #5729: back / forward step a whole line, like Page Down (bars stay on , and .).
     if (button === 3) go(lineIdx - 1);
-    else if (button === 4) go(lineIdx + 1);
+    else if (button === 4) forward();
     else if (button === 1) setOverlay((v) => !v);
     else if (button === 2) dropLast();
   };
@@ -909,11 +950,9 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   }
 
   const { state } = piece;
-  const confirmedCount = systems.filter((s) => state.confirmed[s.index] !== undefined).length;
-  const isConfirmed = !!sys && state.confirmed[sys.index] !== undefined;
-  const hasOpen = openHere.length > 0;
-  const canConfirm = !!sys && mapped && !hasOpen && !isConfirmed && !busy && pending.length === 0;
-  canConfirmRef.current = canConfirm;
+  const openCount = state.marks.filter((m) => m.status === 'open').length;
+  // Lines count as looked at once he has finished (or, from before #5729, confirmed them).
+  const looked = (index: number) => state.doneAt !== null || state.confirmed[index] !== undefined;
 
   const jumpToMark = (m: MarkState) => {
     const i = systems.findIndex((s) => s.index === m.system);
@@ -925,15 +964,29 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
       <button onClick={onBack} className="mb-3 text-sm text-gray-400 hover:text-white">← All pieces</button>
       <div className="mb-3 flex flex-wrap items-baseline gap-x-4">
         <h2 className="text-xl font-semibold">{piece.title}</h2>
+        {hasLines && (
+          <button
+            data-testid="review-submit-top"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void submitReview()}
+            disabled={busy}
+            className="rounded bg-green-700 px-3 py-1 text-sm font-medium hover:bg-green-600 disabled:opacity-40"
+          >
+            {state.doneAt !== null ? '✔ Submitted' : 'Submit review'}
+          </button>
+        )}
         {state.verified ? (
-          <span className="text-sm text-green-400">Verified by you</span>
+          <span className="text-sm text-green-400" data-testid="review-status">Verified by you</span>
         ) : (
-          <span className="text-sm text-gray-400">{confirmedCount}/{systems.length} lines confirmed</span>
+          <span className="text-sm text-gray-400" data-testid="review-status">
+            {state.doneAt !== null ? 'Submitted' : 'Not submitted yet'}
+            {openCount > 0 && ` · ${openCount} flagged bar${openCount === 1 ? '' : 's'}`}
+          </span>
         )}
       </div>
       {state.externalChange && (
         <p className="mb-3 text-sm text-amber-400">
-          The score changed since you confirmed some lines; those need confirming again.
+          The score changed since you last went through it; step through it again to verify.
         </p>
       )}
       {error && <p className="mb-3 text-sm text-red-400" data-testid="review-error">{error}</p>}
@@ -957,8 +1010,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
             <button
               data-testid="review-next"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => go(lineIdx + 1)}
-              disabled={lineIdx >= systems.length - 1}
+              onClick={forward}
               className="rounded bg-gray-800 px-3 py-1 text-sm hover:bg-gray-700 disabled:opacity-40"
             >
               Next
@@ -968,7 +1020,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
                 const open = state.marks.some((m) => m.status === 'open' && m.system === s.index);
                 const tone = open
                   ? 'bg-red-700 hover:bg-red-600'
-                  : state.confirmed[s.index] !== undefined
+                  : looked(s.index)
                     ? 'bg-green-700 hover:bg-green-600'
                     : 'bg-gray-700 hover:bg-gray-600';
                 const suspects = suspectBars(s).length;
@@ -1055,6 +1107,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
                 circles={circlesOn('scan')}
                 tints={tintsOn(scanBar)}
                 onCircle={onScanCircle}
+                onClick={onScanClick}
               />
             )}
           </div>
@@ -1092,6 +1145,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
                 circles={circlesOn('score')}
                 tints={tintsOn(scoreBar)}
                 onCircle={onScoreCircle}
+                onClick={onScoreClick}
               />
             )}
             {!range && <p className="p-3 text-sm text-gray-600">No score bars for this line.</p>}
@@ -1152,13 +1206,13 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
 
           <div className="mb-6 flex flex-wrap items-center gap-x-6 gap-y-2">
             <button
-              data-testid="review-confirm"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => void confirmLine()}
-              disabled={!canConfirm}
-              className="rounded bg-green-700 px-4 py-2 font-medium hover:bg-green-600 disabled:opacity-40"
+              ref={submitRef}
+              data-testid="review-submit"
+              onClick={() => void submitReview()}
+              disabled={busy}
+              className="rounded bg-green-700 px-4 py-2 font-medium hover:bg-green-600 focus:ring-2 focus:ring-white disabled:opacity-40"
             >
-              {isConfirmed ? '✔ Confirmed' : 'This line matches'}
+              {state.doneAt !== null ? '✔ Submitted' : 'Submit review'}
             </button>
             <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-400" data-testid="review-keys">
               {KEYS.map(([k, what]) => (
@@ -1254,9 +1308,9 @@ function MarksList(props: {
                 onRecheck={props.onRecheck}
               />
             )}
-            {m.rejections.length > 0 && (
+            {m.ownRejections.length > 0 && (
               <ul className="mt-1 text-xs text-gray-500">
-                {m.rejections.map((r, i) => (
+                {m.ownRejections.map((r, i) => (
                   <li key={i}>Still wrong{r ? `: ${r}` : ''}</li>
                 ))}
               </ul>
@@ -1278,6 +1332,7 @@ function CheckBadge({ check }: { check: MarkCheck | undefined }) {
     );
   }
   if (check.state === 'waiting') return <span className="text-amber-300">waiting</span>;
+  if (check.state === 'us') return <span className="text-sky-300" data-testid="review-needs-us">we'll fix this one</span>;
   const status = check.proposal.status;
   return status === 'ready'
     ? <span className="text-sky-300">fix proposed</span>
@@ -1322,6 +1377,13 @@ function CheckDetail(props: {
       Try again
     </button>
   );
+  if (check?.state === 'us') {
+    return (
+      <div className="mt-1 text-xs text-sky-200" onClick={stop}>
+        We'll fix this one. Nothing more to do here.
+      </div>
+    );
+  }
   if (check?.state === 'waiting') {
     return (
       <div className="mt-1 flex items-center gap-2 text-xs text-amber-200" onClick={stop}>
@@ -1481,9 +1543,9 @@ function ReviewList({ sort, onSort, onOpen }: { sort: SortMode; onSort: (s: Sort
               {s.verified ? (
                 <span className="text-green-400">Verified by you</span>
               ) : (
-                `${s.confirmed}/${s.systems} lines confirmed`
+                'Not verified yet'
               )}
-              {s.openMarks > 0 && ` · ${s.openMarks} open mark${s.openMarks === 1 ? '' : 's'}`}
+              {s.openMarks > 0 && ` · ${s.openMarks} flagged bar${s.openMarks === 1 ? '' : 's'}`}
               {s.match === 'partial' && " · some lines don't line up"}
               {(s.match === 'none' || s.match === null) && ' · scan not lined up'}
             </div>
