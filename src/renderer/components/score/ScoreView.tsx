@@ -582,6 +582,7 @@ export function ScoreView() {
   // #5630: off, the wheel over the score never edits a finger; over a key it still does.
   const scoreWheelFingers = useSettingsStore((s) => s.scoreWheelFingers);
   const keyWheelFingers = useSettingsStore((s) => s.keyWheelFingers);
+  const everyBarNumbers = useSettingsStore((s) => s.everyBarNumbers);
   const setReverseWheel = useSettingsStore((s) => s.setReverseWheel);
   const [remaining, setRemaining] = useState<number[]>([]);
   const [playHint, setPlayHint] = useState('');
@@ -1542,6 +1543,8 @@ export function ScoreView() {
       // of each line matches the boxed number on his page.
       newSystemFromXML: !strip,
       ...(scoreLayout === 'pages' ? { pageFormat: 'A4_P', pageBackgroundColor: '#FFFFFF' } : {}),
+      // #5657: he's used to every bar numbered, so Pages and Scroll do that unless he turns it off.
+      ...(!strip && everyBarNumbers ? { measureNumberInterval: 1 } : {}),
       // Strip (#5153): the whole piece on one line, slid by centerCursor, so there are no
       // line starts to carry bar numbers: number every bar. The title is in the piece list.
       ...(strip ? {
@@ -1643,7 +1646,7 @@ export function ScoreView() {
       exprRef.current = null;
     };
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
-  }, [piece.id, drawnXml, scoreLayout, strip, restart, buildFollower, centerCursor, startResolved]);
+  }, [piece.id, drawnXml, scoreLayout, strip, everyBarNumbers, restart, buildFollower, centerCursor, startResolved]);
 
   // #9976: pedal lifts, with what was ringing only on the pedal just before.
   useEffect(
@@ -2669,6 +2672,17 @@ export function ScoreView() {
           />
           Wheel fingers on keyboard
         </label>
+        {!strip && (
+          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="On: a number over every bar. Off: only the bar that starts each line">
+            <input
+              type="checkbox"
+              data-testid="every-bar-numbers"
+              checked={everyBarNumbers}
+              onChange={(e) => useSettingsStore.getState().setPrefs({ everyBarNumbers: e.target.checked })}
+            />
+            Number every bar
+          </label>
+        )}
         {strip && (
           <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Turn the wheel the other way to move along the score">
             <input type="checkbox" data-testid="reverse-wheel" checked={reverseWheel} onChange={(e) => setReverseWheel(e.target.checked)} />

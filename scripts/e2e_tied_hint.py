@@ -147,11 +147,22 @@ def score_wheel_check(page) -> None:
     tc.load_piece("Tied hint (e2e)", SCORE)
     time.sleep(2)
     def wheel_on_note() -> bool:
-        width = page.viewport_size["width"] if page.viewport_size else page.evaluate("innerWidth")
-        heads = [b for b in (h.bounding_box() for h in page.query_selector_all(".vf-notehead"))
-                 if b and 40 < b["x"] < width - 60]
-        head = heads[0]
-        page.mouse.move(head["x"] + head["width"] / 2, head["y"] + head["height"] / 2)
+        # The first score notehead the mouse can really land on: the mini staff (#5624) draws
+        # VexFlow noteheads too, a whole note's hollow middle isn't on the note, and a head can
+        # sit under something else. Aim at the rim and hit-test it, as the mouse would.
+        spot = page.evaluate("""() => {
+            for (const h of document.querySelectorAll('.vf-notehead')) {
+                if (h.closest('[data-testid=mini-staff]')) continue;
+                const b = h.getBoundingClientRect();
+                if (!(b.x > 40 && b.x < innerWidth - 60)) continue;
+                const x = b.x + 1.5, y = b.y + b.height / 2;
+                if (h.contains(document.elementFromPoint(x, y))) return [x, y];
+            }
+            return null;
+        }""")
+        if not spot:
+            return False
+        page.mouse.move(*spot)
         time.sleep(0.3)
         page.mouse.wheel(0, 120)
         time.sleep(0.15)
@@ -190,6 +201,28 @@ def score_wheel_check(page) -> None:
     page.check("[data-testid=key-wheel-fingers]")
     time.sleep(0.8)
     tc.request("DELETE", "/loop")
+
+
+def bar_numbers(page) -> list[str]:
+    return page.eval_on_selector_all(".measure-number", "els => els.map(e => e.textContent.trim()).filter(Boolean)")
+
+
+def bar_numbers_check(page) -> None:
+    """#5657: Pages numbers every bar by default; the switch turns it back to line starts."""
+    check(page.locator("[data-testid=every-bar-numbers]").count() == 0, "strip: no 'Number every bar' switch (it always numbers every bar)")
+    page.click("[data-testid=layout-pages]")
+    time.sleep(2)
+    box = page.locator("[data-testid=every-bar-numbers]")
+    check(box.is_checked(), "#5657 'Number every bar' is on by default")
+    on = bar_numbers(page)
+    check(on == ["2", "3"], "Pages numbers every bar after the first", on)
+    box.uncheck()
+    time.sleep(2)
+    off = bar_numbers(page)
+    check(len(off) < len(on), "off: fewer numbers", off)
+    page.locator("[data-testid=every-bar-numbers]").check()
+    page.click("[data-testid=layout-strip]")
+    time.sleep(2)
 
 
 def tied(page) -> list[int]:
@@ -235,6 +268,7 @@ def main() -> int:
         tc.request("DELETE", "/loop")
         restrike_check(page)
         score_wheel_check(page)
+        bar_numbers_check(page)
 
     print("ALL PASS" if not FAILS else f"{len(FAILS)} FAILED: {FAILS}")
     return 1 if FAILS else 0
