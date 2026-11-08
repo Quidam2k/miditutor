@@ -445,7 +445,7 @@ const KEYS: [string, string][] = [
   [', / . or mouse back / forward', 'previous / next bar'],
   ['Shift ← / →', 'slide the overlay'],
   ['J / K', 'next / previous suspect bar'],
-  ['← / →', 'previous / next line'],
+  ['← / → (Page Down)', 'previous / next line'],
   ['Enter', 'save the circled marks'],
   ['Esc / right-click', 'drop the last circle'],
 ];
@@ -837,7 +837,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     if (e.shiftKey && (key === 'ArrowLeft' || key === 'ArrowRight')) {
       setWipe((w) => Math.max(0, Math.min(1, w + (key === 'ArrowLeft' ? -0.05 : 0.05))));
     } else if (key === 'ArrowLeft') go(lineIdx - 1);
-    else if (key === 'ArrowRight') go(lineIdx + 1);
+    else if (key === 'ArrowRight' || key === 'PageDown') go(lineIdx + 1);
     else if (key === 'o') setOverlay((v) => !v);
     else if (key === '.') moveBar(1);
     else if (key === ',') moveBar(-1);

@@ -122,6 +122,9 @@ with sync_playwright() as p:
     check(page.locator("[data-testid=review-digital-layer]").count() == 1, "middle button shows it again")
     click("right", 2)
     check(label(page) == start, "right-click changes no bar", label(page))
+    page.keyboard.press("PageDown")
+    page.wait_for_timeout(600)
+    check(page.locator("[data-testid=review-line-label]").inner_text().startswith("Line 2"), "Page Down goes to the next line")
 
     # Line 1 for the picture, handle part-way so the bare scan shows on the right.
     while page.locator("[data-testid=review-prev]").is_enabled():
