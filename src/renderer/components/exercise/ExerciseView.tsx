@@ -5,12 +5,13 @@ import { IntervalExercise } from './IntervalExercise';
 import { HomeworkExercise } from './HomeworkExercise';
 import { ExerciseType } from '../../types/exercise';
 import type { TrainerClef } from '../../engine/NoteTrainer';
+import type { EyesUpMode } from '../../engine/EyesUp';
 
 export function ExerciseView() {
   const {
     exerciseType, setExerciseType, clef, setClef, audioEnabled, setAudioEnabled, showNoteNames, setShowNoteNames,
     trainerClef, setTrainerClef, trainerAccidentals, setTrainerAccidentals, trainerLadder, setTrainerLadder,
-    intervalNameIt, setIntervalNameIt, keyFirst, setPrefs,
+    intervalNameIt, setIntervalNameIt, keyFirst, eyesUp, setPrefs,
   } = useSettingsStore();
 
   return (
@@ -58,6 +59,16 @@ export function ExerciseView() {
                   title="Starts on the landmark notes (middle C, treble G, bass F, the Cs a space away) and adds the next-nearest note once each note in play is right 3 times running and under 3 s. White keys, no key signature."
                   checked={trainerLadder}
                   onChange={setTrainerLadder}
+                />
+                <ToggleGroup
+                  label="Eyes up"
+                  options={[
+                    { value: 'off', label: 'Off' },
+                    { value: 'timer', label: 'Timer' },
+                    { value: 'pedal', label: 'Pedal' },
+                  ]}
+                  selected={eyesUp}
+                  onChange={(v) => setPrefs({ eyesUp: v as EyesUpMode })}
                 />
               </>
             ) : (

@@ -21,6 +21,7 @@ import { drillPool, liveMixUps, mixUpKind, mixUpLabel, recordMixUp, recordRight 
 import { MajorKey, midiNumberToPitch, pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
 import { Pitch } from '../../types/music';
 import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
+import { nextWindow } from '../../engine/EyesUp';
 import { EMPTY_RECORD, TrainerRecord, readRecord, saveRecord } from '../../store/noteRecord';
 import { playNote, initAudio, isInitialized } from '../../audio/AudioEngine';
 
@@ -67,6 +68,24 @@ export function NoteExercise() {
   // JP 10/9 "Key first": a new key's sharps or flats are played before its first note shows.
   const [gate, setGate] = useState<KeyGate | null>(null);
   const gateRef = useRef<KeyGate | null>(null);
+  // #5652 B Eyes up: the note hides once he has had his look, so he finds it without glancing back.
+  const [hidden, setHidden] = useState(false);
+  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /** The note on screen again, with no hide timer running. */
+  const reveal = useCallback(() => {
+    if (hideTimer.current) clearTimeout(hideTimer.current);
+    hideTimer.current = null;
+    setHidden(false);
+  }, []);
+
+  /** The note is on screen now: its time starts, and with Eyes up on a timer, its window. */
+  const shown = useCallback(() => {
+    presentedAt.current = Date.now();
+    reveal();
+    const { eyesUp, eyesUpMs } = useSettingsStore.getState();
+    if (eyesUp === 'timer') hideTimer.current = setTimeout(() => setHidden(true), eyesUpMs);
+  }, [reveal]);
 
   const ask = useCallback((isTimed: boolean) => {
     if (timer.current) clearTimeout(timer.current);
@@ -119,10 +138,12 @@ export function NoteExercise() {
     gateRef.current = kf;
     setGate(kf);
     presentedAt.current = Date.now();
+    reveal();
+    if (!kf) shown();
     setMusicKey(keyRef.current);
     setCurrent(next);
     setFeedback(null);
-  }, []);
+  }, [shown, reveal]);
 
   useEffect(() => {
     let live = true;
@@ -144,6 +165,24 @@ export function NoteExercise() {
 
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
+    reveal();
+  }, [reveal]);
+
+  // Eyes up switched mid-note: the note shows again, with no timer; the new mode starts on the next note.
+  const eyesUp = useSettingsStore((st) => st.eyesUp);
+  const eyesUpMs = useSettingsStore((st) => st.eyesUpMs);
+  useEffect(() => {
+    reveal();
+  }, [eyesUp, reveal]);
+
+  // 'pedal': no timer. The pedal going down says "I've read it", and the note hides.
+  useEffect(() => {
+    return useMidiStore.subscribe((state, prev) => {
+      if (!state.pedal || prev.pedal) return;
+      if (useSettingsStore.getState().eyesUp !== 'pedal') return;
+      if (!currentRef.current || !answering.current || gateRef.current) return;
+      setHidden(true);
+    });
   }, []);
 
   // Key first switched off mid-gate: show the note now.
@@ -152,8 +191,8 @@ export function NoteExercise() {
     if (keyFirst || !gateRef.current) return;
     gateRef.current = null;
     setGate(null);
-    presentedAt.current = Date.now();
-  }, [keyFirst]);
+    shown();
+  }, [keyFirst, shown]);
 
   // Audio needs a click (autoplay policy), and there's no Start button to supply one any more.
   // Listen whether Audio is on or not: the click that turns it on is the one that has to count.
@@ -183,7 +222,7 @@ export function NoteExercise() {
           gateRef.current = null;
           setGate(null);
           timed.current = true;
-          presentedAt.current = Date.now();
+          shown();
           return;
         }
         gateRef.current = g;
@@ -191,6 +230,8 @@ export function NoteExercise() {
         return;
       }
       answering.current = false;
+      // The answer shows on the staff: the note comes back, green or with his key in red.
+      reveal();
 
       const correct = ev.note === asked.pitch.midiNumber;
       // With the name printed he's reading a label, not the staff: it counts, but isn't timed.
@@ -202,6 +243,8 @@ export function NoteExercise() {
         : wrongPitches([ev.note], [asked.pitch.midiNumber], [asked.pitch])[0];
       const { mixups, ladder, review, slices } = mineRef.current;
       const stats = recordAnswer(mineRef.current.stats, asked.id, correct, ms);
+      // A hidden note is never a miss in itself; the window moves only a little at a time.
+      if (settings.eyesUp === 'timer') settings.setPrefs({ eyesUpMs: nextWindow(settings.eyesUpMs, correct, ms) });
       const clef = settings.trainerClef;
       const was = ladder[clef] ?? landmarkCount(clef);
       const level = settings.trainerLadder ? ladderLevel(clef, stats, was) : was;
@@ -235,7 +278,7 @@ export function NoteExercise() {
       }
       timer.current = setTimeout(() => ask(true), correct ? HIT_HOLD_MS : MISS_HOLD_MS);
     });
-  }, [ask, keep]);
+  }, [ask, keep, reveal]);
 
   const resetStats = () => {
     if (!window.confirm('Clear your speed, hit rate, mix-ups and review days for every note?')) return;
@@ -289,10 +332,12 @@ export function NoteExercise() {
       data-key={musicKey?.name}
       data-drilling={drilling ? '1' : undefined}
       data-gate={gate ? '1' : undefined}
+      data-hidden={hidden ? '1' : undefined}
+      data-eyes-up-ms={eyesUp === 'timer' ? eyesUpMs : undefined}
     >
       <div className="relative w-full max-w-2xl">
         <StaffDisplay
-          notes={current && !gate ? [current.pitch] : []}
+          notes={current && !gate && !hidden ? [current.pitch] : []}
           clef={current?.clef ?? (trainerClef === 'bass' ? 'bass' : 'treble')}
           highlightColor={feedback?.correct ? 'green' : null}
           wrongNotes={feedback?.wrong}
@@ -318,8 +363,15 @@ export function NoteExercise() {
         data-testid="note-feedback"
         className={`h-7 text-lg font-semibold ${feedback ? (feedback.correct ? 'text-emerald-400' : 'text-red-400') : 'text-gray-200'}`}
       >
-        {feedback?.line ?? (showNoteNames && current ? pitchToDisplayName(current.pitch) : '')}
+        {feedback?.line ?? (showNoteNames && current && !hidden ? pitchToDisplayName(current.pitch) : '')}
       </div>
+      {eyesUp !== 'off' && (
+        <div data-testid="note-eyes-up" className="-mt-3 text-xs text-gray-500">
+          {eyesUp === 'timer'
+            ? `Eyes up: the note hides after ${seconds(eyesUpMs)}. Take your time to play it.`
+            : 'Eyes up: press the pedal once you have read it, then find it without looking back.'}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-start justify-center gap-10 text-sm">
         <div data-testid="note-today">

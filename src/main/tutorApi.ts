@@ -34,6 +34,7 @@ export type RendererCommand =
   | { type: 'clear-task' }
   | { type: 'piece'; title: string; musicxml: string; photo?: string }
   | { type: 'inject'; kind: 'noteon' | 'noteoff'; note: number; velocity: number }
+  | { type: 'inject-pedal'; down: boolean }
   | { type: 'loop'; firstBar: number; lastBar: number; backwards?: boolean }
   | { type: 'clear-loop' }
   | { type: 'recording'; status: RecordingStatus }
@@ -497,6 +498,13 @@ export class TutorApi {
           emit(kind as 'noteon' | 'noteoff', 0);
         }
       });
+      send({ ok: true, label: 'INJECTED - not a real MIDI device' });
+    } else if (route === 'POST /inject-pedal') {
+      // The sustain pedal (CC64), for tests of the Notes "Eyes up: Pedal" mode.
+      if (!this.opts.allowInject) throw new HttpError(404, 'Not found');
+      const { down } = await this.body(req);
+      if (typeof down !== 'boolean') throw new HttpError(400, 'Invalid injection');
+      this.opts.sendToRenderer({ type: 'inject-pedal', down });
       send({ ok: true, label: 'INJECTED - not a real MIDI device' });
     } else {
       throw new HttpError(404, 'Not found');

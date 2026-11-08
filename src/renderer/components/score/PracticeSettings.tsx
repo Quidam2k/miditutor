@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useSettingsStore, type PrefKey } from '../../store/useSettingsStore';
 
-type Toggle = Exclude<PrefKey, 'grazeMs' | 'minVelocity' | 'trainingWheels'>;
+type Toggle = Exclude<PrefKey, 'grazeMs' | 'minVelocity' | 'trainingWheels' | 'eyesUp' | 'eyesUpMs'>;
 
 function Check({ k, label, title }: { k: Toggle; label: string; title: string }) {
   const on = useSettingsStore((s) => s[k]);

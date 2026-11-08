@@ -111,6 +111,9 @@ export function useTutorBridge(onShowScore: () => void) {
             source: 'inject',
           });
           break;
+        case 'inject-pedal':
+          useMidiStore.getState().setPedal(cmd.down);
+          break;
         case 'task':
           useTutorStore.getState().setTask(cmd.task);
           onShowScore();

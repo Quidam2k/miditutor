@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { EYES_UP_START_MS, EyesUpMode } from '../engine/EyesUp';
 import { GRAZE_MS } from '../engine/ScoreFollower';
 import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
@@ -66,6 +67,10 @@ interface SettingsState {
   hintsOffNew: boolean;
   /** JP 10/9: before reading in a new key, play its sharps or flats (Notes Keys mode, new pieces in Score). */
   keyFirst: boolean;
+  /** #5652 B Eyes up in Notes: the note hides after a window ('timer') or on the pedal ('pedal'). */
+  eyesUp: EyesUpMode;
+  /** The timer window now; shrinks as he gets faster, grows after a miss. */
+  eyesUpMs: number;
   /** #5652 K Keep going: a click on every beat, and +4 after a clean lap (JP 9/11). */
   keepClick: boolean;
   keepStepUp: boolean;
@@ -118,7 +123,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -161,6 +166,8 @@ export const useSettingsStore = create<SettingsState>()(
       trainingWheels: false,
       hintsOffNew: true,
       keyFirst: true,
+      eyesUp: 'off',
+      eyesUpMs: EYES_UP_START_MS,
       keepClick: true,
       keepStepUp: true,
       keepBpms: {},

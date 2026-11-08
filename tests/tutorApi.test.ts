@@ -131,6 +131,12 @@ describe('TutorApi', () => {
     expect((await (await request('/state')).json()).eventSeq).toBe(0);
   });
 
+  it('sends a pedal injection, and refuses one without a down flag', async () => {
+    expect((await request('/inject-pedal', 'POST', { down: true })).status).toBe(200);
+    await vi.waitFor(() => expect(commands).toContainEqual({ type: 'inject-pedal', down: true }));
+    expect((await request('/inject-pedal', 'POST', { down: 'yes' })).status).toBe(400);
+  });
+
   it('rejects invalid MusicXML', async () => {
     expect((await request('/piece', 'POST', {
       title: 'Bad piece',
