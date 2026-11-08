@@ -23,6 +23,8 @@ interface TutorBridge {
   openPiece: () => Promise<{ title: string; musicxml: string } | null>;
   listPieces?: () => Promise<{ file: string; title: string; musicxml: string; trust?: PieceTrust; group?: PieceGroupRef }[]>;
   writeScore?: (slug: string, musicxml: string) => Promise<void>;
+  binderInfo?: (slug: string) => Promise<{ pageStarts: number[]; confirmed: number; total: number }>;
+  printBinder?: (slug: string, html: string) => Promise<{ pdf: string; bytes: number }>;
   reviewAppend?: (slug: string, event: Record<string, unknown>) => Promise<unknown>;
   saveMix?: (slug: string, mix: { harder: string; choice: MixChoice[]; musicxml: string; trust: PieceTrust }) => Promise<{ file: string }>;
   getHomework?: () => Promise<Homework | null>;

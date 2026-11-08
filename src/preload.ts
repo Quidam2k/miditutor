@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   saveMix: (slug: string, mix: unknown) => ipcRenderer.invoke('pieces:saveMix', slug, mix),
   // #9988: overwrite <slug>.musicxml in the pieces folder (his fingering edit).
   writeScore: (slug: string, musicxml: string) => ipcRenderer.invoke('pieces:writeScore', slug, musicxml),
+  // #5723 binder print: { pageStarts, confirmed, total } from review/<slug>.layout.json, then the PDF + print dialog.
+  binderInfo: (slug: string) => ipcRenderer.invoke('pieces:binderInfo', slug),
+  printBinder: (slug: string, html: string) => ipcRenderer.invoke('pieces:printBinder', slug, html),
   // ~/MidiTutor Pieces/homework.json (JP's newest lesson entry), or null.
   getHomework: () => ipcRenderer.invoke('homework:get'),
   // Take recorder (#9574): toggle, current status, and the piano audio rendered after Stop.

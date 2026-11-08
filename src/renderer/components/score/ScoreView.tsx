@@ -20,6 +20,8 @@ import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { PedalCoach } from '../../engine/PedalCoach';
 import { rememberRef, resolvePieceId } from './lastPiece';
+import { orderChordFingers } from './chordFingers';
+import { renderBinderHtml } from './binderRender';
 import { fingersLowToHigh, nextFinger, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, grewLabel, lapDone, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { BarInput } from './BarInput';
@@ -134,17 +136,6 @@ interface OsmdVoiceEntry {
 interface OsmdStaffEntry {
   FingeringEntries?: { SVGNode?: Node; Label?: { text: string } }[];
   graphicalChordContainers?: { GetChordSymbolContainer: unknown; GraphicalLabel?: { SVGNode?: Node } }[];
-}
-
-/** The parts of OSMD's source score that hold a chord's finger marks. */
-interface OsmdSourceMeasure {
-  VerticalSourceStaffEntryContainers: {
-    StaffEntries: ({
-      VoiceEntries: {
-        TechnicalInstructions: { type: number; sourceNote?: { Pitch?: { getHalfTone(): number } } }[];
-      }[];
-    } | undefined)[];
-  }[];
 }
 
 /** The note whose finger / hold picker is open; alts = the same key in the other hand. */
@@ -356,22 +347,6 @@ function paintChord(osmd: OpenSheetMusicDisplay, container: OsmdChordContainer, 
             el.style.fill = on ? '#16a34a' : '';
             el.style.fontWeight = on ? 'bold' : '';
           }
-        }
-      }
-    }
-  }
-}
-
-// #10256: stacked left-hand fingers read top to bottom as the notes do. Before each layout, so a
-// re-render can't bring the old order back; it's a sort, so doing it again changes nothing.
-function orderChordFingers(osmd: OpenSheetMusicDisplay) {
-  const sheet = osmd.Sheet as unknown as { SourceMeasures?: OsmdSourceMeasure[] } | undefined;
-  for (const measure of sheet?.SourceMeasures ?? []) {
-    for (const container of measure.VerticalSourceStaffEntryContainers) {
-      for (const entry of container.StaffEntries) {
-        for (const voice of entry?.VoiceEntries ?? []) {
-          fingersLowToHigh(voice.TechnicalInstructions, (m) => m.type === TechnicalInstructionType.Fingering,
-            (m) => m.sourceNote?.Pitch?.getHalfTone());
         }
       }
     }
@@ -802,6 +777,34 @@ export function ScoreView() {
     ? piece.id.slice(5).replace(/\.(musicxml|xml|mxl)$/i, '')
     : /^[a-z0-9][a-z0-9-]*$/.test(piece.label) ? piece.label : null;
   const scanLayout = useScanLayout(scanSlug);
+  // #5723: print for his binder, only once he has verified the score in Review.
+  const [printing, setPrinting] = useState(false);
+  const [printNote, setPrintNote] = useState('');
+  useEffect(() => setPrintNote(''), [piece.id]);
+  const printForBinder = async () => {
+    const bridge = window.tutorBridge;
+    if (!scanSlug || !bridge?.binderInfo || !bridge.printBinder) return;
+    setPrinting(true);
+    setPrintNote('');
+    try {
+      const info = await bridge.binderInfo(scanSlug);
+      if (piece.trust?.status !== 'verified') {
+        setPrintNote(info.total
+          ? `Not verified yet: ${info.confirmed} of ${info.total} lines confirmed. Finish it in Review first.`
+          : 'Not verified yet. Check it in Review first.');
+        reportEvent('binder_print', { piece: scanSlug, refused: 'unverified', confirmed: info.confirmed, total: info.total });
+        return;
+      }
+      const { html, pages } = await renderBinderHtml({ musicxml: piece.xml, title: piece.label, pageStarts: info.pageStarts });
+      const out = await bridge.printBinder(scanSlug, html);
+      setPrintNote(`${pages} page${pages === 1 ? '' : 's'}, ${pages * 2} sides (two-sided). Saved ${out.pdf}`);
+      reportEvent('binder_print', { piece: scanSlug, pages, sides: pages * 2, pdf: out.pdf, paperPages: info.pageStarts.length });
+    } catch (err) {
+      setPrintNote(`Print failed: ${(err as Error).message}`);
+    } finally {
+      setPrinting(false);
+    }
+  };
   const [showOriginal, setShowOriginal] = useState(false);
   // #10258: what's drawn. A finger edit changes piece.xml but has already changed the drawing in
   // place, so it leaves this alone and nothing downstream reloads the score.
@@ -2524,6 +2527,18 @@ export function ScoreView() {
             ? `My mix: ${piece.trust?.note || 'from checked versions'}`
             : trustBadge(piece.trust)}
         </span>
+        {scanSlug && (
+          <button
+            onClick={() => void printForBinder()}
+            disabled={status !== 'ready' || printing}
+            className={btn}
+            data-testid="print-binder"
+            title="Each page on both sides of its own sheet, so every turn shows two pages; every bar numbered. Only once verified in Review."
+          >
+            {printing ? 'Printing…' : 'Print for binder'}
+          </button>
+        )}
+        {printNote && <span className="text-xs text-gray-300" data-testid="print-binder-note">{printNote}</span>}
         {mixing && mixPlan && easyPiece && harderPiece && (
           <MixBuilder
             title={piece.label}
