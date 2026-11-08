@@ -17,6 +17,7 @@ import {
   recordDay,
   slowestNotes,
 } from '../../engine/NoteTrainer';
+import { LADDER_FAST_MS, LADDER_RUN, LadderLevels, isKnown, ladderLevel, ladderOrder, landmarkCount, parseLadder } from '../../engine/Ladder';
 import { MixUps, drillPool, liveMixUps, mixUpKind, mixUpLabel, parseMixUps, recordMixUp, recordRight } from '../../engine/MixUps';
 import { MajorKey, midiNumberToPitch, pitchToDisplayName, wrongPitches } from '../../engine/MusicTheory';
 import { Pitch } from '../../types/music';
@@ -47,9 +48,11 @@ interface TrainerRecord {
   today: DayTally | null;
   /** #5652 D: what he played instead, per asked note. */
   mixups: MixUps;
+  /** #5652 A: notes in play on the ladder, per clef setting. Only ever grows. */
+  ladder: LadderLevels;
 }
 
-const EMPTY: TrainerRecord = { stats: {}, today: null, mixups: {} };
+const EMPTY: TrainerRecord = { stats: {}, today: null, mixups: {}, ladder: {} };
 const MIXUPS_SHOWN = 5;
 
 // One read per launch: this tab remounts on every switch, and a re-read could land before
@@ -63,8 +66,13 @@ function readRecord(): Promise<TrainerRecord> {
       return null;
     })
     .then((raw) => {
-      const saved = raw as { stats?: unknown; today?: unknown; mixups?: unknown } | null;
-      return { stats: parseNoteStats(saved?.stats), today: parseDayTally(saved?.today), mixups: parseMixUps(saved?.mixups) };
+      const saved = raw as { stats?: unknown; today?: unknown; mixups?: unknown; ladder?: unknown } | null;
+      return {
+        stats: parseNoteStats(saved?.stats),
+        today: parseDayTally(saved?.today),
+        mixups: parseMixUps(saved?.mixups),
+        ladder: parseLadder(saved?.ladder),
+      };
     });
   return record;
 }
@@ -79,7 +87,7 @@ function saveRecord(next: TrainerRecord): void {
 }
 
 export function NoteExercise() {
-  const { trainerClef, trainerAccidentals, showNoteNames } = useSettingsStore();
+  const { trainerClef, trainerAccidentals, trainerLadder, showNoteNames } = useSettingsStore();
   // Null until the file is read: nothing is asked or counted before then, or a save would
   // overwrite weeks of record with one answer.
   const [mine, setMine] = useState<TrainerRecord | null>(null);
@@ -100,12 +108,14 @@ export function NoteExercise() {
   const [drilling, setDrilling] = useState(false);
   const drillingRef = useRef(false);
   const [drillDone, setDrillDone] = useState(false);
+  // #5652 A: the note the ladder last added, said once in its panel.
+  const [ladderNew, setLadderNew] = useState<string | null>(null);
 
   const ask = useCallback((isTimed: boolean) => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-    const { trainerClef: clef, trainerAccidentals: useKeys } = useSettingsStore.getState();
-    const { stats, mixups } = mineRef.current;
+    const { trainerClef: clef, trainerAccidentals: useKeys, trainerLadder: onLadder } = useSettingsStore.getState();
+    const { stats, mixups, ladder } = mineRef.current;
     const avoid = currentRef.current?.id;
     let next: TrainerNote | null = null;
     let newKey = false;
@@ -121,8 +131,13 @@ export function NoteExercise() {
         setDrillDone(true);
       }
     }
+    if (!next && onLadder) {
+      keyRef.current = null;
+      keyNotesLeft.current = 0;
+      next = pickNext(ladderOrder(clef).slice(0, ladderLevel(clef, stats, ladder[clef])), stats, avoid);
+    }
     if (next) {
-      // A drill note: no key signature, so each note carries its own accidental.
+      // A drill or ladder note: no key signature, so each note carries its own accidental.
     } else if (useKeys) {
       if (keyNotesLeft.current <= 0 || !keyRef.current) {
         keyRef.current = pickKey(keyRef.current);
@@ -161,7 +176,7 @@ export function NoteExercise() {
   const loaded = mine !== null;
   useEffect(() => {
     if (loaded) ask(false);
-  }, [loaded, trainerClef, trainerAccidentals, ask]);
+  }, [loaded, trainerClef, trainerAccidentals, trainerLadder, ask]);
 
   useEffect(() => () => {
     if (timer.current) clearTimeout(timer.current);
@@ -198,11 +213,17 @@ export function NoteExercise() {
       const played = key
         ? midiNumberToPitch(ev.note, key.fifths < 0)
         : wrongPitches([ev.note], [asked.pitch.midiNumber], [asked.pitch])[0];
-      const { mixups } = mineRef.current;
+      const { mixups, ladder } = mineRef.current;
+      const stats = recordAnswer(mineRef.current.stats, asked.id, correct, ms);
+      const clef = settings.trainerClef;
+      const was = ladder[clef] ?? landmarkCount(clef);
+      const level = settings.trainerLadder ? ladderLevel(clef, stats, was) : was;
+      if (level > was) setLadderNew(ladderOrder(clef)[level - 1]?.id ?? null);
       keep({
-        stats: recordAnswer(mineRef.current.stats, asked.id, correct, ms),
+        stats,
         today: recordDay(mineRef.current.today, localDay(), correct, ms),
         mixups: correct ? recordRight(mixups, asked.id) : recordMixUp(mixups, asked.id, pitchToDisplayName(played), localDay()),
+        ladder: level > was ? { ...ladder, [clef]: level } : ladder,
       });
 
       const name = pitchToDisplayName(asked.pitch);
@@ -244,6 +265,20 @@ export function NoteExercise() {
   const hitRate = day && day.attempts > 0 ? Math.round((day.hits / day.attempts) * 100) : null;
   const slowest = useMemo(() => slowestNotes(mine?.stats ?? {}, 5), [mine]);
   const mixUps = useMemo(() => liveMixUps(mine?.mixups ?? {}), [mine]);
+  const ladder = useMemo(() => {
+    if (!trainerLadder) return null;
+    const order = ladderOrder(trainerClef);
+    const stats = mine?.stats ?? {};
+    const level = ladderLevel(trainerClef, stats, mine?.ladder[trainerClef]);
+    const name = (id: string) => id.replace(':', ' ').replace(/^(treble|bass) (.+)$/, trainerClef === 'both' ? '$2 $1' : '$2');
+    return {
+      level,
+      of: order.length,
+      learning: order.slice(0, level).filter((n) => !isKnown(stats[n.id])).map((n) => name(n.id)),
+      next: level < order.length ? name(order[level].id) : null,
+      added: ladderNew ? name(ladderNew) : null,
+    };
+  }, [mine, trainerLadder, trainerClef, ladderNew]);
 
   return (
     <div
@@ -295,6 +330,24 @@ export function NoteExercise() {
             </div>
           ))}
         </div>
+        {ladder && (
+          <div data-testid="note-ladder" data-level={ladder.level}>
+            <div className="text-gray-500 text-xs uppercase tracking-wider mb-1">Ladder</div>
+            <div className="text-gray-200">
+              {ladder.level} of {ladder.of} notes
+              {ladder.added && <span className="ml-2 text-emerald-400 font-semibold">+ {ladder.added}</span>}
+            </div>
+            {ladder.next ? (
+              <div className="text-gray-400 text-xs mt-1 max-w-xs">
+                Next: <span className="text-gray-200">{ladder.next}</span>, once{' '}
+                {ladder.learning.length ? ladder.learning.join(', ') : 'these'} {ladder.learning.length === 1 ? 'is' : 'are'} right {LADDER_RUN} times
+                running and under {LADDER_FAST_MS / 1000} s
+              </div>
+            ) : (
+              <div className="text-emerald-400 text-xs mt-1">Every note is in</div>
+            )}
+          </div>
+        )}
         <div data-testid="note-mixups">
           <div className="text-gray-500 text-xs uppercase tracking-wider mb-1">Your mix-ups</div>
           {mixUps.length === 0 && (

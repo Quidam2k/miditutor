@@ -37,6 +37,8 @@ interface SettingsState {
   /** #5260 note trainer: which clef(s) it draws from; #10262: accidentals on = the Keys toggle. */
   trainerClef: TrainerClef;
   trainerAccidentals: boolean;
+  /** #5652 A: Notes asks only the ladder's notes, landmarks first. */
+  trainerLadder: boolean;
   /** #10262 Sight-read: pieces he marked simple, by displayed title. */
   simplePieces: string[];
   /** Times Sight-read has picked each piece, by displayed title. */
@@ -87,6 +89,7 @@ interface SettingsState {
   unparkDrill: (id: string) => void;
   setTrainerClef: (clef: TrainerClef) => void;
   setTrainerAccidentals: (on: boolean) => void;
+  setTrainerLadder: (on: boolean) => void;
   setClef: (clef: Clef) => void;
   setExerciseType: (type: ExerciseType) => void;
   setAudioEnabled: (enabled: boolean) => void;
@@ -132,6 +135,7 @@ export const useSettingsStore = create<SettingsState>()(
       favoritesOnly: false,
       trainerClef: 'treble',
       trainerAccidentals: true,
+      trainerLadder: false,
       simplePieces: [],
       sightDrilled: {},
       sightReadPiece: null,
@@ -177,6 +181,7 @@ export const useSettingsStore = create<SettingsState>()(
         }),
       setTrainerClef: (clef) => set({ trainerClef: clef }),
       setTrainerAccidentals: (on) => set({ trainerAccidentals: on }),
+      setTrainerLadder: (on) => set({ trainerLadder: on }),
       setClef: (clef) => set({ clef }),
       setShowKeyboard: (show) => set({ showKeyboard: show }),
       setExerciseType: (type) => set({ exerciseType: type }),

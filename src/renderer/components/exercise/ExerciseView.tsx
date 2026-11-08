@@ -9,7 +9,7 @@ import type { TrainerClef } from '../../engine/NoteTrainer';
 export function ExerciseView() {
   const {
     exerciseType, setExerciseType, clef, setClef, audioEnabled, setAudioEnabled, showNoteNames, setShowNoteNames,
-    trainerClef, setTrainerClef, trainerAccidentals, setTrainerAccidentals,
+    trainerClef, setTrainerClef, trainerAccidentals, setTrainerAccidentals, trainerLadder, setTrainerLadder,
   } = useSettingsStore();
 
   return (
@@ -45,6 +45,12 @@ export function ExerciseView() {
                   title="On: a random key signature, and notes flagged only when the key needs it. Off: C major, white keys only."
                   checked={trainerAccidentals}
                   onChange={setTrainerAccidentals}
+                />
+                <Toggle
+                  label="Ladder"
+                  title="Starts on the landmark notes (middle C, treble G, bass F, the Cs a space away) and adds the next-nearest note once each note in play is right 3 times running and under 3 s. White keys, no key signature."
+                  checked={trainerLadder}
+                  onChange={setTrainerLadder}
                 />
               </>
             ) : (
