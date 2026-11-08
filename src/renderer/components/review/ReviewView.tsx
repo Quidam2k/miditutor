@@ -14,6 +14,7 @@ import {
   systemRange,
 } from '../../../shared/review';
 import { BarSpan, MarkNote, NoteBox, barsUnder, describeNotes, markNotes, notesInCircle, notesInShare } from '../../../shared/reviewCircle';
+import { BarFit, StaffFit, alignBar, pageLineBar, stepBar } from '../../../shared/reviewOverlay';
 import { addBeams } from '../../engine/autoBeam';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustMark } from '../../../shared/trust';
@@ -126,6 +127,8 @@ interface BarBox {
   w: number;
   h: number;
   staves: StaffBand[];
+  /** Each staff's top and bottom LINE (its border box can reach past them); for the overlay. */
+  lines: StaffBand[];
 }
 interface OsmdBox {
   AbsolutePosition: { x: number; y: number };
@@ -160,6 +163,8 @@ function barBoxes(osmd: OpenSheetMusicDisplay, from: number, to: number): BarBox
         y0: (s.AbsolutePosition.y + s.BorderTop) * space,
         y1: (s.AbsolutePosition.y + s.BorderBottom) * space,
       })),
+      // OSMD puts a staff's top line at its measure's y; a staff is 4 spaces tall.
+      lines: staves.map((s) => ({ y0: s.AbsolutePosition.y * space, y1: (s.AbsolutePosition.y + 4) * space })),
     });
   }
   return boxes;
@@ -356,6 +361,51 @@ function DrawOverlay(props: {
   );
 }
 
+// The score's line laid over the scan (#5721): each bar fitted to its own scan bar, staff by
+// staff, recoloured dark blue so it reads against the black print. `wipe` (0..1) clips it at
+// the slider's handle, so the scan alone shows to the right of the handle.
+const BLUE = '0 0 0 0 0.07  0 0 0 0 0.25  0 0 0 0 0.85  0 0 0 0.9 0';
+function DigitalLayer(props: { frame: Frame; svgUrl: string; svgFrame: Frame; fits: StaffFit[]; wipe: number }) {
+  const { frame, svgUrl, svgFrame, fits, wipe } = props;
+  const edge = frame.w * wipe;
+  return (
+    <svg
+      data-testid="review-digital-layer"
+      viewBox={`0 0 ${frame.w} ${frame.h}`}
+      preserveAspectRatio="none"
+      className="pointer-events-none absolute inset-0 h-full w-full"
+    >
+      <defs>
+        <filter id="review-blue"><feColorMatrix type="matrix" values={BLUE} /></filter>
+        <clipPath id="review-wipe"><rect x={0} y={0} width={edge} height={frame.h} /></clipPath>
+        {fits.map((f, i) => (
+          <clipPath key={i} id={`review-fit-${i}`}>
+            <rect x={f.clip.x} y={f.clip.y} width={f.clip.w} height={f.clip.h} />
+          </clipPath>
+        ))}
+      </defs>
+      <g clipPath="url(#review-wipe)">
+        <g filter="url(#review-blue)">
+          {fits.map((f, i) => (
+            <g key={i} clipPath={`url(#review-fit-${i})`}>
+              <image
+                href={svgUrl}
+                width={svgFrame.w}
+                height={svgFrame.h}
+                preserveAspectRatio="none"
+                transform={`matrix(${f.sx} 0 0 ${f.sy} ${f.tx} ${f.ty})`}
+              />
+            </g>
+          ))}
+        </g>
+      </g>
+      {wipe < 1 && (
+        <line x1={edge} x2={edge} y1={0} y2={frame.h} stroke="#1d4ed8" strokeWidth={2} vectorEffect="non-scaling-stroke" />
+      )}
+    </svg>
+  );
+}
+
 // ---- piece view ----
 
 interface Pending {
@@ -373,6 +423,8 @@ interface ScoreData {
   frame: Frame;
   boxes: BarBox[];
   notes: NoteBox[];
+  /** The rendered line as an image, for laying over the scan. */
+  svgUrl: string;
 }
 
 const STATUS_ORDER: Record<MarkState['status'], number> = { open: 0, applied: 1, withdrawn: 2 };
@@ -389,6 +441,9 @@ const suspectBars = (s: LayoutSystem | undefined): number[] =>
 
 const KEYS: [string, string][] = [
   ['Space / C', 'this line matches, next line'],
+  ['O', 'score over the scan, on / off'],
+  [', / .', 'previous / next bar'],
+  ['Shift ← / →', 'slide the overlay'],
   ['J / K', 'next / previous suspect bar'],
   ['← / →', 'previous / next line'],
   ['Enter', 'save the circled marks'],
@@ -415,6 +470,10 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   // The suspect bar J/K landed on; it only shows on its own line.
   const [focus, setFocus] = useState<{ system: number; measure: number } | null>(null);
   const pendingKey = useRef(0);
+  // Overlay (#5721): the score laid over the scan, a wipe handle, and the bar he's on.
+  const [overlay, setOverlay] = useState(true);
+  const [wipe, setWipe] = useState(1);
+  const [barAt, setBarAt] = useState({ line: 0, i: 0 });
 
   // Scan side.
   const crops = useRef(new Map<string, string>());
@@ -554,6 +613,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
       setScoreData({
         key: `${range.from}-${range.to}`, frame: { w, h },
         boxes: barBoxes(engine, range.from, range.to), notes: noteBoxes(engine, range.from, range.to),
+        svgUrl: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`,
       });
       setScoreError('');
     } catch (e) {
@@ -564,6 +624,26 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
 
   const score = scoreData && scoreData.key === rangeKey ? scoreData : null;
   const scanFrame = natural && natural.url === cropUrl ? { w: natural.w, h: natural.h } : null;
+
+  const barPos = barAt.line === lineIdx ? barAt.i : 0;
+  const curBar = sys?.measures ? sys.measures[0] + barPos : null;
+  const where = layout && sys && curBar !== null ? pageLineBar(layout, sys.index, curBar) : null;
+  const barFits: BarFit[] = useMemo(() => {
+    if (!layout || !sys?.measures || !score || !scanFrame) return [];
+    return Array.from({ length: sys.bars }, (_, i) => {
+      const m = (sys.measures as [number, number])[0] + i;
+      const box = score.boxes.find((b) => b.measure === m);
+      return alignBar(sys, layout.crop_scale, scanFrame.h, m, box && { measure: m, x: box.x, w: box.w, staves: box.lines });
+    });
+  }, [layout, sys, score, scanFrame?.h]); // eslint-disable-line react-hooks/exhaustive-deps
+  const fits = barFits.flatMap((f) => (f.ok ? f.fits : []));
+  const unaligned = barFits.filter((f) => !f.ok) as Extract<BarFit, { ok: false }>[];
+  const moveBar = (dir: 1 | -1) => {
+    const to = stepBar(systems, lineIdx, barPos, dir);
+    if (!to) return;
+    if (to.linePos !== lineIdx) go(to.linePos);
+    setBarAt({ line: to.linePos, i: to.barPos });
+  };
 
   // Write path: every change goes through main, and the reply replaces the piece.
   const act = async (call: (bridge: ReviewBridge) => Promise<Piece>): Promise<Piece | null> => {
@@ -619,6 +699,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     ...openHere.flatMap((m) => tinted(bar(m.measure), 'red').map((t) => ({ ...t, outline: !!m.circle }))),
     ...pending.flatMap((pm) => tinted(bar(pm.measure), 'amber').map((t) => ({ ...t, outline: true }))),
     ...(focusBar !== null ? tinted(bar(focusBar), 'amber').map((t) => ({ ...t, outline: true })) : []),
+    ...(overlay && curBar !== null && curBar !== focusBar ? tinted(bar(curBar), 'amber').map((t) => ({ ...t, outline: true })) : []),
   ];
   const suspectHere = focusBar === null ? [] : (sys?.suspects ?? []).filter((f) => f.measure === focusBar);
 
@@ -735,8 +816,13 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     }
     const onButton = e.target instanceof HTMLElement && !!e.target.closest('button, [role="button"]');
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if (key === 'ArrowLeft') go(lineIdx - 1);
+    if (e.shiftKey && (key === 'ArrowLeft' || key === 'ArrowRight')) {
+      setWipe((w) => Math.max(0, Math.min(1, w + (key === 'ArrowLeft' ? -0.05 : 0.05))));
+    } else if (key === 'ArrowLeft') go(lineIdx - 1);
     else if (key === 'ArrowRight') go(lineIdx + 1);
+    else if (key === 'o') setOverlay((v) => !v);
+    else if (key === '.') moveBar(1);
+    else if (key === ',') moveBar(-1);
     else if (key === 'j') jumpSuspect(1);
     else if (key === 'k') jumpSuspect(-1);
     else if (key === 'Escape') dropLast();
@@ -840,6 +926,39 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
             </div>
           </div>
 
+          <div className="mb-2 flex flex-wrap items-center gap-2" data-testid="review-overlay-bar">
+            <button
+              data-testid="review-overlay-toggle"
+              aria-pressed={overlay}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setOverlay((v) => !v)}
+              className={`rounded px-3 py-1 text-sm ${overlay ? 'bg-blue-700 hover:bg-blue-600' : 'bg-gray-800 hover:bg-gray-700'}`}
+              title="Lay the score over the scan (O)"
+            >
+              Overlay {overlay ? 'on' : 'off'}
+            </button>
+            <button
+              data-testid="review-bar-prev"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => moveBar(-1)}
+              className="rounded bg-gray-800 px-2 py-1 text-sm hover:bg-gray-700"
+              title="Previous bar (,)"
+            >
+              ◀ Bar
+            </button>
+            <span data-testid="review-bar-label" className="text-sm text-gray-200">
+              {where ? `${where.label} [bar ${curBar}]` : 'This line has no bars matched to the score'}
+            </span>
+            <button
+              data-testid="review-bar-next"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => moveBar(1)}
+              className="rounded bg-gray-800 px-2 py-1 text-sm hover:bg-gray-700"
+              title="Next bar (.)"
+            >
+              Bar ▶
+            </button>
+          </div>
           <div className="mb-1 text-xs uppercase tracking-wide text-gray-500">Scan</div>
           {!mapped && (
             <p className="mb-1 text-sm text-amber-300">
@@ -858,6 +977,9 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
                 }
               />
             )}
+            {overlay && scanFrame && score && fits.length > 0 && (
+              <DigitalLayer frame={scanFrame} svgUrl={score.svgUrl} svgFrame={score.frame} fits={fits} wipe={wipe} />
+            )}
             {scanFrame && (
               <DrawOverlay
                 testId="review-scan-overlay"
@@ -870,6 +992,29 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
             )}
           </div>
 
+          {overlay && (
+            <div className="mb-3">
+              <input
+                type="range"
+                data-testid="review-wipe"
+                aria-label="Slide the score off the scan"
+                min={0}
+                max={100}
+                value={Math.round(wipe * 100)}
+                onChange={(e) => setWipe(Number(e.target.value) / 100)}
+                className="w-full accent-blue-600"
+              />
+              {unaligned.length > 0 && (
+                <p className="text-sm text-amber-300" data-testid="review-unaligned">
+                  {unaligned.map((f) => {
+                    const at = layout && sys ? pageLineBar(layout, sys.index, f.measure) : null;
+                    return `Can't lay the score over ${at ? at.label.replace(/^Page/, 'page') : `bar ${f.measure}`}: ${f.reason}.`;
+                  }).join(' ')}{' '}
+                  Compare {unaligned.length > 1 ? 'those bars' : 'that bar'} with the score below.
+                </p>
+              )}
+            </div>
+          )}
           <div className="mb-1 text-xs uppercase tracking-wide text-gray-500">Score</div>
           <div className="relative mb-3 min-h-16 overflow-hidden rounded bg-white text-black">
             <div ref={scoreHostRef} />

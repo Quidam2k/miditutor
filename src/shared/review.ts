@@ -34,6 +34,8 @@ export interface Layout {
   xml: { measures: number; breaks: number[]; staves_per_system: number };
   scan: { bars: number; systems: number };
   match: 'exact' | 'partial' | 'none';
+  /** The scan's pages in printed order (#5721 counts pages from it). */
+  pages?: { file: string }[];
   systems: LayoutSystem[];
 }
 
