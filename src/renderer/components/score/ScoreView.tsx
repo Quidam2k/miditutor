@@ -36,6 +36,7 @@ import { PieceTrust, trustBadge, trustMark, trustTitle } from '../../../shared/t
 import type { MixChoice } from '../../../shared/mix';
 import type { PieceGroupRef } from '../../../shared/versions';
 import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
+import { startBare, bareNote, bareMiss, closeBar, BARE_MS, type BareRun } from '../../engine/TrainingWheels';
 import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
 import { MixBuilder } from './MixBuilder';
@@ -589,6 +590,17 @@ export function ScoreView() {
   const wrongCountRef = useRef(0);
   // #11354: the fresh tune on screen, if any (see freshTune below).
   const freshRef = useRef<{ id: string; key: string; label: string } | null>(null);
+  // #11354 item 3: five minutes on this piece with every hint off (see startBareRun).
+  const [bare, setBare] = useState<BareRun | null>(null);
+  const bareRef = useRef<BareRun | null>(null);
+  const [bareLeft, setBareLeft] = useState(0);
+  const [bareMsg, setBareMsg] = useState('');
+  const bumpBare = useCallback((fn: (r: BareRun) => BareRun) => {
+    const r = bareRef.current;
+    if (!r || r.pieceId !== drawnPieceRef.current) return;
+    bareRef.current = fn(r);
+    setBare(bareRef.current);
+  }, []);
   wrongCountRef.current = wrongCount;
   const [pace, setPace] = useState<number | null>(null);
   const [wrongFlash, setWrongFlash] = useState(false);
@@ -779,6 +791,12 @@ export function ScoreView() {
   };
   const pieceName = piece.group ? `${piece.label} (${piece.group.label})` : piece.label;
   const freshNow = freshRef.current?.label === piece.label ? freshRef.current : null;
+  // #11354: hints start off on a new piece (fresh tune, sight-read pick), and stay off in a bare run.
+  const hintsOffNew = useSettingsStore((s) => s.hintsOffNew);
+  const sightReadPiece = useSettingsStore((s) => s.sightReadPiece);
+  const bareNow = bare?.pieceId === piece.id ? bare : null;
+  const quietNew = hintsOffNew && (!!freshNow || sightReadPiece === piece.id);
+  const hintsOff = !!bareNow || quietNew;
   // #5259: a homework line opens its piece and starts on the range he last set there.
   const pieceRequest = useTutorStore((s) => s.pieceRequest);
   const [pendingOpen, setPendingOpen] = useState<{ pieceId: string; backwards: boolean } | null>(null);
@@ -1569,6 +1587,42 @@ export function ScoreView() {
     useTutorStore.getState().addPiece({ label, xml: freshTuneXml(pick, k.name, label) });
     reportEvent('fresh-tune', { id: pick.id, key: k.name, label });
   };
+  // #11354 item 3 (JP doc 11/6; lesson 11/6, "I will embrace it"): end a session with five
+  // minutes on this piece without training wheels. Counts the bars he clears and his misses;
+  // a bar he is still in when it stops doesn't count.
+  const startBareRun = () => {
+    const r = startBare(piece.id, Date.now());
+    bareRef.current = r;
+    setBare(r);
+    setBareLeft(r.endsAt - Date.now());
+    setBareMsg('');
+    reportEvent('bare-start', { label: piece.label });
+  };
+  const finishBare = useCallback((early: boolean) => {
+    const r = bareRef.current;
+    if (!r) return;
+    const done = r;
+    bareRef.current = null;
+    setBare(null);
+    const label = pieceLabelRef.current;
+    reportEvent('bare-done', { label, cleared: done.cleared, misses: done.misses, early, ms: Date.now() - (r.endsAt - BARE_MS) });
+    setBareMsg(`${early ? 'Stopped' : 'Five minutes without hints'}: ${done.cleared} bar${done.cleared === 1 ? '' : 's'} clean, ${done.misses} miss${done.misses === 1 ? '' : 'es'}.`);
+  }, []);
+  useEffect(() => {
+    if (!bare) return;
+    const t = window.setInterval(() => {
+      const left = bare.endsAt - Date.now();
+      setBareLeft(Math.max(0, left));
+      if (left <= 0) finishBare(false);
+    }, 1000);
+    return () => window.clearInterval(t);
+    // Only a new run restarts the clock, not each bar it counts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bare?.endsAt, finishBare]);
+  // Leaving the piece ends the run.
+  useEffect(() => {
+    if (bareRef.current && bareRef.current.pieceId !== piece.id) finishBare(true);
+  }, [piece.id, finishBare]);
 
   // The drill to go back to: the one he left most recently.
   const backTo = Object.values(parkedDrills)
@@ -1822,6 +1876,7 @@ export function ScoreView() {
       // #5516: a stray must not confirm a carry (that could finish a lap); skip settling.
       const settled = f.strayCheck(ev.note, ev.timestamp, ev.velocity) ? null : f.settle(ev.timestamp, keysDown);
       // #5568: the step a late tie re-strike may still paint; a lap wrap clears the page.
+      if (settled?.kind === 'loop' || settled?.kind === 'complete') bumpBare(closeBar);
       if (settled?.kind === 'advance' || settled?.kind === 'complete') tieLeftRef.current = settled.from;
       else if (settled?.kind === 'loop') tieLeftRef.current = null;
       if (settled?.kind === 'advance' || settled?.kind === 'loop') {
@@ -1910,6 +1965,9 @@ export function ScoreView() {
       }
 
       if (credited) noteCredit(result.kind === 'advance' || result.kind === 'loop' ? ev.timestamp : null);
+      if (step && credited) bumpBare((r) => bareNote(r, step.measure));
+      if (step && (result.kind === 'wrong' || result.kind === 'stray')) bumpBare((r) => bareMiss(r, step.measure));
+      if (result.kind === 'complete' || result.kind === 'loop') bumpBare(closeBar);
       if (lapStartRef.current === null && credited) {
         runStartBarRef.current = step?.measure ?? null;
         lapStartRef.current = ev.timestamp;
@@ -1986,7 +2044,7 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong, noteCredit, spoilLap]);
+  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong, noteCredit, spoilLap, bumpBare]);
 
   // #5657c: while blocking, every press and release is judged against the hand position.
   const blockOn = !!block;
@@ -2481,7 +2539,9 @@ export function ScoreView() {
   // #5519: with training wheels, the keys he's to play show only in his run's first bar,
   // on a hesitation, or after a wrong note. Red and his own held keys always show.
   const atRunStart = lapStartRef.current === null || followerRef.current?.steps[cursorStep]?.measure === runStartBarRef.current;
-  const hints = freshNow
+  const hints = bareNow
+    ? watching
+    : quietNew
     ? watching || hesitating || !!wheelLive
     : !trainingWheels || watching || hesitating || atRunStart || !!wheelLive;
 
@@ -2492,7 +2552,7 @@ export function ScoreView() {
     const osmd = osmdRef.current;
     const notes = (stepNotesRef.current[cursorStep] ?? []).filter((n) => !n.IsGraceNote);
     const rests = stepRestsRef.current[cursorStep] ?? [];
-    if (!miniStaff || status !== 'ready' || !osmd || notes.length === 0 || (freshNow && !hints)) return null;
+    if (!miniStaff || status !== 'ready' || !osmd || notes.length === 0 || (hintsOff && !hints)) return null;
     const lengthOf = (n: OsmdNote) => miniDuration(n.TypeLength?.RealValue, n.DotsXml, n.Length?.RealValue);
     const bar = followerRef.current?.steps[cursorStep]?.measure ?? 1;
     const part = (staff: number): MiniStaffPart & { pct: number } => {
@@ -2522,11 +2582,11 @@ export function ScoreView() {
       };
     };
     return miniStaffPlacements(part(0), part(1));
-  }, [miniStaff, status, cursorStep, stepsVersion, freshNow, hints]);
+  }, [miniStaff, status, cursorStep, stepsVersion, hintsOff, hints]);
   // #5657c: while blocking, the keyboard shows the whole hand position with its fingers;
   // with training wheels it fades after his first clean hold and comes back on a slip.
   const blockPos = block ? blockPosition(block) : null;
-  const blockHints = !!block && (!trainingWheels || showKeys(block, hesitating));
+  const blockHints = !!block && !bareNow && (quietNew ? hesitating : !trainingWheels || showKeys(block, hesitating));
   const blockLabels = blockPos && blockHints
     ? new Map(blockPos.fingers.flatMap((n) => (n.finger ? [[n.midi, n.finger] as [number, string]] : [])))
     : undefined;
@@ -2643,6 +2703,26 @@ export function ScoreView() {
             </option>
           ))}
         </select>
+        {bareNow ? (
+          <button onClick={() => finishBare(true)} title="Stop now and see how it went" data-testid="bare-stop" className={`${btn} ring-2 ring-amber-400`}>
+            No hints {Math.floor(bareLeft / 60000)}:{String(Math.floor(bareLeft / 1000) % 60).padStart(2, '0')} ■
+          </button>
+        ) : (
+          <button
+            onClick={startBareRun}
+            disabled={status !== 'ready'}
+            title="JP: end a session with five minutes on this piece without training wheels. No green keys, little staff or note names, even after a miss. Counts the bars you get through clean."
+            data-testid="bare-start"
+            className={btn}
+          >
+            5 min, no hints
+          </button>
+        )}
+        {bareMsg && (
+          <span data-testid="bare-msg" className="text-xs text-amber-300">
+            {bareMsg}
+          </span>
+        )}
         {backTo && backTo.id !== piece.id && (
           <button onClick={() => setPieceId(backTo.id)} data-testid="sight-back" className={btn}>
             Back to {backTo.label}
@@ -2986,9 +3066,9 @@ export function ScoreView() {
             <span className="text-gray-400" data-testid="next-notes">
               Play:{' '}
               <span className="font-mono font-semibold text-indigo-300">
-                {finished ? '—' : freshNow && !hints ? '…' : remaining.length ? namesOf(remaining) : '—'}
+                {finished ? '—' : hintsOff && !hints ? '…' : remaining.length ? namesOf(remaining) : '—'}
               </span>
-              {!finished && playHint && (!freshNow || hints) && <span className="text-indigo-200/80"> ({playHint})</span>}
+              {!finished && playHint && (!hintsOff || hints) && <span className="text-indigo-200/80"> ({playHint})</span>}
             </span>
           )}
           <span className="text-gray-400">

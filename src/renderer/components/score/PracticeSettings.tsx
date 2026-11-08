@@ -68,6 +68,11 @@ export function PracticeSettings({ btn }: { btn: string }) {
             label="Keep screen awake while playing"
             title="Keep the screen from going dark while you play (your piano's keys don't count as activity to the Mac). Lets go 15 minutes after your last note."
           />
+          <Check
+            k="hintsOffNew"
+            label="Hints off for new pieces"
+            title="Fresh tunes and Sight-read pieces start with no green keys, little staff or note names. A wrong note (or, with Training wheels on, a long pause) brings them back until your next right one."
+          />
           <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Clean laps</div>
           <Check k="celebrateChime" label="Chime" title="A soft ding from the computer when you finish a lap with no wrong notes" />
           <Check k="celebrateWave" label="Glow wave" title="The notes of the loop glow softly, left to right, after a clean lap" />

@@ -98,17 +98,23 @@ def main():
         page.get_by_role("button", name="Score", exact=True).first.click()
         page.get_by_test_id("fresh-key").wait_for(timeout=15000)
         page.get_by_test_id("fresh-key").select_option("G")
+        before = screen().get("piece")
         page.get_by_test_id("fresh-tune").click()
 
+        # A new label: a fresh tune from an earlier run may still be on screen.
         deadline = time.monotonic() + 10
         while True:
             s = screen()
-            if (s.get("piece") or "").startswith("Fresh tune") and s.get("remaining"):
+            label = s.get("piece") or ""
+            if label != before and label.startswith("Fresh tune") and s.get("remaining"):
                 break
             if time.monotonic() >= deadline:
                 raise RuntimeError("Timed out waiting for the fresh G-major tune.")
             time.sleep(0.1)
 
+        # The tune shows a beat before its notes are judged; let it settle.
+        time.sleep(1.5)
+        s = screen()
         check("G-major label", s["piece"].endswith("(G major)"))
         remaining = s["remaining"]
 
