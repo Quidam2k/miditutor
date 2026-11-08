@@ -40,6 +40,7 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   sessionSave: (snapshot: unknown) => ipcRenderer.send('session:save', snapshot),
   // Note trainer (#5260): the per-note record in note-stats.json.
   noteStatsLoad: () => ipcRenderer.invoke('noteStats:load'),
+  practiceRollup: (days: number) => ipcRenderer.invoke('practice:rollup', days),
   noteStatsSave: (record: unknown) => ipcRenderer.send('noteStats:save', record),
   // "Bring in the tutor" (#5154): { state, error? }.
   inviteStatus: () => ipcRenderer.invoke('invite:status'),

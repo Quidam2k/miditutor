@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { GestureTracker, checkChord, type Gesture } from '../shared/music';
 import type { RecordingStatus, TakeEvent } from './recorder';
 import type { InviteState } from './invite';
+import { rollup, type DayLog, type Rollup } from '../shared/practiceRollup';
 
 export type TaskResult = {
   verdict: 'correct' | 'wrong' | 'incomplete';
@@ -200,6 +201,26 @@ export class TutorApi {
     return path.join(this.opts.logDir, `${d}.jsonl`);
   }
 
+  /** #5657 (f): the practice roll-up over the last `days` day logs (today included). */
+  practiceRollup(days = 7): Rollup {
+    const logs: DayLog[] = [];
+    for (let back = days - 1; back >= 0; back--) {
+      const day = new Date(this.now());
+      day.setDate(day.getDate() - back); // calendar days, so a DST change can't skip one
+      const file = this.logFile(day);
+      if (!file) break;
+      try {
+        const entries = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean).flatMap((l) => {
+          try { return [JSON.parse(l) as unknown]; } catch { return []; }
+        });
+        logs.push({ date: path.basename(file, '.jsonl'), entries });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    return rollup(logs);
+  }
+
   private appendLog(entry: unknown): void {
     const file = this.logFile();
     if (!file) return;
@@ -369,6 +390,9 @@ export class TutorApi {
       }
       send({ file: path.basename(file), total: lines.length,
         entries: lines.slice(-tail).map((l) => { try { return JSON.parse(l); } catch { return { raw: l }; } }) });
+    } else if (route === 'GET /rollup') {
+      // Where he keeps missing: worst bars and fingers per piece, over the last `days` (default 7).
+      send(this.practiceRollup(this.number(url, 'days', 7, 90, 1)));
     } else if (route === 'POST /loop') {
       const { firstBar, lastBar, backwards } = await this.body(req);
       if (!Number.isSafeInteger(firstBar) || !Number.isSafeInteger(lastBar) ||

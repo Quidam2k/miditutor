@@ -11,6 +11,7 @@ import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound } from '../../audio/AudioEngine';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
+import { PracticeReport } from './PracticeReport';
 import { PracticeSettings } from './PracticeSettings';
 import { WaveOverlay, WAVE_FLARE_MS, waveDelays, type WaveDot } from './WaveOverlay';
 import { hesitationMs, PACE_SAMPLES } from '../../engine/TrainingWheels';
@@ -462,6 +463,14 @@ function fingersOf(notes: OsmdNote[] | undefined): Map<number, string> {
     if (finger) out.set(toMidi(n), finger);
   }
   return out;
+}
+
+// The same, for the practice log: hand from the staff (top = right), only notes that carry a finger.
+function writtenFingers(notes: OsmdNote[] | undefined): { note: number; finger: string; hand: 'L' | 'R' }[] {
+  return (notes ?? []).flatMap((n) => {
+    const finger = n.Fingering?.value?.trim();
+    return finger ? [{ note: toMidi(n), finger, hand: (n.ParentStaff?.idInMusicSheet ?? 0) === 0 ? 'R' as const : 'L' as const }] : [];
+  });
 }
 
 // Pixel box of every bar (all staves of one system), relative to its page's <svg>.
@@ -1776,6 +1785,8 @@ export function ScoreView() {
         pedal,
         sounding: [...sounding],
         lap: f.lap,
+        // #5657 (f): the written fingers of this step, so the roll-up can say which finger misses.
+        ...(result.kind === 'wrong' || result.kind === 'stray' ? { fingers: writtenFingers(stepNotesRef.current[idx]) } : {}),
       });
 
       const expr = exprRef.current;
@@ -2690,6 +2701,7 @@ export function ScoreView() {
           </label>
         )}
         <div className="ml-auto flex items-center gap-2">
+          <PracticeReport btn={btn} piece={pieceName} onLoopBar={(bar) => applyLoop({ first: bar, last: bar })} disabled={watching || status !== 'ready'} />
           <PracticeSettings btn={btn} />
           <button
             onClick={() => {

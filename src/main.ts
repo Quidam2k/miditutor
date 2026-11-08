@@ -471,6 +471,7 @@ ipcMain.handle('session:load', () => (useSession ? files().loadSession() : null)
 ipcMain.on('session:save', (_e, snapshot: unknown) => {
   if (useSession) files().saveSession(snapshot).catch((err) => console.error('[session] save failed:', err));
 });
+ipcMain.handle('practice:rollup', (_e, days: number) => tutorApi?.practiceRollup(Math.max(1, Math.min(90, Math.floor(days) || 7))) ?? null);
 ipcMain.handle('noteStats:load', () => (useSession ? files().loadNoteStats() : null));
 ipcMain.on('noteStats:save', (_e, record: unknown) => {
   if (useSession) files().saveNoteStats(record).catch((err) => console.error('[note-stats] save failed:', err));
