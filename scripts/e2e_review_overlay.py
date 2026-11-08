@@ -43,7 +43,8 @@ with sync_playwright() as p:
     page.wait_for_timeout(800)
 
     n = page.locator("[data-testid=review-digital-layer] image").count()
-    check(n == 8, "line 1: both staves of all 4 bars laid over the scan", f"images={n}")
+    # #5729: a line's first bar comes in two parts per staff (clef and key, then the notes).
+    check(n == 10, "line 1: both staves of all 4 bars laid over the scan", f"images={n}")
     check(label(page) == "Page 1, line 1, 1st bar [bar 1]", "label names page/line/bar", label(page))
     check(page.locator("[data-testid=review-unaligned]").count() == 0, "no bar falls back on line 1")
 
@@ -83,7 +84,7 @@ with sync_playwright() as p:
     page.wait_for_selector("[data-testid=review-digital-layer] image", timeout=15000)
     page.wait_for_timeout(800)
     n2 = page.locator("[data-testid=review-digital-layer] image").count()
-    check(n2 == 12 and page.locator("[data-testid=review-unaligned]").count() == 0,
+    check(n2 == 14 and page.locator("[data-testid=review-unaligned]").count() == 0,
           "line 2 (rests, a dynamic): all 6 bars laid over", f"images={n2}")
     page.keyboard.press(",")
     page.wait_for_timeout(600)
@@ -108,13 +109,14 @@ with sync_playwright() as p:
 
     url = page.url
     start = label(page)
-    page.keyboard.press(".")
-    one_on = label(page)
-    page.keyboard.press(",")
+    line = lambda: page.locator("[data-testid=review-line-label]").inner_text()
+    # #5729: back / forward step a whole line, like Page Down.
     click("forward", 16)
-    check(label(page) == one_on != start, "mouse forward steps a bar, like .", f"{start} -> {label(page)}")
+    page.wait_for_timeout(400)
+    check(line().startswith("Line 2"), "mouse forward steps a line, like Page Down", line())
     click("back", 8)
-    check(label(page) == start, "mouse back steps back, like ,", label(page))
+    page.wait_for_timeout(400)
+    check(line().startswith("Line 1") and label(page) == start, "mouse back steps back a line", f"{line()} {label(page)}")
     check(page.url == url, "mouse back does not navigate away", page.url)
     click("middle", 4)
     check(page.locator("[data-testid=review-digital-layer]").count() == 0, "middle button hides the overlay")

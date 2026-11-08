@@ -5,6 +5,25 @@ export interface DigitalBar {
   x: number;
   w: number;
   staves: { y0: number; y1: number }[];
+  /** #5729: width of the clef / key / time at the bar's start (a line's first bar). */
+  head?: number;
+  /** #5729: left edge of the bar's first note or rest. */
+  note?: number;
+}
+
+/**
+ * #5729: the first column with ink at or after `from`, once at least `gap` empty columns have gone
+ * by: the first note after the key's last accidental. `ink` counts dark pixels per crop column,
+ * staff lines left out; a column with under 2 is empty (specks).
+ */
+export function firstInkAfterGap(ink: ArrayLike<number>, from: number, to: number, gap: number): number | null {
+  let empty = 0;
+  for (let x = Math.max(0, Math.round(from)); x < Math.min(ink.length, to); x++) {
+    if (ink[x] < 2) empty++;
+    else if (empty >= gap) return x;
+    else empty = 0;
+  }
+  return null;
 }
 
 export interface StaffFit {
@@ -26,6 +45,7 @@ export function alignBar(
   cropHeight: number,
   measure: number,
   digital: DigitalBar | undefined,
+  ink?: ArrayLike<number>,
 ): BarFit {
   const fail = (reason: string): BarFit => ({ measure, ok: false, reason });
 
@@ -65,7 +85,7 @@ export function alignBar(
   const x1 = system.barlines[i + 1] * cropScale;
   const sx = (x1 - x0) / digital.w;
 
-  const fits: StaffFit[] = scanStaves.map((scan, k) => {
+  const fits: StaffFit[] = scanStaves.flatMap((scan, k) => {
     const staff = digital.staves[k];
     const sy = (scan.bottom - scan.top) / (staff.y1 - staff.y0);
     const ty = scan.top - staff.y0 * sy;
@@ -78,14 +98,28 @@ export function alignBar(
       ? cropHeight
       : Math.min((scan.bottom + scanStaves[k + 1].top) / 2, ((staff.y1 + next.y0) / 2) * sy + ty);
 
-    return {
-      staff: k + 1,
-      clip: { x: x0, y: top, w: x1 - x0, h: bottom - top },
-      sx,
-      sy,
-      tx: x0 - digital.x * sx,
-      ty,
-    };
+    const whole = { staff: k + 1, clip: { x: x0, y: top, w: x1 - x0, h: bottom - top }, sx, sy, tx: x0 - digital.x * sx, ty };
+    // #5729: a line's first bar opens with clef and key. Their size follows the staff, not the
+    // bar's width, so they're fitted at the staff's scale; only the notes after them stretch. The
+    // print leaves its own room before the first note, so that note goes on the scan's first ink
+    // after the key, looked for within 4 spaces; where the scan is too busy to tell, 1.7 spaces
+    // later than the score's own spacing (what the clear lines of Sorcerer's Apprentice show).
+    const space = (staff.y1 - staff.y0) / 4;
+    const scanSpace = (scan.bottom - scan.top) / 4;
+    const head = digital.head ?? 0;
+    const note = digital.note;
+    if (head < 2 * space || note === undefined || note <= digital.x || note >= digital.x + digital.w) return [whole];
+    const lead = (note - digital.x) * sy;
+    if (lead >= (x1 - x0) * 0.75) return [whole];
+    const found = ink ? firstInkAfterGap(ink, x0 + lead * 0.85, x0 + lead + 4 * scanSpace, 0.5 * scanSpace) : null;
+    const scanNote = found ?? x0 + lead + 1.7 * scanSpace;
+    const split = Math.min(x0 + lead, scanNote);
+    const bodySx = (x1 - scanNote) / (digital.x + digital.w - note);
+    if (!(bodySx >= 0.33 && bodySx <= 3)) return [whole];
+    return [
+      { ...whole, clip: { ...whole.clip, w: split - x0 }, sx: sy, tx: x0 - digital.x * sy },
+      { ...whole, clip: { ...whole.clip, x: split, w: x1 - split }, sx: bodySx, tx: scanNote - note * bodySx },
+    ];
   });
 
   if (fits.some((fit) => !(fit.sx >= 0.33 && fit.sx <= 3 && fit.sy >= 0.33 && fit.sy <= 3))) {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LayoutSystem } from '../src/shared/review';
-import { DigitalBar, alignBar, pageLineBar, stepBar } from '../src/shared/reviewOverlay';
+import { DigitalBar, alignBar, firstInkAfterGap, pageLineBar, stepBar } from '../src/shared/reviewOverlay';
 
 const sys = (over: Partial<LayoutSystem> = {}): LayoutSystem => ({
   index: 1, page: '01.png', y0: 677, y1: 1187, spacing: 21,
@@ -28,6 +28,50 @@ describe('alignBar', () => {
     // Each staff lands on its own lines, though the gaps differ.
     expect(map(bottom, 50, 170)[1]).toBeCloseTo((1016 - 677) / 2);
     expect(map(bottom, 50, 210)[1]).toBeCloseTo((1103 - 677) / 2);
+  });
+
+  // Staff space: score 10, scan 10.75. Head 40 (4 spaces), first note 36 in from the barline.
+  it("#5729: fits a line's clef and key at the staff's scale and stretches only the notes", () => {
+    const fit = alignBar(sys(), 0.5, 255, 1, digital({ head: 40, note: 86 }));
+    if (!fit.ok) throw new Error(fit.reason);
+    expect(fit.fits).toHaveLength(4); // head and notes, per staff
+    const [head, notes] = fit.fits;
+    const sy = 43 / 40;
+    expect(head.sx).toBeCloseTo(sy);
+    expect(map(head, 50, 30)[0]).toBeCloseTo(189); // left barline
+    expect(head.clip.x + head.clip.w).toBeCloseTo(189 + 36 * sy); // up to the score's first note
+    // No scan to read: the note goes 1.7 spaces past the score's own spacing.
+    expect(map(notes, 86, 30)[0]).toBeCloseTo(189 + 36 * sy + 1.7 * 10.75);
+    expect(map(notes, 250, 30)[0]).toBeCloseTo(535); // right barline
+    expect(notes.clip.x + notes.clip.w).toBeCloseTo(535);
+  });
+
+  it("pins the score's first note to the scan's first ink after the key", () => {
+    // Scan crop: key ink 189..225, empty to 240, the first note from 240 (a speck at 233).
+    const ink = new Uint16Array(600);
+    ink.fill(4, 189, 226);
+    ink.fill(5, 240, 252);
+    ink[233] = 1;
+    const fit = alignBar(sys(), 0.5, 255, 1, digital({ head: 40, note: 86 }), ink);
+    if (!fit.ok) throw new Error(fit.reason);
+    const [head, notes] = fit.fits;
+    expect(map(notes, 86, 30)[0]).toBeCloseTo(240);
+    expect(map(notes, 250, 30)[0]).toBeCloseTo(535);
+    expect(head.clip.x + head.clip.w).toBeCloseTo(notes.clip.x);
+  });
+
+  it('keeps one stretch mid-line (a sliver of a head) or with no first note', () => {
+    for (const over of [{ head: 7, note: 60 }, { head: 0 }, { head: 40 }]) {
+      const fit = alignBar(sys(), 0.5, 255, 1, digital(over));
+      expect(fit.ok && fit.fits).toHaveLength(2);
+    }
+  });
+
+  it('finds the first ink after a gap, not inside the key', () => {
+    const ink = [0, 3, 3, 0, 3, 3, 0, 0, 0, 0, 4, 4];
+    expect(firstInkAfterGap(ink, 1, 12, 3)).toBe(10);
+    expect(firstInkAfterGap(ink, 1, 12, 6)).toBeNull();
+    expect(firstInkAfterGap(ink, 7, 12, 3)).toBe(10); // starting inside the gap still counts it
   });
 
   it('clips each staff at the midpoint between staves, and to its own bar', () => {

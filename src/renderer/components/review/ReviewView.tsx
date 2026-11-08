@@ -129,6 +129,10 @@ interface BarBox {
   staves: StaffBand[];
   /** Each staff's top and bottom LINE (its border box can reach past them); for the overlay. */
   lines: StaffBand[];
+  /** Width of the clef / key / time at the bar's start (a line's first bar), 0 if none. */
+  head: number;
+  /** Left edge of its first note or rest, over all staves. */
+  note?: number;
 }
 interface OsmdBox {
   AbsolutePosition: { x: number; y: number };
@@ -138,18 +142,50 @@ interface OsmdBox {
   BorderBottom: number;
 }
 
+// #5729: left edge of a bar's first note or rest, over all its staves.
+function firstEntryX(drawn: ({ staffEntries?: { PositionAndShape?: OsmdBox }[] } | undefined)[], space: number) {
+  const xs = drawn.flatMap((m) => {
+    const box = m?.staffEntries?.[0]?.PositionAndShape;
+    return box ? [(box.AbsolutePosition.x + box.BorderLeft) * space] : [];
+  });
+  return xs.length ? Math.min(...xs) : undefined;
+}
+
+// #5729: dark pixels per column of a line's scan, inside its staves, staff lines left out.
+function inkColumns(img: HTMLImageElement, sys: LayoutSystem, cropScale: number): Uint16Array | undefined {
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const ctx = Object.assign(document.createElement('canvas'), { width: w, height: h }).getContext('2d');
+  if (!ctx) return undefined;
+  ctx.drawImage(img, 0, 0);
+  const px = ctx.getImageData(0, 0, w, h).data;
+  const ink = new Uint16Array(w);
+  for (const lines of sys.staves) {
+    const rows = lines.map((y) => (y - sys.y0) * cropScale);
+    const pad = Math.max(1, sys.spacing * cropScale * 0.12);
+    for (let y = Math.max(0, Math.floor(rows[0])); y <= Math.min(h - 1, Math.ceil(rows[rows.length - 1])); y++) {
+      if (rows.some((r) => Math.abs(r - y) <= pad)) continue;
+      for (let x = 0, i = y * w * 4; x < w; x++, i += 4) {
+        if (px[i] + px[i + 1] + px[i + 2] < 3 * 110) ink[x]++;
+      }
+    }
+  }
+  return ink;
+}
+
 // Pixel box of each bar from..to (all staves), in the OSMD <svg> user frame.
 function barBoxes(osmd: OpenSheetMusicDisplay, from: number, to: number): BarBox[] {
   const space = 10 * osmd.Zoom;
   const list = osmd.GraphicSheet.MeasureList as unknown as ({
     PositionAndShape?: OsmdBox;
     ParentMusicSystem?: unknown;
+    beginInstructionsWidth?: number;
+    staffEntries?: { PositionAndShape?: OsmdBox }[];
   } | undefined)[][];
   const boxes: BarBox[] = [];
   for (let measure = from; measure <= to; measure++) {
-    const staves = (list[measure - 1] ?? []).flatMap((m) =>
-      m?.PositionAndShape && m.ParentMusicSystem ? [m.PositionAndShape] : [],
-    );
+    const drawn = (list[measure - 1] ?? []).filter((m) => m?.PositionAndShape && m.ParentMusicSystem);
+    const staves = drawn.map((m) => m!.PositionAndShape!);
     if (staves.length === 0) continue;
     const top = staves[0];
     const bottom = staves[staves.length - 1];
@@ -165,6 +201,8 @@ function barBoxes(osmd: OpenSheetMusicDisplay, from: number, to: number): BarBox
       })),
       // OSMD puts a staff's top line at its measure's y; a staff is 4 spaces tall.
       lines: staves.map((s) => ({ y0: s.AbsolutePosition.y * space, y1: (s.AbsolutePosition.y + 4) * space })),
+      head: Math.max(0, ...drawn.map((m) => m!.beginInstructionsWidth ?? 0)) * space,
+      note: firstEntryX(drawn, space),
     });
   }
   return boxes;
@@ -478,7 +516,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   // Scan side.
   const crops = useRef(new Map<string, string>());
   const [cropUrl, setCropUrl] = useState('');
-  const [natural, setNatural] = useState<{ url: string; w: number; h: number } | null>(null);
+  const [natural, setNatural] = useState<{ url: string; w: number; h: number; ink?: Uint16Array } | null>(null);
 
   // Score side.
   const scoreHostRef = useRef<HTMLDivElement>(null);
@@ -642,6 +680,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
 
   const score = scoreData && scoreData.key === rangeKey ? scoreData : null;
   const scanFrame = natural && natural.url === cropUrl ? { w: natural.w, h: natural.h } : null;
+  const ink = natural?.url === cropUrl ? natural.ink : undefined;
 
   const barPos = barAt.line === lineIdx ? barAt.i : 0;
   const curBar = sys?.measures ? sys.measures[0] + barPos : null;
@@ -651,9 +690,10 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     return Array.from({ length: sys.bars }, (_, i) => {
       const m = (sys.measures as [number, number])[0] + i;
       const box = score.boxes.find((b) => b.measure === m);
-      return alignBar(sys, layout.crop_scale, scanFrame.h, m, box && { measure: m, x: box.x, w: box.w, staves: box.lines });
+      return alignBar(sys, layout.crop_scale, scanFrame.h, m,
+        box && { measure: m, x: box.x, w: box.w, staves: box.lines, head: box.head, note: box.note }, ink);
     });
-  }, [layout, sys, score, scanFrame?.h]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [layout, sys, score, scanFrame?.h, ink]); // eslint-disable-line react-hooks/exhaustive-deps
   const fits = barFits.flatMap((f) => (f.ok ? f.fits : []));
   const unaligned = barFits.filter((f) => !f.ok) as Extract<BarFit, { ok: false }>[];
   const moveBar = (dir: 1 | -1) => {
@@ -850,8 +890,9 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     e.preventDefault();
   };
   mouseRef.current = (button: number) => {
-    if (button === 3) moveBar(-1);
-    else if (button === 4) moveBar(1);
+    // #5729: back / forward step a whole line, like Page Down (bars stay on , and .).
+    if (button === 3) go(lineIdx - 1);
+    else if (button === 4) go(lineIdx + 1);
     else if (button === 1) setOverlay((v) => !v);
     else if (button === 2) dropLast();
   };
@@ -996,9 +1037,11 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
                 alt={`Scan of line ${sys.index}`}
                 draggable={false}
                 className="block w-full select-none"
-                onLoad={(e) =>
-                  setNatural({ url: cropUrl, w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })
-                }
+                onLoad={(e) => {
+                  const img = e.currentTarget;
+                  const ink = layout ? inkColumns(img, sys, layout.crop_scale) : undefined;
+                  setNatural({ url: cropUrl, w: img.naturalWidth, h: img.naturalHeight, ink });
+                }}
               />
             )}
             {overlay && scanFrame && score && fits.length > 0 && (
