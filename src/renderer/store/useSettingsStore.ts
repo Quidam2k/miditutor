@@ -66,6 +66,11 @@ interface SettingsState {
   hintsOffNew: boolean;
   /** JP 10/9: before reading in a new key, play its sharps or flats (Notes Keys mode, new pieces in Score). */
   keyFirst: boolean;
+  /** #5652 K Keep going: a click on every beat, and +4 after a clean lap (JP 9/11). */
+  keepClick: boolean;
+  keepStepUp: boolean;
+  /** Keep going's tempo per piece, so he picks up where he left off. */
+  keepBpms: Record<string, number>;
   /** #5521 clean-run celebrations, each on its own: a ding per clean lap, a glow wave, a finale. */
   celebrateChime: boolean;
   celebrateWave: boolean;
@@ -105,6 +110,7 @@ interface SettingsState {
   setLastPiece: (piece: { id: string; label: string }) => void;
   setLastView: (view: string) => void;
   setPieceLoop: (title: string, bars: { first: number; last: number }) => void;
+  setKeepBpm: (title: string, bpm: number) => void;
   setFavoritesOnly: (on: boolean) => void;
   toggleFavoritePiece: (title: string) => void;
   setPieceVersion: (slug: string, file: string) => void;
@@ -112,7 +118,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -155,6 +161,9 @@ export const useSettingsStore = create<SettingsState>()(
       trainingWheels: false,
       hintsOffNew: true,
       keyFirst: true,
+      keepClick: true,
+      keepStepUp: true,
+      keepBpms: {},
       celebrateChime: true,
       celebrateWave: false,
       celebrateFinale: true,
@@ -200,6 +209,7 @@ export const useSettingsStore = create<SettingsState>()(
       setLastPiece: (piece) => set({ lastPiece: piece }),
       setLastView: (view) => set({ lastView: view }),
       setPieceLoop: (title, bars) => set((s) => ({ pieceLoops: { ...s.pieceLoops, [title]: bars } })),
+      setKeepBpm: (title, bpm) => set((s) => ({ keepBpms: { ...s.keepBpms, [title]: bpm } })),
       setFavoritesOnly: (on) => set({ favoritesOnly: on }),
       toggleFavoritePiece: (title) =>
         set((s) => ({

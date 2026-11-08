@@ -78,6 +78,13 @@ export function PracticeSettings({ btn }: { btn: string }) {
             label="Key first"
             title="Before a fresh tune or Sight-read piece starts, play the key signature's sharps or flats (any octave, any order), so you've worked out the key before the first note. Also in Practice > Notes with Keys on."
           />
+          <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Keep going</div>
+          <Check k="keepClick" label="Click on the beat" title="Keep going plays a click on every beat (higher on the first beat of the bar), like a metronome at your back" />
+          <Check
+            k="keepStepUp"
+            label="Speed up 4 after a good lap"
+            title="After a Keep going lap with 9 in 10 notes right and few wrong ones, the next lap goes 4 clicks faster (JP: go up in 4s), never past the piece's target tempo"
+          />
           <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Clean laps</div>
           <Check k="celebrateChime" label="Chime" title="A soft ding from the computer when you finish a lap with no wrong notes" />
           <Check k="celebrateWave" label="Glow wave" title="The notes of the loop glow softly, left to right, after a clean lap" />

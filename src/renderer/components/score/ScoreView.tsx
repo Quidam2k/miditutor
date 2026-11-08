@@ -8,7 +8,8 @@ import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import expressionXml from '../../assets/expression-test.musicxml?raw';
-import { initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound } from '../../audio/AudioEngine';
+import { initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote } from '../../audio/AudioEngine';
+import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
 import { PracticeReport } from './PracticeReport';
@@ -573,6 +574,12 @@ export function ScoreView() {
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [following, setFollowing] = useState(true);
   const [watching, setWatching] = useState(false);
+  // Keep going (#5652 K): the cursor runs on the beat; his notes are tallied, nothing waits.
+  const [keep, setKeep] = useState<{ bpm: number; lap: number; count: number; hit: number; wrong: number } | null>(null);
+  const keepRef = useRef<{ run: KeepRun; timer: number; beat: number; step: number } | null>(null);
+  const [keepBpm, setKeepBpm] = useState(60);
+  const [keepLast, setKeepLast] = useState<string | null>(null);
+  const keeping = keep !== null;
   const [watchNotes, setWatchNotes] = useState<number[]>([]);
   const held = useMidiStore((s) => s.held);
   const showKeyboard = useSettingsStore((s) => s.showKeyboard);
@@ -922,6 +929,7 @@ export function ScoreView() {
       status,
       hand,
       measure,
+      keep: keep ? { ...keep, last: keepLast } : keepLast ? { last: keepLast } : null,
       remaining: remaining.map(noteName),
       wrongCount,
       feedback:
@@ -963,7 +971,7 @@ export function ScoreView() {
       expressionMarks: exprMarks.slice(0, 40),
       expression: exprFindings,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords]);
+  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1143,6 +1151,12 @@ export function ScoreView() {
   }, []);
 
   const restart = useCallback(() => {
+    if (keepRef.current) {
+      window.clearInterval(keepRef.current.timer);
+      keepRef.current = null;
+      setKeep(null);
+      reportEvent('keep', { on: false });
+    }
     watchRunRef.current++;
     window.clearTimeout(watchTimerRef.current);
     setWatching(false);
@@ -1255,6 +1269,86 @@ export function ScoreView() {
       if (bpm !== null) reportEvent('watch', { on: false, bpm });
     };
   }, [piece.id, drawnXml]);
+
+  // --- Keep going (#5652 K) ---
+  useEffect(() => {
+    setKeepBpm(useSettingsStore.getState().keepBpms[pieceLabelRef.current] ?? 60);
+    setKeepLast(null);
+    return () => {
+      if (keepRef.current) window.clearInterval(keepRef.current.timer);
+      keepRef.current = null;
+      setKeep(null);
+    };
+  }, [piece.id, drawnXml]);
+
+  const toggleKeep = async () => {
+    if (keepRef.current) {
+      restart();
+      return;
+    }
+    const f = followerRef.current;
+    if (!f?.steps.length || status !== 'ready' || watching || blockRef.current || keyGateRef.current) return;
+    try {
+      await initAudio();
+    } catch (err) {
+      console.warn('[keep] audio initialization failed:', err);
+      return;
+    }
+    if (followerRef.current !== f || keepRef.current) return;
+    const steps = f.steps;
+    // His loop, lap after lap; with no loop, the whole piece once from the top.
+    const looping = !!f.range;
+    const first = f.range?.first ?? 0;
+    const last = f.range?.last ?? steps.length - 1;
+    const bpm = clampBpm(keepBpm);
+    const count = countInBeats(steps, first);
+    const run = startKeep(first, last, bpm, Date.now() + count * beatMs(bpm));
+    keepRef.current = { run, timer: 0, beat: Number.NEGATIVE_INFINITY, step: -2 };
+    setKeepLast(null);
+    setKeep({ bpm, lap: 1, count, hit: 0, wrong: 0 });
+    moveCursorTo(first);
+    setMeasure(steps[first].measure);
+    setMarks([]);
+    reportEvent('keep', { on: true, bpm, startMs: run.startMs, firstBar: steps[first].measure, lastBar: steps[last].measure, looping });
+
+    const tick = () => {
+      const k = keepRef.current;
+      if (!k || followerRef.current !== f) return;
+      const t = Date.now();
+      const r = k.run;
+      const prefs = useSettingsStore.getState();
+      if (t >= lapEndMs(r, steps)) {
+        const lap = closeLap(r, steps, prefs.keepStepUp, piece.targetBpm);
+        setKeepLast(lapLabel(lap));
+        reportEvent('keep', { ...lap });
+        if (lap.nextBpm !== lap.bpm) {
+          setKeepBpm(lap.nextBpm);
+          prefs.setKeepBpm(pieceLabelRef.current, lap.nextBpm);
+        }
+        if (!looping) {
+          restart();
+          return;
+        }
+        k.beat = Number.NEGATIVE_INFINITY;
+        setKeep((s) => s && { ...s, bpm: r.bpm, lap: r.lap, hit: 0, wrong: 0 });
+      }
+      // The click on every beat of the count-in and the lap, the bar's first beat higher.
+      const beat = Math.floor((t - r.startMs) / beatMs(r.bpm));
+      if (beat !== k.beat) {
+        k.beat = beat;
+        const down = beat < 0 ? beat === -count : beat % count === 0;
+        if (prefs.keepClick) playNote(down ? 96 : 91, '32n');
+        setKeep((s) => s && { ...s, count: beat < 0 ? -beat : 0 });
+      }
+      const i = stepAt(r, steps, t);
+      if (i >= 0 && i !== k.step) {
+        k.step = i;
+        moveCursorTo(i);
+        setMeasure(steps[i].measure);
+      }
+    };
+    keepRef.current.timer = window.setInterval(tick, 10);
+  };
 
   // --- loop range (#5004) ---
   // keepChunk: Build backwards moving its own loop. Any other loop change ends it.
@@ -2038,9 +2132,27 @@ export function ScoreView() {
     flashTimerRef.current = window.setTimeout(() => setWrongFlash(false), 450);
   }, []);
 
+  // Keep going: each note is graded against the step under the clock, not the follower.
+  useEffect(() => {
+    if (!keeping) return;
+    return useMidiStore.subscribe((state, prev) => {
+      const ev = state.lastNoteOn;
+      const k = keepRef.current;
+      const f = followerRef.current;
+      if (!ev || ev === prev.lastNoteOn || !k || !f) return;
+      if (ev.velocity < useSettingsStore.getState().minVelocity) return;
+      const res = keepNote(k.run, f.steps, ev.note, Date.now());
+      if (res === 'hit') setKeep((s) => s && { ...s, hit: s.hit + 1 });
+      else if (res === 'wrong') {
+        setKeep((s) => s && { ...s, wrong: s.wrong + 1 });
+        flashWrong();
+      }
+    });
+  }, [keeping, flashWrong]);
+
   // --- live MIDI → follower ---
   useEffect(() => {
-    if (!following || watching) return;
+    if (!following || watching || keeping) return;
     return useMidiStore.subscribe((state, prev) => {
       if (watchBpmRef.current !== null) return;
       const ev = state.lastNoteOn;
@@ -2234,7 +2346,7 @@ export function ScoreView() {
       }
       syncUi();
     });
-  }, [following, watching, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong, noteCredit, spoilLap, bumpBare]);
+  }, [following, watching, keeping, status, moveCursorTo, syncUi, placePlayed, paintHeldTies, noteName, trackChord, reportExpression, chunkLap, flashWrong, noteCredit, spoilLap, bumpBare]);
 
   // Key first: every press goes to the gate until the signature's accidentals are all played.
   const gateOn = !!keyGateNow;
@@ -2752,11 +2864,11 @@ export function ScoreView() {
   // #5519: with training wheels, the keys he's to play show only in his run's first bar,
   // on a hesitation, or after a wrong note. Red and his own held keys always show.
   const atRunStart = lapStartRef.current === null || followerRef.current?.steps[cursorStep]?.measure === runStartBarRef.current;
-  const hints = bareNow
+  const hints = !keeping && (bareNow
     ? watching
     : quietNew
     ? watching || hesitating || !!wheelLive
-    : !trainingWheels || watching || hesitating || atRunStart || !!wheelLive;
+    : !trainingWheels || watching || hesitating || atRunStart || !!wheelLive);
 
   // #5624: the notes to play now, as written, on a scrap of staff above the keyboard;
   // one small staff over each hand's keys (#11091), with the notes as written (#11092).
@@ -3189,21 +3301,21 @@ export function ScoreView() {
           <PracticeReport btn={btn} piece={pieceName} onLoopBar={(bar) => applyLoop({ first: bar, last: bar })} onBlockBar={(bar) => {
             applyLoop({ first: bar, last: bar });
             startBlock({ first: bar, last: bar });
-          }} disabled={watching || status !== 'ready'} />
+          }} disabled={watching || keeping || status !== 'ready'} />
           <PracticeSettings btn={btn} />
           <button
             onClick={() => {
               setPicking(picking === 'off' ? 'start' : 'off');
               setPickStart(null);
             }}
-            disabled={status !== 'ready' || watching}
+            disabled={status !== 'ready' || watching || keeping}
             className={`${btn} ${loopBtn}`}
             data-testid="loop-bars"
           >
             {picking === 'start' ? 'Click first bar…' : picking === 'end' ? 'Click last bar…' : 'Loop bars'}
           </button>
           {loopBars && (
-            <button onClick={() => applyLoop(null)} disabled={watching} className={btn} data-testid="clear-loop">
+            <button onClick={() => applyLoop(null)} disabled={watching || keeping} className={btn} data-testid="clear-loop">
               Clear loop
             </button>
           )}
@@ -3232,7 +3344,7 @@ export function ScoreView() {
           {loopBars && !chunk && (
             <button
               onClick={toggleBlock}
-              disabled={watching}
+              disabled={watching || keeping}
               className={`${btn} ${block ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
               title="Press each hand position of the loop as one chord: hold, let go, three clean holds, then the next position. No timing."
               data-testid="block"
@@ -3273,15 +3385,54 @@ export function ScoreView() {
             </span>
           )}
           {/* While it plays for him, the timer owns the cursor. */}
-          <button onClick={prevStep} disabled={status !== 'ready' || watching} className={btn}>
+          <button onClick={prevStep} disabled={status !== 'ready' || watching || keeping} className={btn}>
             ◀ Prev
           </button>
           <button onClick={() => manualMove(1)} disabled={status !== 'ready' || finished || watching} className={btn}>
             Next ▶
           </button>
-          <button onClick={toggleWatch} disabled={status !== 'ready'} className={btn} data-testid="watch">
+          <button onClick={toggleWatch} disabled={status !== 'ready' || keeping} className={btn} data-testid="watch">
             {watching ? '■ Stop' : '▶ Play it for me'}
           </button>
+          <span
+            className="flex items-center gap-1"
+            title="Keep going: the cursor moves on the beat whether you play or not, so you play on past mistakes. Your loop goes round lap after lap; with no loop, the whole piece once. A bar of clicks counts you in."
+          >
+            <button
+              onClick={toggleKeep}
+              disabled={status !== 'ready' || watching || !!block}
+              className={`${btn} ${keeping ? 'ring-2 ring-amber-400' : ''}`}
+              data-testid="keep-going"
+            >
+              {keeping ? '■ Stop' : '⏵ Keep going'}
+            </button>
+            <span className="text-xs text-gray-400">♩ =</span>
+            <input
+              type="number"
+              min={20}
+              max={240}
+              value={keepBpm}
+              disabled={keeping}
+              onChange={(e) => setKeepBpm(Number(e.target.value) || 60)}
+              onBlur={() => {
+                const b = clampBpm(keepBpm);
+                setKeepBpm(b);
+                useSettingsStore.getState().setKeepBpm(pieceLabelRef.current, b);
+              }}
+              className="w-14 rounded bg-gray-800 px-1 text-sm text-gray-100 disabled:opacity-50"
+              data-testid="keep-bpm"
+            />
+          </span>
+          {keep && (
+            <span className="text-sm text-amber-200" data-testid="keep-status">
+              {keep.count > 0 ? `Count-in… ${keep.count}` : `Lap ${keep.lap} at ♩ = ${keep.bpm}: ${keep.hit} right, ${keep.wrong} wrong`}
+            </span>
+          )}
+          {keepLast && (
+            <span className="text-sm text-gray-300" data-testid="keep-last">
+              {keepLast}
+            </span>
+          )}
           <button
             onClick={restart}
             disabled={status !== 'ready'}
@@ -3299,7 +3450,7 @@ export function ScoreView() {
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-md bg-gray-900/60 px-3 py-2 text-sm">
           <label className="flex items-center gap-1 text-gray-400">
             Bar
-            <BarInput testId="bar-now" value={measure} last={lastBar} onCommit={jumpToBar} disabled={watching} title="Type a bar number to go there" />
+            <BarInput testId="bar-now" value={measure} last={lastBar} onCommit={jumpToBar} disabled={watching || keeping} title="Type a bar number to go there" />
           </label>
           {blockPos ? (
             // #5657c: the whole position, held together; hidden with the keys once he has it.
@@ -3328,7 +3479,7 @@ export function ScoreView() {
                 from={measure}
                 last={lastBar}
                 onCommit={typedFirst}
-                disabled={watching}
+                disabled={watching || keeping}
                 focus={picking === 'start'}
                 title="First bar of the range"
               />
@@ -3339,7 +3490,7 @@ export function ScoreView() {
                 from={pickStart ?? measure}
                 last={lastBar}
                 onCommit={typedLast}
-                disabled={watching}
+                disabled={watching || keeping}
                 focus={picking === 'end'}
                 title="Last bar of the range"
               />
