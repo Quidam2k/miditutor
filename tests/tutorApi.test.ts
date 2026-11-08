@@ -69,6 +69,7 @@ describe('TutorApi', () => {
       recording: null,
       invite: null,
       lastNoteAt: null,
+      autoInvite: false,
       keepAwake: null,
     });
   });
