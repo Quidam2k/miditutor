@@ -9,7 +9,7 @@ import {
   type XmlImpl,
 } from '../src/shared/fingering';
 import {
-  fingersLowToHigh, nextFinger, prevPlayable, stepBar, stepForWheel, stepOfBar, wheelNotch, type WheelRun,
+  fingersLowToHigh, nextFinger, passLoopEdge, prevPlayable, stepBar, stepForWheel, stepOfBar, wheelNotch, type WheelRun,
 } from '../src/renderer/components/score/noteEdit';
 
 describe('wheelNotch (#10259)', () => {
@@ -379,5 +379,33 @@ describe('wheel steps (#10237)', () => {
     expect(prevPlayable(steps, 0)).toBeNull();
     expect(prevPlayable([{ notes: [] }, { notes: [60] }], 1)).toBeNull();
     expect(prevPlayable(steps, 99)).toBe(4);
+  });
+});
+
+describe('passLoopEdge (#5560)', () => {
+  const fresh = () => ({ from: -1, dir: 0, at: 0 });
+  it('stops at the first notch into the edge, passes the next one after a pause', () => {
+    const e = fresh();
+    expect(passLoopEdge(e, 7, 1, 1000)).toBe(false);
+    expect(passLoopEdge(e, 7, 1, 1700)).toBe(true);
+  });
+  it('fast notches keep stopping, however many', () => {
+    const e = fresh();
+    const hits = [1000, 1200, 1400, 1600, 1800, 2000].map((t) => passLoopEdge(e, 7, 1, t));
+    expect(hits.every((h) => !h)).toBe(true);
+    expect(passLoopEdge(e, 7, 1, 2700)).toBe(true);
+  });
+  it('a different note or the other edge starts over', () => {
+    const e = fresh();
+    passLoopEdge(e, 7, 1, 1000);
+    expect(passLoopEdge(e, 3, 1, 5000)).toBe(false);
+    expect(passLoopEdge(e, 3, -1, 9000)).toBe(false);
+    expect(passLoopEdge(e, 3, -1, 9700)).toBe(true);
+  });
+  it('after passing, coming back to the edge stops again', () => {
+    const e = fresh();
+    passLoopEdge(e, 7, 1, 1000);
+    passLoopEdge(e, 7, 1, 2000);
+    expect(passLoopEdge(e, 7, 1, 9000)).toBe(false);
   });
 });

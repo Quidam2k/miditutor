@@ -348,13 +348,46 @@ def loop_checks(page) -> None:
     page.wait_for_timeout(200)
     check(screen()["measure"] == 22 and where() == (start["measure"], tuple(sorted(start["remaining"]))),
           "the wheel stops at the loop's first note")
-    for _ in range(30):
-        page.mouse.wheel(0, 100)
-        page.wait_for_timeout(70)
+    # A fast spin: 30 notches 20 ms apart, sent in the page, because each page.mouse.wheel waits
+    # ~2 s for a hidden window to paint, which would make every notch "after a pause".
+    spot = off_note(page)
+    page.evaluate(
+        """async ({ x, y }) => {
+          const el = document.elementFromPoint(x, y);
+          for (let i = 0; i < 30; i++) {
+            el.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+            await new Promise((r) => setTimeout(r, 20));
+          }
+        }""",
+        spot,
+    )
+    page.wait_for_timeout(300)
+    # #5560: all those fast notches stopped at the edge; the note there says how to go past.
+    tip = page.get_by_test_id("loop-edge-tip").is_visible()
     s = screen()
     check(s["measure"] == 23, "the wheel stops at the loop's last note", s["measure"])
     check(s["loop"]["firstBar"] == 22 and s["loop"]["lastBar"] == 23, "the range is unchanged", s["loop"])
     last_in_loop = where()
+    check(tip, "at the edge it says how to go past")
+    # A notch after a pause goes past.
+    page.wait_for_timeout(800)
+    page.mouse.wheel(0, 100)
+    page.wait_for_timeout(200)
+    check(screen()["measure"] == 24, "a notch after a pause goes past the loop's edge", screen()["measure"])
+    check(page.get_by_test_id("loop-edge-tip").count() == 0, "and the edge note goes")
+    page.mouse.wheel(0, -100)
+    page.wait_for_timeout(200)
+    check(where() == last_in_loop, "the wheel walks back into the loop", (where(), last_in_loop))
+    # A stop he walked away from is forgotten: back in, then out to the edge again, stops again.
+    page.mouse.wheel(0, 100)  # stop at the edge
+    page.wait_for_timeout(200)
+    page.mouse.wheel(0, -100)  # one note back, inside the loop
+    page.wait_for_timeout(800)
+    page.mouse.wheel(0, 100)  # back to the edge note
+    page.wait_for_timeout(800)
+    page.mouse.wheel(0, 100)  # first notch off the edge since: stops
+    page.wait_for_timeout(200)
+    check(where() == last_in_loop, "after walking back in, the edge stops him again", (where(), last_in_loop))
 
     page.keyboard.down("Shift")
     page.wait_for_timeout(100)

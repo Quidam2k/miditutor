@@ -95,3 +95,26 @@ export function stepForWheel(
   }
   return null;
 }
+
+/** #5560: how long he must pause at a loop's edge before the next notch goes past it. */
+export const EDGE_PAUSE_MS = 600;
+
+export interface LoopEdge {
+  /** The note he was stopped on, and which way, at the last notch into the edge. */
+  from: number;
+  dir: number;
+  at: number;
+}
+
+/**
+ * #5560: the wheel has hit the loop's edge. True: this notch goes past it, because he stopped at
+ * the same note going the same way and then paused. Fast notches keep stopping (each one restarts
+ * the pause), so a quick spin never leaves the loop by accident.
+ */
+export function passLoopEdge(edge: LoopEdge, from: number, dir: -1 | 1, now: number): boolean {
+  const pass = edge.from === from && edge.dir === dir && now - edge.at >= EDGE_PAUSE_MS;
+  edge.from = pass ? -1 : from;
+  edge.dir = dir;
+  edge.at = now;
+  return pass;
+}

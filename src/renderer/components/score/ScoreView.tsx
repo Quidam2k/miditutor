@@ -23,7 +23,7 @@ import { PedalCoach } from '../../engine/PedalCoach';
 import { rememberRef, resolvePieceId } from './lastPiece';
 import { orderChordFingers } from './chordFingers';
 import { renderBinderHtml } from './binderRender';
-import { fingersLowToHigh, nextFinger, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
+import { fingersLowToHigh, nextFinger, passLoopEdge, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, grewLabel, lapDone, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
 import { blockInput, blockLabel, current as blockPosition, groupPositions, showKeys, startBlocking, type BlockState, type BlockStep } from '../../engine/Blocking';
@@ -507,6 +507,10 @@ export function ScoreView() {
   // #9976: notices the pedal lifted before the next note (a gap in the sound).
   const pedalCoachRef = useRef(new PedalCoach());
   const [pedalTip, setPedalTip] = useState('');
+  // #5560: stopped at the loop's edge by the wheel; a notch after a pause goes past it.
+  const [edgeTip, setEdgeTip] = useState<{ x: number; y: number } | null>(null);
+  const edgeRef = useRef({ from: -1, dir: 0, at: 0 });
+  const edgeTipTimerRef = useRef<number | undefined>(undefined);
   const pedalTipTimerRef = useRef<number | undefined>(undefined);
   // #9988 tap-to-finger: the note he tapped, the message after, where to resume.
   const [fingerPick, setFingerPick] = useState<FingerPick | null>(null);
@@ -854,9 +858,8 @@ export function ScoreView() {
     try {
       const info = await bridge.binderInfo(scanSlug);
       if (piece.trust?.status !== 'verified') {
-        setPrintNote(info.total
-          ? `Not verified yet: ${info.confirmed} of ${info.total} lines confirmed. Finish it in Review first.`
-          : 'Not verified yet. Check it in Review first.');
+        // Lines aren't confirmed one by one any more (#5729): he submits the piece in Review.
+        setPrintNote('Not verified yet. Submit it in Review first.');
         reportEvent('binder_print', { piece: scanSlug, refused: 'unverified', confirmed: info.confirmed, total: info.total });
         return;
       }
@@ -1148,8 +1151,9 @@ export function ScoreView() {
     setRemaining(left);
     setStepKeys(f.expected);
     setPlayHint(hintFor(osmdRef.current, stepNotesRef.current[f.index] ?? [], left));
-    // Parked past the end of a loop (#5382 target reached): stay on the loop's last bar.
-    const step = f.steps[Math.min(f.index, f.range?.last ?? f.steps.length - 1)];
+    // Parked past the end of a loop (#5382 target reached): stay on the loop's last bar. Only
+    // parked: wheeled past the loop (#5560), he's in the bar he's in.
+    const step = f.steps[Math.min(f.index, (f.finished ? f.range?.last : undefined) ?? f.steps.length - 1)];
     setMeasure(step?.measure ?? 1);
     setPace(f.paceBpm);
     // Any move off the parked spot (a step button, a new loop) means he's playing again.
@@ -2116,6 +2120,7 @@ export function ScoreView() {
     [],
   );
   useEffect(() => () => window.clearTimeout(pedalTipTimerRef.current), []);
+  useEffect(() => () => window.clearTimeout(edgeTipTimerRef.current), []);
 
   // #5519: a credited note ends a hesitation and starts the clock on the next one.
   const noteCredit = useCallback((advanceAt: number | null) => {
@@ -2836,11 +2841,28 @@ export function ScoreView() {
         return;
       }
       // #10259: one note per notch. The loop itself never changes; the wheel stops at its edges,
-      // and Shift+wheel goes past them to tag notes outside it.
+      // and Shift+wheel goes past them to tag notes outside it. #5560: so does a notch after a
+      // pause at the edge, for one hand on a trackball.
       if (watching) return;
+      const from = cursorIndexRef.current;
       const range = !ev.shiftKey && loopBars ? stepRangeOf(f.steps, loopBars.first, loopBars.last) : null;
-      const step = stepForWheel(f.steps, cursorIndexRef.current, way, range || null);
+      let step = stepForWheel(f.steps, from, way, range || null);
+      const past = range && step === null ? stepForWheel(f.steps, from, way, null) : null;
+      if (past !== null) {
+        window.clearTimeout(edgeTipTimerRef.current);
+        // When he turned the wheel, not when a busy page got to it: a fast spin stays fast.
+        if (passLoopEdge(edgeRef.current, from, way, ev.timeStamp)) {
+          setEdgeTip(null);
+          step = past;
+        } else {
+          setEdgeTip({ x: ev.clientX, y: ev.clientY });
+          edgeTipTimerRef.current = window.setTimeout(() => setEdgeTip(null), 4000);
+        }
+      }
+      // A step inside the loop forgets the last stop, so coming back to the edge stops again.
+      if (past === null) edgeRef.current.from = -1;
       if (step === null) return;
+      setEdgeTip(null);
       // Notes skipped by scrolling mustn't earn a clean lap in Build backwards.
       if (chunk) lapWrongRef.current++;
       manualMove(step - cursorIndexRef.current);
@@ -3724,6 +3746,16 @@ export function ScoreView() {
             {fingerPick.held ? 'Re-strike' : "Hold (don't re-strike)"}
           </button>
           <button onClick={() => setFingerPick(null)} className="rounded px-2 py-1 text-sm text-gray-400">Cancel</button>
+        </div>
+      )}
+      {/* Over the score at the pointer, so it can't push the music out from under it. */}
+      {edgeTip && (
+        <div
+          className="pointer-events-none fixed z-50 rounded bg-sky-900/90 px-2 py-0.5 text-sm text-sky-100 shadow"
+          style={{ left: Math.min(edgeTip.x + 12, window.innerWidth - 320), top: Math.max(4, edgeTip.y - 30) }}
+          data-testid="loop-edge-tip"
+        >
+          End of your loop: scroll again to go past
         </div>
       )}
       {wheelLive && (
