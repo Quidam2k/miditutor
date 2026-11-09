@@ -176,18 +176,32 @@ function inkColumns(img: HTMLImageElement, sys: LayoutSystem, cropScale: number)
   return ink;
 }
 
+type DrawnMeasure = { ParentMusicSystem?: unknown; parentSourceMeasure?: { measureListIndex?: number } };
+
+// The bars from..to that this render drew, as [bar, its measure per staff]. Read from the drawn lines,
+// not OSMD's MeasureList (whose measures keep ParentMusicSystem from earlier renders), and named by
+// each bar's own source measure (its position in the file), so a bar drawn late can't pass as the
+// bar asked for (#5731).
+function drawnBars<M extends DrawnMeasure>(osmd: OpenSheetMusicDisplay, from: number, to: number): [number, (M | undefined)[]][] {
+  const pages = osmd.GraphicSheet.MusicPages as unknown as { MusicSystems: { GraphicalMeasures: (M | undefined)[][] }[] }[];
+  const out: [number, (M | undefined)[]][] = [];
+  for (const row of pages.flatMap((p) => p.MusicSystems.flatMap((s) => s.GraphicalMeasures))) {
+    const index = row.find((m) => m)?.parentSourceMeasure?.measureListIndex;
+    if (index !== undefined && index + 1 >= from && index + 1 <= to) out.push([index + 1, row]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+
 // Pixel box of each bar from..to (all staves), in the OSMD <svg> user frame.
 function barBoxes(osmd: OpenSheetMusicDisplay, from: number, to: number): BarBox[] {
   const space = 10 * osmd.Zoom;
-  const list = osmd.GraphicSheet.MeasureList as unknown as ({
+  const boxes: BarBox[] = [];
+  for (const [measure, row] of drawnBars<DrawnMeasure & {
     PositionAndShape?: OsmdBox;
-    ParentMusicSystem?: unknown;
     beginInstructionsWidth?: number;
     staffEntries?: { PositionAndShape?: OsmdBox }[];
-  } | undefined)[][];
-  const boxes: BarBox[] = [];
-  for (let measure = from; measure <= to; measure++) {
-    const drawn = (list[measure - 1] ?? []).filter((m) => m?.PositionAndShape && m.ParentMusicSystem);
+  }>(osmd, from, to)) {
+    const drawn = row.filter((m) => m?.PositionAndShape && m.ParentMusicSystem);
     const staves = drawn.map((m) => m!.PositionAndShape!);
     if (staves.length === 0) continue;
     const top = staves[0];
@@ -234,14 +248,13 @@ function noteName(n: NonNullable<OsmdNoteShape['sourceNote']>): string {
 // Every drawn note head of bars from..to, in the OSMD <svg> user frame.
 function noteBoxes(osmd: OpenSheetMusicDisplay, from: number, to: number): NoteBox[] {
   const space = 10 * osmd.Zoom;
-  const list = osmd.GraphicSheet.MeasureList as unknown as ({
+  const out: NoteBox[] = [];
+  for (const [measure, row] of drawnBars<{
     staffEntries?: OsmdStaffEntryShape[];
     ParentMusicSystem?: unknown;
-    parentSourceMeasure?: { ActiveTimeSignature?: { Denominator: number } };
-  } | undefined)[][];
-  const out: NoteBox[] = [];
-  for (let measure = from; measure <= to; measure++) {
-    (list[measure - 1] ?? []).forEach((m, staffIdx) => {
+    parentSourceMeasure?: { measureListIndex?: number; ActiveTimeSignature?: { Denominator: number } };
+  }>(osmd, from, to)) {
+    row.forEach((m, staffIdx) => {
       if (!m?.ParentMusicSystem) return;
       const unit = m.parentSourceMeasure?.ActiveTimeSignature?.Denominator ?? 4;
       for (const se of m.staffEntries ?? []) {
