@@ -17,6 +17,7 @@ import {
 import { BarSpan, MarkNote, NoteBox, barsUnder, describeNotes, markNotes, notesInCircle, notesInShare } from '../../../shared/reviewCircle';
 import { BarFit, StaffFit, alignBar, pageLineBar, stepBar } from '../../../shared/reviewOverlay';
 import { addBeams } from '../../engine/autoBeam';
+import { drawRangeByPosition } from '../score/drawRange';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustMark } from '../../../shared/trust';
 
@@ -653,6 +654,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
     }
     try {
       engine.setOptions({ drawFromMeasureNumber: range.from, drawUpToMeasureNumber: range.to });
+      drawRangeByPosition(engine);
       engine.render();
       const svg = host.querySelector('svg');
       if (!svg) throw new Error('The score did not draw.');
@@ -1136,7 +1138,12 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
             </div>
           )}
           <div className="mb-1 text-xs uppercase tracking-wide text-gray-500">Score</div>
-          <div className="relative mb-3 min-h-16 overflow-hidden rounded bg-white text-black">
+          <div
+            className="relative mb-3 min-h-16 overflow-hidden rounded bg-white text-black"
+            data-testid="review-score"
+            data-range={rangeKey}
+            data-bars={score ? score.boxes.map((b) => b.measure).join(',') : ''}
+          >
             <div ref={scoreHostRef} />
             {score && (
               <DrawOverlay
@@ -1464,7 +1471,11 @@ function BarRender({ label, xml, measure }: { label: string; xml: string; measur
     });
     osmd
       .load(xml)
-      .then(() => !disposed && osmd.render())
+      .then(() => {
+        if (disposed) return;
+        drawRangeByPosition(osmd);
+        osmd.render();
+      })
       .catch((e) => !disposed && setFailed(errText(e)));
     return () => {
       disposed = true;

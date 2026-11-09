@@ -95,6 +95,15 @@ def test_fur_elise_layout(tmp_path):
 
 
 @needs_library
+def test_courtesy_key_after_last_barline_is_not_a_bar(tmp_path):
+    # Love Dance line 8 ends on a double bar, then a courtesy key change with no closing line (#5731).
+    data = review_layout.layout_piece(LIBRARY, "love-dance-from-ka", out_dir=tmp_path)
+    assert data["systems"][7]["bars"] == 4
+    assert data["match"] == "exact"
+    assert data["systems"][1]["measures"] == [4, 6]
+
+
+@needs_library
 def test_cli_skips_current_layout(tmp_path, capsys):
     args = ["--library", str(LIBRARY), "--out-dir", str(tmp_path), "fur-elise"]
     assert review_layout.main(args) == 0

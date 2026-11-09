@@ -1,6 +1,7 @@
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
 import { binderSides } from '../../../shared/binderPrint';
 import { orderChordFingers } from './chordFingers';
+import { drawRangeByPosition } from './drawRange';
 
 interface FingeringEntry {
   FingeringEntries?: { SVGNode?: unknown }[];
@@ -85,6 +86,7 @@ export async function renderBinderHtml(opts: {
       });
       await osmd.load(musicxml);
       orderChordFingers(osmd);
+      drawRangeByPosition(osmd);
       osmd.render();
       inkFingerings(osmd);
       svgs.push(...Array.from(div.querySelectorAll('svg')).map((svg) => svg.cloneNode(true) as SVGSVGElement));

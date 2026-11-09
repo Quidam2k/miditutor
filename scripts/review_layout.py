@@ -44,6 +44,7 @@ BARLINE_DARK = 0.95         # barline candidate: ink fraction through every staf
 BARLINE_GAP = 18            # merge candidate columns no further apart than this
 EDGE_TOL = 12               # barline this close to a staff end is kept whatever its scores
 EDGE_SPACINGS = 4           # a line this many staff spaces from a staff end is the system edge
+COURTESY_SPACINGS = 8       # an unbarred staff tail this short is a courtesy key/time change, not a bar
 OUTSIDE_TOL = 12            # drop runs this far outside the staff extent
 GAP_MARGIN = 3              # rows skipped next to a staff when measuring the gap between staves
 SPACE_MARGIN = 3            # rows skipped next to a line when measuring staff spaces
@@ -296,6 +297,10 @@ def analyze_page(path, per_system):
         if right:
             s["x_right"] = max(right)
         inner = [x for x in xs if x - s["x_left"] > tol and s["x_right"] - x > tol]
+        # No line closes the staff, and what runs past the last barline is too short for a bar:
+        # a courtesy key or time change for the next line (Love Dance line 8, after a double bar).
+        if not right and inner and s["x_right"] - inner[-1] <= COURTESY_SPACINGS * spacing:
+            s["x_right"] = inner.pop()
         s["barlines"] = [s["x_left"], *inner, s["x_right"]]
         s["spacing"] = spacing
         s["y0"] = max(0, s["staves"][0][0] - BAND_SPACINGS * spacing)
