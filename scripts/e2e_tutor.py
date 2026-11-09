@@ -26,17 +26,59 @@ def check(cond: bool, label: str, detail: object = "") -> None:
         FAILS.append(label)
 
 
-def make_player(port_name: str | None):
+def held(during) -> None:
+    """Keys stay down 0.25 s; with `during`, it runs while they are still down (a wrong note
+    shows red only while its key is held, #9630)."""
+    if during is None:
+        time.sleep(0.25)
+        return
+    time.sleep(0.5)
+    during()
+
+
+def make_cdp_player(port_name: str):
+    """#5077 on the Mac (no python there): the app's own renderer sends through WebMIDI to a
+    CoreMIDI loopback port (IAC Driver Bus 1), and its WebMidi input hears it come back."""
+    import os
+
+    from playwright.sync_api import sync_playwright
+
+    pw = sync_playwright().start()
+    page = pw.chromium.connect_over_cdp(os.environ.get("MIDITUTOR_CDP", "http://127.0.0.1:9345")).contexts[0].pages[0]
+    js = """async ([name, notes, on]) => {
+      const a = await navigator.requestMIDIAccess();
+      const out = [...a.outputs.values()].find((o) => o.name && (o.name.includes(name) || name.includes(o.name)));
+      if (!out) throw new Error('no MIDI output named ' + name);
+      for (const n of notes) out.send(on ? [0x90, n, 80] : [0x80, n, 0]);
+    }"""
+
+    def play(notes, during=None):
+        page.evaluate(js, [port_name, notes, True])
+        held(during)
+        page.evaluate(js, [port_name, notes, False])
+
+    return play
+
+
+def make_player(port_name: str | None, cdp_out: str | None = None):
+    if cdp_out:
+        return make_cdp_player(cdp_out)
     if not port_name:
-        return lambda notes: tc.inject(notes, hold_ms=250)
+        def inject(notes, during=None):
+            tc.inject(notes, hold_ms=1500 if during else 250)
+            held(during)
+            if during:
+                time.sleep(1.1)  # the app releases the keys itself, at 1.5 s
+
+        return inject
     import mido  # only needed for the real-port path
 
     out = mido.open_output(port_name)
 
-    def play(notes):
+    def play(notes, during=None):
         for n in notes:
             out.send(mido.Message("note_on", note=n, velocity=80))
-        time.sleep(0.25)
+        held(during)
         for n in notes:
             out.send(mido.Message("note_off", note=n, velocity=0))
 
@@ -56,9 +98,12 @@ def wait_task(pred, timeout=3.0):
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", help="virtual MIDI output port name (default: use /inject)")
+    ap.add_argument("--cdp-out", help="send from the app's renderer (WebMIDI, via MIDITUTOR_CDP) to this "
+                    "loopback output, e.g. 'IAC Driver Bus 1' on the Mac; the app must be listening on it")
     args = ap.parse_args()
-    play = make_player(args.port)
-    print("mode:", f"MIDI port {args.port!r}" if args.port else "INJECT (not a real MIDI device)")
+    play = make_player(args.port, args.cdp_out)
+    real = args.cdp_out or args.port
+    print("mode:", f"MIDI port {real!r}" if real else "INJECT (not a real MIDI device)")
 
     st = tc.state()
     check(st.get("ok") is True, "app answers /state", st)
@@ -67,6 +112,9 @@ def main() -> int:
         time.sleep(0.5)
         st = tc.state()
     check(st.get("rendererConnected") is True, "window is connected to the API", st)
+    if args.cdp_out:
+        name = (st.get("device") or {}).get("name") or ""
+        check(name and (name in args.cdp_out or args.cdp_out in name), "app listens on the loopback port", st.get("device"))
 
     # Chord task: right on the second try -> two attempts, latest correct.
     shown = tc.show_chord("E minor", ["E", "G", "B"])
@@ -100,11 +148,13 @@ def main() -> int:
     time.sleep(0.5)
     scr = tc.state()["screen"]
     check(scr.get("remaining") == ["G4"], "follower advanced to G4", scr)
-    play([68])  # G#4 where G4 is written: wrong accidental
+    held_scr: dict = {}
+    play([68], during=lambda: held_scr.update(tc.state()["screen"]))  # G#4 where G4 is written
+    check(held_scr.get("redAccidentals") == ["sharp"], "red sharp drawn for G#4 vs written G4 (key down)", held_scr)
+    check(held_scr.get("playedMarks") == 3, "two blue heads + the red one while the key is down", held_scr)
     time.sleep(0.5)
     scr = tc.state()["screen"]
-    check(scr.get("redAccidentals") == ["sharp"], "red sharp drawn for G#4 vs written G4", scr)
-    check(scr.get("playedMarks") == 3, "three blue played heads on screen", scr)
+    check(scr.get("playedMarks") == 2 and not scr.get("redAccidentals"), "red note gone once the key is up (#9630)", scr)
     play([61])  # wrong key
     time.sleep(0.5)
     scr = tc.state()["screen"]
