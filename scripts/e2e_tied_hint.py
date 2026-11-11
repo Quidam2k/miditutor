@@ -68,6 +68,40 @@ SCORE2 = f"""<?xml version="1.0" encoding="UTF-8"?>
 </part></score-partwise>"""
 
 
+# #11555: a right-hand C4 fingered 1 over a left-hand C3 fingered 5, both whole notes.
+def fingered(step: str, octave: int, finger: str, staff: int) -> str:
+    return (f"<note><pitch><step>{step}</step><octave>{octave}</octave></pitch><duration>16</duration>"
+            f"<voice>{staff}</voice><type>whole</type><staff>{staff}</staff>"
+            f"<notations><technical><fingering>{finger}</fingering></technical></notations></note>")
+
+
+SCORE3 = f"""<?xml version="1.0" encoding="UTF-8"?>
+<score-partwise version="3.1"><part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
+<part id="P1">
+<measure number="1"><attributes><divisions>4</divisions><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves>
+<clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>
+{fingered("C", 4, "1", 1)}<backup><duration>16</duration></backup>{fingered("C", 3, "5", 2)}</measure>
+</part></score-partwise>"""
+
+
+def hand_numerals(page) -> dict[int, tuple[str, str]]:
+    return dict(page.eval_on_selector_all(
+        "[data-label]", "els => els.map(e => [+e.dataset.label, [e.dataset.hand, e.getAttribute('fill')]])"))
+
+
+def hand_colour_check(page) -> None:
+    """#11555: on the strip a right-hand numeral is white, a left-hand one black."""
+    tc.load_piece("Hands (e2e)", SCORE3)
+    time.sleep(3)
+    tc.request("POST", "/loop", {"firstBar": 1, "lastBar": 1})
+    time.sleep(1)
+    got = hand_numerals(page)
+    check(got.get(60) == ["R", "#ffffff"] and got.get(48) == ["L", "#000000"],
+          "#11555 right-hand 1 is white, left-hand 5 is black", got)
+    page.screenshot(path="screengrab/e2e-hand-numerals.png")
+    tc.request("DELETE", "/loop")
+
+
 def mini(page):
     """(clefs right hand first, every key low to high), or None. One staff per hand (#11091)."""
     els = page.query_selector_all("[data-testid=mini-staff]")
@@ -273,6 +307,7 @@ def main() -> int:
         check(tied(page) == [], "a bar with no tie shows nothing", tied(page))
         tc.request("DELETE", "/loop")
         restrike_check(page)
+        hand_colour_check(page)
         score_wheel_check(page)
         bar_numbers_check(page)
 

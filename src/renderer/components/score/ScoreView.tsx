@@ -2900,6 +2900,8 @@ export function ScoreView() {
   // bar shows as "hold these" (it still needn't be struck), so he can pick it up mid-way.
   const tiedKeys = new Set<number>();
   const tiedLabels = new Map<number, string>();
+  // #11555: the keys whose finger numeral is the left hand's (staff 2), drawn black; right is white.
+  const leftKeys = new Set<number>();
   const loopRange = followerRef.current?.range;
   if (loopRange && !watching && cursorStep >= loopRange.first &&
       followerRef.current!.steps.slice(loopRange.first, cursorStep).every((st) => st.notes.length === 0)) {
@@ -2910,6 +2912,7 @@ export function ScoreView() {
         const start = (n.NoteTie?.StartNote ?? n) as OsmdNote;
         const finger = start.Fingering?.value?.trim() || n.Fingering?.value?.trim();
         if (finger) tiedLabels.set(toMidi(n), finger);
+        if (staffOf(start) === 1) leftKeys.add(toMidi(n));
       }
     }
   }
@@ -2971,9 +2974,13 @@ export function ScoreView() {
   const finished = feedback.kind === 'complete';
   const lastBar = followerRef.current?.steps.at(-1)?.measure;
   const keyLabels = fingersOf(stepNotesRef.current[cursorStep]);
+  for (const n of stepNotesRef.current[cursorStep] ?? []) if (staffOf(n) === 1) leftKeys.add(toMidi(n));
+  for (const n of blockPos?.fingers ?? []) if (n.hand === 'L') leftKeys.add(n.midi);
   if (wheelLive && hoverKey === wheelLive.target.midi) {
     if (wheelLive.digit) keyLabels.set(hoverKey, wheelLive.digit);
     else keyLabels.delete(hoverKey);
+    if (wheelLive.target.staff === 2) leftKeys.add(hoverKey);
+    else leftKeys.delete(hoverKey);
   }
   const btn =
     'rounded-md px-3 py-1 text-sm font-medium disabled:opacity-40 bg-gray-800 text-gray-200 hover:bg-gray-700';
@@ -3787,6 +3794,7 @@ export function ScoreView() {
             held={held}
             tied={hints && !blockPos ? tiedKeys : undefined}
             tiedLabels={hints && !blockPos ? tiedLabels : undefined}
+            leftHand={leftKeys}
             fadeMs={(blockPos ? blockHints : hints) ? undefined : 500}
             labels={blockPos ? blockLabels : hints ? keyLabels : undefined}
             yellow={wheelTarget && hoverKey === wheelTarget.midi ? hoverKey : null}

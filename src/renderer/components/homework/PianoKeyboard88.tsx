@@ -13,6 +13,12 @@ interface Props {
   labels?: ReadonlyMap<number, string>;
   /** #5562: the finger written for a held-over (tied) key, drawn faint on it. */
   tiedLabels?: ReadonlyMap<number, string>;
+  /**
+   * #11555: which hand each label belongs to. Given, a left-hand numeral is drawn black and a
+   * right-hand one white (a lit key is green, and both read on green), so a right-hand 1 never
+   * reads as a left-hand 1. Left out (the one-hand homework strip), numerals keep the old look.
+   */
+  leftHand?: ReadonlySet<number>;
   /** The key being edited (#10238): outranks every other colour. */
   yellow?: number | null;
   onKeyHover?: (midi: number | null) => void;
@@ -57,7 +63,7 @@ export function keyCenterPct(midi: number, low = 21, high = 108): number {
 }
 
 /** Display-only 88-key piano that scales to its container; keys light red / green / held. */
-export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, tiedLabels, yellow, onKeyHover, onKeyClick, low = 21, high = 108, heightRatio = 7 }: Props) {
+export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, tiedLabels, leftHand, yellow, onKeyHover, onKeyClick, low = 21, high = 108, heightRatio = 7 }: Props) {
   const { keys, width } = useMemo(() => layout(low, high), [low, high]);
   const height = Math.round(width / heightRatio);
   const blackH = height * 0.62;
@@ -69,6 +75,16 @@ export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, tiedLa
     if (held?.has(k.midi)) return '#818cf8';
     if (tied?.has(k.midi)) return k.white ? '#bbf7d0' : '#166534';
     return k.white ? '#f8fafc' : '#111827';
+  };
+  // Numeral paint for a key's label: by hand when hands are known (#11555), else the old rule.
+  // A thin outline in the opposite shade keeps white-on-white and black-on-black keys readable.
+  const numeral = (k: KeyGeom, faint: boolean) => {
+    if (leftHand) {
+      const left = leftHand.has(k.midi);
+      return { fill: left ? '#000000' : '#ffffff', stroke: left ? '#ffffff' : '#000000', 'data-hand': left ? 'L' : 'R' };
+    }
+    const fill = faint ? (k.white ? '#15803d' : '#bbf7d0') : k.white || yellow === k.midi ? '#111827' : '#ffffff';
+    return { fill, stroke: undefined, 'data-hand': undefined };
   };
   const middleC = keys.find((k) => k.midi === 60);
   // Only a strip that edits notes reacts to the pointer.
@@ -129,7 +145,9 @@ export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, tiedLa
           textAnchor="middle"
           fontSize={k.white ? WHITE_W * 0.8 : BLACK_W * 0.9}
           fontWeight="bold"
-          fill={k.white || yellow === k.midi ? '#111827' : '#ffffff'}
+          {...numeral(k, false)}
+          strokeWidth={0.35}
+          paintOrder="stroke"
           pointerEvents="none"
           data-label={k.midi}
         >
@@ -145,7 +163,9 @@ export function PianoKeyboard88({ green, red, held, tied, fadeMs, labels, tiedLa
           textAnchor="middle"
           fontSize={k.white ? WHITE_W * 0.8 : BLACK_W * 0.9}
           fontWeight="bold"
-          fill={k.white ? '#15803d' : '#bbf7d0'}
+          {...numeral(k, true)}
+          strokeWidth={0.35}
+          paintOrder="stroke"
           opacity={0.6}
           pointerEvents="none"
           data-tied-label={k.midi}
