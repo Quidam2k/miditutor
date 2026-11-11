@@ -75,7 +75,9 @@ def main() -> int:
         time.sleep(0.3)
         check(celebrations(seq) == [], "a lap with a wrong note: no celebration", celebrations(seq))
         got = spoiled(seq)
-        check(len(got) == 1 and got[0].get("sound") is True, "#5566: one miss tick per spoiled lap", got)
+        check(len(got) == 1 and got[0].get("sound") is True, "#5566: one miss sound per spoiled lap", got)
+        # #11561: reached the speakers, not just asked for: the audio context was running with no click first.
+        check(got and got[0].get("audio") == "running", "#11561: the miss sound played with the audio context running", got)
 
         tc.request("POST", "/loop", {"firstBar": 2, "lastBar": 3, "backwards": True})
         time.sleep(1)

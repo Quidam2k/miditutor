@@ -89,23 +89,33 @@ export async function playFanfare(size: 'small' | 'medium' | 'big'): Promise<voi
   }
 }
 
-let missTick: Tone.NoiseSynth | null = null;
-
 /**
- * #5566: the moment a lap stops being clean, a very faint, very short tick of soft
- * noise: not a note, so it never sounds like part of the music.
+ * #11561: the miss sound. #5566's tick (70 ms of pink noise at -30 dB, 22 dB under the notes
+ * at -8 dB) was too quiet to hear at the piano. Now a short low thud, a dropping drum hit
+ * rather than a held pitch, so it never sounds like part of the music; about as loud as a
+ * played note at mp (not startling). The level is a constant so a test can pin it.
  */
-export async function playMissSound(): Promise<void> {
+export const MISS_SOUND = { db: -10, note: 'A2', seconds: 0.18 } as const;
+
+let missThud: Tone.MembraneSynth | null = null;
+
+/** Plays the miss thud; returns the audio context's state ('running' means it was heard). */
+export async function playMissSound(): Promise<string> {
   try {
     await initAudio();
-    missTick ??= new Tone.NoiseSynth({
-      noise: { type: 'pink' },
-      envelope: { attack: 0.002, decay: 0.07, sustain: 0, release: 0.02 },
-      volume: -30,
+    const ctx = Tone.getContext();
+    if (ctx.state !== 'running') await ctx.resume();
+    missThud ??= new Tone.MembraneSynth({
+      pitchDecay: 0.03,
+      octaves: 2,
+      envelope: { attack: 0.002, decay: MISS_SOUND.seconds, sustain: 0, release: 0.05 },
+      volume: MISS_SOUND.db,
     }).toDestination();
-    missTick.triggerAttackRelease(0.07, Tone.now());
+    missThud.triggerAttackRelease(MISS_SOUND.note, MISS_SOUND.seconds, Tone.now());
+    return ctx.state;
   } catch (err) {
     console.warn('[miss] could not play:', err);
+    return 'error';
   }
 }
 

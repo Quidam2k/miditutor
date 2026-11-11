@@ -659,8 +659,8 @@ export function ScoreView() {
   const spoilLap = useCallback(() => {
     if (lapWrongRef.current++ > 0) return;
     const sound = useSettingsStore.getState().missSound;
-    if (sound) void playMissSound();
-    reportEvent('lap-spoiled', { sound });
+    // #11561: say what the audio context was doing, so "didn't hear it" can be told apart from "never played".
+    void Promise.resolve(sound ? playMissSound() : undefined).then((audio) => reportEvent('lap-spoiled', { sound, audio }));
   }, []);
   const missSound = useSettingsStore((s) => s.missSound);
   const backwardTargets = useSettingsStore((s) => s.backwardTargets);
@@ -3315,7 +3315,7 @@ export function ScoreView() {
         </label>
         <label
           className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-          title="A very faint tick the moment a lap stops being clean (a wrong note or a grazed key), so you know it won't count"
+          title="A short low thud the moment a lap stops being clean (a wrong note or a grazed key), so you know it won't count"
         >
           <input
             type="checkbox"
@@ -3325,6 +3325,15 @@ export function ScoreView() {
           />
           Miss sound
         </label>
+        <button
+          type="button"
+          data-testid="miss-sound-test"
+          className="ml-1 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-300 hover:bg-gray-700"
+          title="Play the miss sound once, to hear how loud it is"
+          onClick={() => void playMissSound()}
+        >
+          Test
+        </button>
         <label
           className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
           title="On: the scroll wheel over a note on the score changes its finger. Off: the wheel there only scrolls"
