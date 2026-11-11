@@ -6,10 +6,10 @@ import Vex from 'vexflow';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 interface VexFlowStatics {
   Renderer: any; Stave: any; StaveNote: any; Voice: any; Formatter: any; Accidental: any;
-  Dot: any; Annotation: any; StaveTie: any;
+  Dot: any; StaveTie: any;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
-const { Renderer, Stave, StaveNote, Voice, Formatter, Accidental, Dot, Annotation, StaveTie } =
+const { Renderer, Stave, StaveNote, Voice, Formatter, Accidental, Dot, StaveTie } =
   Vex as unknown as VexFlowStatics;
 
 /** A written duration: VexFlow's code ('q', '8', ...) and its dots. */
@@ -20,7 +20,6 @@ export interface MiniDuration {
 
 /** One written note on this beat, as the score has it (#11092). */
 export interface MiniStaffNote extends Pitch, MiniDuration {
-  finger?: string;
   /** Tied on into the next note. */
   tie?: boolean;
 }
@@ -109,7 +108,6 @@ export function MiniStaff({ part, fifths, pct, align }: {
       accidental: printedAccidental(n, keySig),
       duration: n.duration,
       dots: n.dots,
-      finger: n.finger ?? null,
       tie: !!n.tie,
     }));
   const rest = notes.length === 0 ? part.rest ?? null : null;
@@ -145,7 +143,6 @@ export function MiniStaff({ part, fifths, pct, align }: {
         const id = `${n.duration}.${n.dots}`;
         groups.set(id, [...(groups.get(id) ?? []), n]);
       }
-      const above = data.clef !== 'bass';
       const chords = [...groups.values()].map((group, gi) => {
         const first = group[0]!;
         const note = new StaveNote({
@@ -159,16 +156,6 @@ export function MiniStaff({ part, fifths, pct, align }: {
         group.forEach((n, i) => {
           if (n.accidental !== null) note.addModifier(new Accidental(n.accidental), i);
         });
-        // Finger numbers in the score's purple, stacked outside the staff: right hand above
-        // (highest note's on top), left hand below (lowest note's at the bottom).
-        const fingered = group.map((n, i) => ({ finger: n.finger, i })).filter(f => f.finger);
-        for (const f of above ? fingered : [...fingered].reverse()) {
-          const label = new Annotation(f.finger)
-            .setVerticalJustification(above ? Annotation.VerticalJustify.TOP : Annotation.VerticalJustify.BOTTOM)
-            .setFont('Arial', 13, 'bold');
-          label.setStyle({ fillStyle: '#7c3aed', strokeStyle: '#7c3aed' });
-          note.addModifier(label, f.i);
-        }
         return { note, ties: group.flatMap((n, i) => (n.tie ? [i] : [])) };
       });
       if (data.rest) {
@@ -191,8 +178,7 @@ export function MiniStaff({ part, fifths, pct, align }: {
           new StaveTie({ firstNote: c.note, lastNote: null, firstIndexes: c.ties, lastIndexes: c.ties })
             .setContext(context).draw();
         }
-        // Heads and stem only: the note's bounding box counts its finger marks at their
-        // unshifted origin, which drags the crop up to the top of the page.
+        // Heads and stem only: the note's bounding box is not trustworthy for the crop.
         const ys: number[] = [...(c.note.getYs() as number[])];
         if (c.note.hasStem?.()) {
           const stem = c.note.getStemExtents() as { topY: number; baseY: number };
@@ -203,14 +189,6 @@ export function MiniStaff({ part, fifths, pct, align }: {
       }
 
       const svg = container.querySelector('svg');
-      // Finger numbers are plain digits in an ordinary font, so their own boxes are honest
-      // (the music glyphs are private-use characters, never digits).
-      for (const t of svg?.querySelectorAll('text') ?? []) {
-        if (!/^\d+$/.test(t.textContent ?? '')) continue;
-        const b = t.getBBox();
-        top = Math.min(top, b.y - 2);
-        bottom = Math.max(bottom, b.y + b.height + 2);
-      }
       const box = svg?.getBBox();
       if (svg && box && box.width > 0 && bottom > top) {
         const pad = 4;
@@ -241,7 +219,6 @@ export function MiniStaff({ part, fifths, pct, align }: {
       data-clefs={part.clef}
       data-keys={notes.map(n => n.key).join(' ')}
       data-durations={notes.map(n => n.duration + '.'.repeat(n.dots)).join(' ') || (rest ? `${rest.duration}r` : '')}
-      data-fingers={notes.map(n => n.finger ?? '-').join(' ')}
       className="pointer-events-none absolute bottom-0.5 z-30"
       style={{ left: `${pct}%`, transform: `translateX(${shift})` }}
     >

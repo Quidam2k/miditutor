@@ -2950,7 +2950,6 @@ export function ScoreView() {
           const accidental = w.alter > 0 ? 'sharp' as const : w.alter < 0 ? 'flat' as const : undefined;
           return [{
             note: w.letter, accidental, octave: w.octave, midiNumber: toMidi(n), ...lengthOf(n),
-            finger: n.Fingering?.value?.trim() || undefined,
             tie: !!n.NoteTie && n.NoteTie.StartNote === n,
           }];
         }),

@@ -177,6 +177,12 @@ def score_wheel_check(page) -> None:
     page.mouse.move(5, 5)
     tc.request("POST", "/loop", {"firstBar": 1, "lastBar": 1})  # the cursor on the C-E-G chord
     time.sleep(0.8)
+    # #11554: the cursor is on the fingered C-E-G; the keys carry the fingers, the mini staff only notes.
+    digits = page.eval_on_selector_all("[data-testid=mini-staff] text", "els => els.map(e => e.textContent).filter(t => /^\\d+$/.test(t))")
+    check(page.query_selector("[data-testid=mini-staff]") is not None and not digits and page.query_selector("[data-testid=mini-staff][data-fingers]") is None,
+          "#11554 mini staff shows notes only, no finger numbers", digits)
+    # (the wheel test above edited the C's finger; the E and G still carry theirs)
+    check(page.query_selector("[data-label='64']") is not None, "#11554 the fingers are still on the keys")
     box = page.query_selector("[data-midi='60']").bounding_box()
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] - 6)
     time.sleep(0.3)
