@@ -110,7 +110,7 @@ def run(pieces: Path) -> None:
     check(pdf.exists() and pdf.stat().st_size > 10000, "PDF saved next to the pieces", str(pdf))
     sides = len(re.findall(rb"/Type\s*/Page(?![s\w])", pdf.read_bytes())) if pdf.exists() else 0
     check(sides == 6, "PDF has 6 sides", f"sides={sides}")
-    order = re.findall(r'class="side" data-page="(\d+)"', html)
+    order = re.findall(r'class="side(?: back)?" data-page="(\d+)"', html)
     check(order == ["1", "1", "2", "2", "3", "3"], "sides run 1,1,2,2,3,3", ",".join(order))
     low = html.lower()
     left = [c for c in HINT_COLOURS if c in low]
@@ -120,7 +120,7 @@ def run(pieces: Path) -> None:
     missing = [n for n in range(2, 70) if str(n) not in texts]
     check(len(missing) <= 3, "every bar carries its number (2..69)", f"missing={missing[:12]}")
     # Paper page breaks: page 2 must open on bar 23 and page 3 on bar 51.
-    pages = re.split(r'<div class="side" data-page="\d+">', html)[1:]
+    pages = re.split(r'<div class="side(?: back)?" data-page="\d+">', html)[1:]
     firsts = []
     for k in (0, 2, 4):
         nums = [int(n) for n in re.findall(r">\s*(\d{1,3})\s*</text>", pages[k]) if 5 < int(n) < 100] if k < len(pages) else []

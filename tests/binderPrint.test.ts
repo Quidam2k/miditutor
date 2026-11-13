@@ -144,3 +144,25 @@ describe('binderWarning (#6083)', () => {
     expect(binderWarning(false, 3, 9)).toContain('(3 of 9 lines confirmed)');
   });
 });
+
+describe('binder sheet fill (#6090)', () => {
+  it('leaves a gap alone when the drawing is already as tall as the sheet area', async () => {
+    const { gapForFill, AREA_ASPECT } = await import('../src/shared/binderPrint');
+    expect(gapForFill(740, 740 / AREA_ASPECT + 5, 4, 7)).toBe(7);
+    expect(gapForFill(740, 500, 1, 7)).toBe(7);
+  });
+  it('widens the gap so width/height reaches the sheet area shape, capped', async () => {
+    const { gapForFill, AREA_ASPECT, MAX_SYSTEM_GAP } = await import('../src/shared/binderPrint');
+    const g = gapForFill(740, 400, 4, 7);
+    expect(g).toBeGreaterThan(7);
+    // 3 gaps of 10px per staff-space absorb exactly the missing height
+    expect(400 + (g - 7) * 10 * 3).toBeCloseTo(740 / AREA_ASPECT, 5);
+    expect(gapForFill(740, 10, 2, 7)).toBe(MAX_SYSTEM_GAP);
+  });
+  it('keeps the hole side at least 0.55 in and inside the sheet', async () => {
+    const { HOLE_IN, EDGE_IN, FOLIO_IN } = await import('../src/shared/binderPrint');
+    expect(HOLE_IN).toBeGreaterThanOrEqual(0.55);
+    expect(HOLE_IN + EDGE_IN).toBeLessThan(2);
+    expect(FOLIO_IN).toBeGreaterThan(0);
+  });
+});

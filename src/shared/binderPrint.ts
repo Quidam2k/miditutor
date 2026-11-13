@@ -96,3 +96,20 @@ export function binderWarning(verified: boolean, confirmed: number, total: numbe
   const lines = total > 0 && confirmed > 0 ? ` (${confirmed} of ${total} lines confirmed)` : '';
   return `Not verified yet${lines}. You can still print it, but check it against your paper first.`;
 }
+
+// #6090 sheet geometry (inches). The hole side alternates with long-edge duplex: left on a
+// front, right on its back. Top/bottom/outer stay tight so the music is as big as it can be.
+export const HOLE_IN = 0.6;
+export const EDGE_IN = 0.3;
+export const FOLIO_IN = 0.45;
+export const AREA_ASPECT = (8.5 - HOLE_IN - EDGE_IN) / (11 - EDGE_IN - FOLIO_IN);
+// OSMD gap between systems (staff-spaces) never goes past this, so a short page isn't stretched silly.
+export const MAX_SYSTEM_GAP = 40;
+
+/** Extra system gap (staff-spaces, 10px each) that makes a page's drawing as tall as the sheet area. */
+export function gapForFill(width: number, height: number, systems: number, gap: number): number {
+  if (systems < 2 || !(width > 0) || !(height > 0)) return gap;
+  const missing = width / AREA_ASPECT - height;
+  if (missing <= 0) return gap;
+  return Math.min(MAX_SYSTEM_GAP, gap + missing / 10 / (systems - 1));
+}
