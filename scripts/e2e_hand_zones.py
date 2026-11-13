@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from e2e_backwards import tid  # noqa: E402  #6054 toolbar menus
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -36,9 +37,10 @@ def main():
         page = next(pg for c in browser.contexts for pg in c.pages if "devtools" not in pg.url)
         page.get_by_role("button", name="Score", exact=True).first.click()
         page.locator("select").first.select_option("minuet")
+        tid(page, "hand-zones").wait_for(timeout=15000)
         page.wait_for_function("() => !!document.querySelector('[data-testid=hand-zones]:not([disabled])')", timeout=15000)
         time.sleep(1.0)
-        page.get_by_test_id("hand-zones").click()
+        tid(page, "hand-zones").click()
         page.get_by_test_id("zones-msg").wait_for(timeout=5000)
         time.sleep(0.5)
         z = zones()
@@ -56,7 +58,7 @@ def main():
         print("zones:", z.get("right"), "R,", z.get("left"), "L, shifts", z.get("shifts"))
         (ROOT / "screengrab").mkdir(exist_ok=True)
         page.screenshot(path=str(ROOT / "screengrab" / "e2e-hand-zones.png"))
-        page.get_by_test_id("hand-zones").click()
+        tid(page, "hand-zones").click()
         time.sleep(0.3)
         check("off again: no bands, no report", page.get_by_test_id("zone-band").count() == 0 and not zones())
 

@@ -14,6 +14,7 @@ from playwright.sync_api import sync_playwright
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import e2e_bare as eb  # noqa: E402
+from e2e_backwards import tid  # noqa: E402
 from e2e_bare import midi_of, play_step, screen, send, tc, wait_for  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,9 +39,9 @@ def main():
         page = next(pg for ctx in browser.contexts for pg in ctx.pages if "devtools" not in pg.url)
         page.set_default_timeout(10000)
         page.get_by_role("button", name="Score", exact=True).first.click()
-        page.get_by_test_id("fresh-key").select_option("C")
+        tid(page, "fresh-key").select_option("C")
         before = screen().get("piece")
-        page.get_by_test_id("fresh-tune").click()
+        tid(page, "fresh-tune").click()
         wait_for(
             lambda: screen().get("piece") != before and (screen().get("piece") or "").startswith("Fresh tune") and screen().get("remaining"),
             10,
@@ -66,7 +67,7 @@ def main():
         check(page.evaluate(HIDDEN) == 0, "off: nothing blanked")
         check(screen()["remaining"][0] in next_notes.inner_text(), "off: hints name the next notes")
 
-        page.get_by_test_id("read-ahead").check()
+        tid(page, "read-ahead").check()
         time.sleep(0.3)
         check(screen().get("readAhead") == {"blanked": 0}, "on: the run's first step stays up", screen().get("readAhead"))
 
@@ -91,7 +92,7 @@ def main():
         wait_for(lambda: blanked() > 0, 3, "next step not blanked")
         check(blanked() >= 1, "the next step blanks again")
 
-        page.get_by_test_id("read-ahead").uncheck()
+        tid(page, "read-ahead").uncheck()
         time.sleep(0.3)
         check(screen().get("readAhead") is None and page.evaluate(HIDDEN) == 0, "off again: everything shows")
         saved = page.evaluate("() => JSON.parse(localStorage.getItem('miditutor-settings')).state.readAhead")

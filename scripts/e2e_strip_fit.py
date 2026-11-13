@@ -14,7 +14,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-from e2e_backwards import SCORE, check, tc
+from e2e_backwards import SCORE, check, tc, tid
 
 OUT = Path(sys.argv[1] if len(sys.argv) > 1 else "screengrab")
 
@@ -98,7 +98,7 @@ def main() -> int:
                 time.sleep(0.5)
             page.get_by_role("button", name="Score", exact=True).click()
             page.wait_for_selector("[data-testid=bar-now]", timeout=30000)
-            big = page.locator("[data-testid=strip-fit-ink]")
+            big = tid(page, "strip-fit-ink")
             if big.is_checked() == bool(os.environ.get("FIT_OLD")):
                 big.click()
             for w, h in ((1920, 1080), (1186, 609)):
@@ -120,6 +120,9 @@ def follow_check() -> int:
     with sync_playwright() as p:
         page = p.chromium.connect_over_cdp(os.environ["MIDITUTOR_CDP"]).contexts[0].pages[0]
         page.set_viewport_size({"width": 1920, "height": 1080})
+        if not page.get_by_label("Keyboard", exact=True).is_checked():  # the sweep above ends with it off
+            page.get_by_label("Keyboard", exact=True).click()
+            page.wait_for_timeout(1500)
         frac = "() => { const c = document.querySelector('[id^=cursorImg]'); const p = document.querySelector('[data-testid=score-panel]').getBoundingClientRect(); const r = c.getBoundingClientRect(); return (r.left + r.width / 2 - p.left) / p.width; }"
         for _ in range(8):
             page.get_by_role("button", name="Next", exact=False).first.click()

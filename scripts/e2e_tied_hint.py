@@ -18,7 +18,7 @@ import time
 
 from playwright.sync_api import sync_playwright
 
-from e2e_backwards import FAILS, check, midi_of, screen, strike, tc
+from e2e_backwards import FAILS, check, midi_of, screen, strike, tc, tid
 
 
 def note(step: str, octave: int, kind: str, tie: str | None = None, chord: bool = False) -> str:
@@ -126,10 +126,10 @@ def restrike_check(page) -> None:
     time.sleep(1)
     check(mini(page) == ("treble", "g/4"), "#5624 mini staff: just the G4, treble", mini(page))
     clear_of_score(page, "treble")
-    page.uncheck("[data-testid=mini-staff-toggle]")
+    tid(page, "mini-staff-toggle").uncheck()
     time.sleep(0.3)
     check(mini(page) is None, "#5624 mini staff switches off", mini(page))
-    page.check("[data-testid=mini-staff-toggle]")
+    tid(page, "mini-staff-toggle").check()
     time.sleep(0.3)
     since = tc.state().get("eventSeq", 0)
     strike([67, 47, 51, 55])  # G4, then the tied chord 20-60 ms later
@@ -202,11 +202,11 @@ def score_wheel_check(page) -> None:
         time.sleep(0.15)
         return page.query_selector("[data-testid=finger-live]") is not None
 
-    page.check("[data-testid=score-wheel-fingers]")
+    tid(page, "score-wheel-fingers").check()
     check(wheel_on_note(), "#5630 switch on: the wheel over a score note edits its finger")
     page.mouse.move(5, 5)
     time.sleep(0.8)  # the edit commits; this is the test's own piece
-    page.uncheck("[data-testid=score-wheel-fingers]")
+    tid(page, "score-wheel-fingers").uncheck()
     check(not wheel_on_note(), "#5630 switch off: the wheel over a score note edits no finger")
     page.mouse.move(5, 5)
     tc.request("POST", "/loop", {"firstBar": 1, "lastBar": 1})  # the cursor on the C-E-G chord
@@ -225,20 +225,20 @@ def score_wheel_check(page) -> None:
     check(page.query_selector("[data-testid=finger-live]") is not None, "#5630 switch off: the wheel over the key still edits the finger")
     page.mouse.move(5, 5)
     time.sleep(0.8)
-    check(page.is_checked("[data-testid=key-wheel-fingers]"), "#5630 'Wheel fingers on keyboard' is on by default")
-    page.uncheck("[data-testid=key-wheel-fingers]")
+    check(tid(page, "key-wheel-fingers").is_checked(), "#5630 'Wheel fingers on keyboard' is on by default")
+    tid(page, "key-wheel-fingers").uncheck()
     page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] - 6)
     time.sleep(0.3)
     page.mouse.wheel(0, 120)
     time.sleep(0.1)
     check(page.query_selector("[data-testid=finger-live]") is None, "#5630 keyboard switch off: the wheel over the key edits no finger")
     page.mouse.move(5, 5)
-    page.check("[data-testid=score-wheel-fingers]")
+    tid(page, "score-wheel-fingers").check()
     check(wheel_on_note(), "#5630 keyboard switch off, score switch on: the score note still edits")
     page.mouse.move(5, 5)
     time.sleep(0.8)
-    page.uncheck("[data-testid=score-wheel-fingers]")
-    page.check("[data-testid=key-wheel-fingers]")
+    tid(page, "score-wheel-fingers").uncheck()
+    tid(page, "key-wheel-fingers").check()
     time.sleep(0.8)
     tc.request("DELETE", "/loop")
 
@@ -249,10 +249,10 @@ def bar_numbers(page) -> list[str]:
 
 def bar_numbers_check(page) -> None:
     """#5657: Pages numbers every bar by default; the switch turns it back to line starts."""
-    check(page.locator("[data-testid=every-bar-numbers]").count() == 0, "strip: no 'Number every bar' switch (it always numbers every bar)")
+    check(tid(page, "every-bar-numbers").count() == 0, "strip: no 'Number every bar' switch (it always numbers every bar)")
     page.click("[data-testid=layout-pages]")
     time.sleep(2)
-    box = page.locator("[data-testid=every-bar-numbers]")
+    box = tid(page, "every-bar-numbers")
     check(box.is_checked(), "#5657 'Number every bar' is on by default")
     on = bar_numbers(page)
     check(on == ["2", "3"], "Pages numbers every bar after the first", on)
@@ -260,7 +260,7 @@ def bar_numbers_check(page) -> None:
     time.sleep(2)
     off = bar_numbers(page)
     check(len(off) < len(on), "off: fewer numbers", off)
-    page.locator("[data-testid=every-bar-numbers]").check()
+    tid(page, "every-bar-numbers").check()
     page.click("[data-testid=layout-strip]")
     time.sleep(2)
 

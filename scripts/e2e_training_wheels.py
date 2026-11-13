@@ -15,7 +15,7 @@ import time
 
 from playwright.sync_api import sync_playwright
 
-from e2e_backwards import FAILS, SCORE, check, midi_of, screen, strike, tc
+from e2e_backwards import FAILS, SCORE, check, midi_of, screen, strike, tc, tid
 
 
 def greens(page) -> int:
@@ -42,7 +42,7 @@ def main() -> int:
     time.sleep(3)
     with sync_playwright() as p:
         page = p.chromium.connect_over_cdp(cdp).contexts[0].pages[0]
-        page.check("[data-testid=training-wheels]")
+        tid(page, "training-wheels").check()
         tc.request("POST", "/loop", {"firstBar": 2, "lastBar": 3})
         time.sleep(1)
         check(greens(page) > 0, "lap start: keys shown", greens(page))
@@ -60,7 +60,7 @@ def main() -> int:
         strike([max(remaining()) + 1])
         time.sleep(0.3)
         check(greens(page) > 0, "a wrong note brings them back", greens(page))
-        page.uncheck("[data-testid=training-wheels]")
+        tid(page, "training-wheels").uncheck()
         time.sleep(0.3)
         check(greens(page) > 0, "off: keys shown", greens(page))
         tc.request("DELETE", "/loop")

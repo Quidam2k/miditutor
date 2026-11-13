@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from e2e_backwards import tid  # noqa: E402  #6054 toolbar menus
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -89,9 +90,9 @@ def main():
         )
         page.set_default_timeout(10000)
         page.get_by_role("button", name="Score", exact=True).first.click()
-        page.get_by_test_id("fresh-key").select_option("G")
+        tid(page, "fresh-key").select_option("G")
         before = screen().get("piece")
-        page.get_by_test_id("fresh-tune").click()
+        tid(page, "fresh-tune").click()
 
         # A new label: a fresh tune from an earlier run may still be on screen.
         def fresh_ready():
@@ -133,7 +134,7 @@ def main():
         settings.click()
 
         label = screen()["piece"]
-        page.get_by_test_id("bare-start").click()
+        tid(page, "bare-start").click()
         stop = page.get_by_test_id("bare-stop")
         stop.wait_for(state="visible")
         check(stop.is_visible(), "no-hints run is active")
@@ -179,7 +180,7 @@ def main():
             and "1 miss" in message,
             "stopped result shows cleared bars and one miss",
         )
-        check(page.get_by_test_id("bare-start").is_visible(), "start button returns")
+        check(tid(page, "bare-start").is_visible(), "start button returns")
 
 
 if __name__ == "__main__":

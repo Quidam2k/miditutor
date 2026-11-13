@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from e2e_backwards import tid  # noqa: E402  #6054 toolbar menus
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -78,7 +79,7 @@ def strike(note: int) -> None:
 
 
 def sight_read(page) -> dict:
-    page.get_by_test_id("sight-read").click()
+    tid(page, "sight-read").click()
     page.wait_for_function(
         "() => /bars \\d+-\\d+/.test(document.querySelector('[data-testid=sight-msg]')?.innerText ?? '')", timeout=20000
     )
@@ -94,7 +95,7 @@ def run(pieces: Path) -> None:
         page.on("pageerror", lambda e: print("pageerror:", e))
         page.wait_for_timeout(1500)
         page.get_by_role("button", name="Score", exact=True).click()
-        page.wait_for_selector("[data-testid=sight-read]", timeout=30000)
+        tid(page, "sight-read").wait_for(timeout=30000)
         select = page.locator("select").first
         page.wait_for_function(f"() => [...document.querySelector('select').options].some((o) => o.text.includes('{DRILL}'))", timeout=15000)
         select.select_option(label=next(o for o in select.locator("option").all_inner_texts() if DRILL in o))
@@ -152,7 +153,7 @@ def run(pieces: Path) -> None:
         select.select_option(label=next(o for o in select.locator("option").all_inner_texts() if "Busy A" in o))
         page.wait_for_timeout(1500)
         check(screen().get("hand") == "right", "an ordinary piece switch keeps the hand as before", screen().get("hand"))
-        page.get_by_test_id("simple-mark").click()
+        tid(page, "simple-mark").click()
         select.select_option(label=next(o for o in select.locator("option").all_inner_texts() if DRILL in o))
         page.wait_for_timeout(1500)
         marked = sight_read(page)

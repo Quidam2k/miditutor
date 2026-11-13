@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from e2e_backwards import tid  # noqa: E402  #6054 toolbar menus
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -556,7 +557,7 @@ def box_checks(page) -> None:
 
     # Reverse: only the off-note move in Strip.
     type_bar(page, "bar-now", 20)
-    page.get_by_test_id("reverse-wheel").check()
+    tid(page, "reverse-wheel").check()
     off_note(page)
     was = where()
     page.mouse.wheel(0, 100)
@@ -572,9 +573,9 @@ def box_checks(page) -> None:
     page.reload()
     page.wait_for_timeout(1500)
     page.get_by_role("button", name="Score", exact=True).click()
-    page.wait_for_selector("[data-testid=reverse-wheel]", timeout=30000)
-    check(page.get_by_test_id("reverse-wheel").is_checked(), "the setting survives a reload")
-    page.get_by_test_id("reverse-wheel").uncheck()
+    tid(page, "reverse-wheel").wait_for(timeout=30000)
+    check(tid(page, "reverse-wheel").is_checked(), "the setting survives a reload")
+    tid(page, "reverse-wheel").uncheck()
     page.wait_for_function("() => document.querySelectorAll('.vf-notehead').length > 50", timeout=60000)
     page.wait_for_timeout(2500)
 
@@ -591,7 +592,7 @@ def main() -> int:
         page.wait_for_timeout(1500)
         page.get_by_role("button", name="Score", exact=True).click()
         page.wait_for_selector("[data-testid=loop-bars]", timeout=30000)
-        page.check("[data-testid=score-wheel-fingers]")  # #5630: off by default
+        tid(page, "score-wheel-fingers").check()  # #5630: off by default
         page.wait_for_function("() => [...document.querySelector('select').options].some((o) => o.value.includes('sorcerers'))", timeout=30000)
         page.locator("select").first.select_option("file:sorcerers-apprentice.musicxml")
         page.wait_for_function("() => document.querySelectorAll('.vf-notehead').length > 50", timeout=60000)

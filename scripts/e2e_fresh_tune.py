@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+from e2e_backwards import tid  # noqa: E402  #6054 toolbar menus
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -96,10 +97,10 @@ def main():
 
         # The app opens on Practice; Fresh tune lives on the Score tab.
         page.get_by_role("button", name="Score", exact=True).first.click()
-        page.get_by_test_id("fresh-key").wait_for(timeout=15000)
-        page.get_by_test_id("fresh-key").select_option("G")
+        tid(page, "fresh-key").wait_for(timeout=15000)
+        tid(page, "fresh-key").select_option("G")
         before = screen().get("piece")
-        page.get_by_test_id("fresh-tune").click()
+        tid(page, "fresh-tune").click()
 
         # A new label: a fresh tune from an earlier run may still be on screen.
         deadline = time.monotonic() + 10
@@ -192,8 +193,8 @@ def main():
         )
 
         previous_label = screen().get("piece")
-        page.get_by_test_id("fresh-key").select_option("a")
-        page.get_by_test_id("fresh-tune").click()
+        tid(page, "fresh-key").select_option("a")
+        tid(page, "fresh-tune").click()
 
         deadline = time.monotonic() + 10
         while True:
@@ -215,8 +216,8 @@ def main():
 
         previous_label = screen().get("piece")
         previous_event_count = len(fresh_events())
-        page.get_by_test_id("fresh-key").select_option("G")
-        page.get_by_test_id("fresh-tune").click()
+        tid(page, "fresh-key").select_option("G")
+        tid(page, "fresh-tune").click()
 
         deadline = time.monotonic() + 10
         while True:

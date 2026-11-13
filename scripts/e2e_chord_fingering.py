@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from e2e_backwards import tid  # noqa: E402  #6054 toolbar menus
 
 CDP = os.environ.get("MIDITUTOR_CDP", "http://127.0.0.1:9333")
 FAILS: list[str] = []
@@ -111,7 +112,7 @@ def main() -> int:
         page.reload()  # this session's edits live in memory too: read the copy fresh
         page.get_by_role("button", name="Score", exact=True).click()
         page.wait_for_selector("[data-testid=loop-bars]", timeout=30000)
-        page.check("[data-testid=score-wheel-fingers]")  # #5630: off by default
+        tid(page, "score-wheel-fingers").check()  # #5630: off by default
         page.wait_for_timeout(1500)
         sel = page.locator("select").first
         value = sel.evaluate(

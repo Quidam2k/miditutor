@@ -32,6 +32,21 @@ LETTERS = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 FAILS: list[str] = []
 
 
+# #6054: the practice-mode and option controls live in two click-to-open menus (Practice modes, Options).
+MENU_OF = {'simple-mark': 'practice', 'sight-read': 'practice', 'fresh-tune': 'practice', 'fresh-key': 'practice', 'bare-start': 'practice', 'hand-zones': 'practice', 'chord-moves': 'practice', 'training-wheels': 'options', 'mini-staff-toggle': 'options', 'read-ahead': 'options', 'miss-sound': 'options', 'miss-sound-test': 'options', 'score-wheel-fingers': 'options', 'key-wheel-fingers': 'options', 'every-bar-numbers': 'options', 'strip-fit-ink': 'options', 'reverse-wheel': 'options'}
+
+
+def tid(page, test_id: str):
+    """Locator for a toolbar control by test id, opening its menu first when it is tucked away.
+    (A running 5-minute run puts bare-stop on the main row, so ids not in MENU_OF are plain.)"""
+    loc = page.get_by_test_id(test_id)
+    menu = MENU_OF.get(test_id)
+    if menu and (loc.count() == 0 or not loc.first.is_visible()):
+        page.get_by_test_id("menu-" + menu).click()
+        page.wait_for_timeout(150)
+    return loc
+
+
 def check(cond: bool, label: str, detail: object = "") -> None:
     print(("PASS " if cond else "FAIL ") + label + (f"  {detail}" if not cond else ""))
     if not cond:

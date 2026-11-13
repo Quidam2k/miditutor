@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { OpenSheetMusicDisplay, TechnicalInstruction, TechnicalInstructionType } from 'opensheetmusicdisplay';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import sampleXml from '../../assets/sample-score.musicxml?raw';
@@ -29,6 +29,8 @@ import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine
 import { blockInput, blockLabel, current as blockPosition, groupPositions, showKeys, startBlocking, type BlockState, type BlockStep } from '../../engine/Blocking';
 import { BarInput } from './BarInput';
 import { centreShift, fitZoom } from '../../engine/stripFit';
+import { Popover } from './Popover';
+import { PLACEMENT, idsAt, menuBadge, type ControlId, type Place } from './toolbarPlacement';
 import { loadStartupSnapshot, restorable, type SessionSnapshot } from './sessionSnapshot';
 import { pickBars, pickHand, pickSightPiece } from '../../engine/SightRead';
 import { FRESH_KEYS, freshTuneXml, pickFreshTune, type FreshTune } from '../../engine/FreshTune';
@@ -3113,6 +3115,291 @@ export function ScoreView() {
 
   const loopBtn = picking !== 'off' || loopBars ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : '';
 
+  // #6054: every movable toolbar control, by id; toolbarPlacement.ts says where each one is shown.
+  const controls: Record<ControlId, ReactNode> = {
+    simple: (
+      <>
+        <button
+          onClick={() => toggleSimple(piece.label)}
+          aria-pressed={simplePieces.includes(piece.label)}
+          title="Mark as simple: Sight-read picks from these first"
+          data-testid="simple-mark"
+          className={`${btn} ${simplePieces.includes(piece.label) ? 'ring-2 ring-emerald-400' : ''}`}
+        >
+          Simple
+        </button>
+      </>
+    ),
+    sightRead: (
+      <>
+        <button
+          onClick={sightRead}
+          disabled={status === 'loading'}
+          title="A piece you don't know, one hand, 5-8 bars. What you're drilling now is kept."
+          data-testid="sight-read"
+          className={btn}
+        >
+          Sight-read
+        </button>
+      </>
+    ),
+    freshTune: (
+      <>
+        <button
+          onClick={freshTune}
+          disabled={status === 'loading'}
+          title="A short folk tune you have never had, in this key. No hints until you miss."
+          data-testid="fresh-tune"
+          className={btn}
+        >
+          Fresh tune
+        </button>
+      </>
+    ),
+    freshKey: (
+      <>
+        <select
+          value={freshKey}
+          onChange={(e) => useSettingsStore.getState().setFreshKey(e.target.value)}
+          title="The key for fresh tunes"
+          data-testid="fresh-key"
+          className="rounded-md border border-gray-700 bg-gray-900 px-1 py-1 text-sm text-gray-200"
+        >
+          {FRESH_KEYS.map((k) => (
+            <option key={k.name} value={k.name}>
+              {keyTitle(k.name)}
+            </option>
+          ))}
+        </select>
+      </>
+    ),
+    bare: (
+      <>
+        {bareNow ? (
+          <button onClick={() => finishBare(true)} title="Stop now and see how it went" data-testid="bare-stop" className={`${btn} ring-2 ring-amber-400`}>
+            No hints {Math.floor(bareLeft / 60000)}:{String(Math.floor(bareLeft / 1000) % 60).padStart(2, '0')} ■
+          </button>
+        ) : (
+          <button
+            onClick={startBareRun}
+            disabled={status !== 'ready'}
+            title="JP: end a session with five minutes on this piece without training wheels. No green keys, little staff or note names, even after a miss. Counts the bars you get through clean."
+            data-testid="bare-start"
+            className={btn}
+          >
+            5 min, no hints
+          </button>
+        )}
+      </>
+    ),
+    openPiece: (
+      <>
+        {window.tutorBridge && (
+          <button onClick={openPiece} className={btn}>
+            Open piece…
+          </button>
+        )}
+      </>
+    ),
+    trainingWheels: (
+      <>
+        {showKeyboard && (
+          <label
+            className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+            title="Show the keys to play only in the first bar of each lap; after that they fade, and come back if you pause or miss"
+          >
+            <input
+              type="checkbox"
+              data-testid="training-wheels"
+              checked={trainingWheels}
+              onChange={(e) => useSettingsStore.getState().setPrefs({ trainingWheels: e.target.checked })}
+            />
+            Training wheels
+          </label>
+        )}
+      </>
+    ),
+    miniStaff: (
+      <>
+        {showKeyboard && (
+          <label
+            className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+            title="Show the notes to play now on a little staff just above the keyboard"
+          >
+            <input
+              type="checkbox"
+              data-testid="mini-staff-toggle"
+              checked={miniStaff}
+              onChange={(e) => useSettingsStore.getState().setPrefs({ miniStaff: e.target.checked })}
+            />
+            Mini staff
+          </label>
+        )}
+      </>
+    ),
+    readAhead: (
+      <>
+        <label
+          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+          title="Experimental: the notes at the cursor blank out as it reaches them, so you have to read ahead. They come back after a wrong note. No key or note-name hints while it's on"
+        >
+          <input
+            type="checkbox"
+            data-testid="read-ahead"
+            checked={readAhead}
+            onChange={(e) => useSettingsStore.getState().setPrefs({ readAhead: e.target.checked })}
+          />
+          Read ahead <span className="text-amber-300/80 text-xs">(experimental)</span>
+        </label>
+      </>
+    ),
+    missSound: (
+      <>
+        <label
+          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+          title="A short low thud the moment a lap stops being clean (a wrong note or a grazed key), so you know it won't count"
+        >
+          <input
+            type="checkbox"
+            data-testid="miss-sound"
+            checked={missSound}
+            onChange={(e) => useSettingsStore.getState().setPrefs({ missSound: e.target.checked })}
+          />
+          Miss sound
+        </label>
+        <button
+          type="button"
+          data-testid="miss-sound-test"
+          data-stay
+          className="ml-1 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-300 hover:bg-gray-700"
+          title="Play the miss sound once, to hear how loud it is"
+          onClick={() => void playMissSound()}
+        >
+          Test
+        </button>
+      </>
+    ),
+    scoreWheelFingers: (
+      <>
+        <label
+          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+          title="On: the scroll wheel over a note on the score changes its finger. Off: the wheel there only scrolls"
+        >
+          <input
+            type="checkbox"
+            data-testid="score-wheel-fingers"
+            checked={scoreWheelFingers}
+            onChange={(e) => {
+              useSettingsStore.getState().setPrefs({ scoreWheelFingers: e.target.checked });
+              if (!e.target.checked && hoverKey === null) setHoverTarget(null);
+            }}
+          />
+          Wheel fingers on score
+        </label>
+      </>
+    ),
+    keyWheelFingers: (
+      <>
+        <label
+          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+          title="On: the scroll wheel over a key on the keyboard changes that note's finger. Off: the wheel there only scrolls"
+        >
+          <input
+            type="checkbox"
+            data-testid="key-wheel-fingers"
+            checked={keyWheelFingers}
+            onChange={(e) => useSettingsStore.getState().setPrefs({ keyWheelFingers: e.target.checked })}
+          />
+          Wheel fingers on keyboard
+        </label>
+      </>
+    ),
+    everyBarNumbers: (
+      <>
+        {!strip && (
+          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="On: a number over every bar. Off: only the bar that starts each line">
+            <input
+              type="checkbox"
+              data-testid="every-bar-numbers"
+              checked={everyBarNumbers}
+              onChange={(e) => useSettingsStore.getState().setPrefs({ everyBarNumbers: e.target.checked })}
+            />
+            Number every bar
+          </label>
+        )}
+      </>
+    ),
+    bigNotes: (
+      <>
+        {strip && (
+          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="On: the music fills the panel (big notes). Off: the older, smaller fit">
+            <input
+              type="checkbox"
+              data-testid="strip-fit-ink"
+              checked={stripFitInk}
+              onChange={(e) => useSettingsStore.getState().setPrefs({ stripFitInk: e.target.checked })}
+            />
+            Big notes
+          </label>
+        )}
+      </>
+    ),
+    reverseWheel: (
+      <>
+        {strip && (
+          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Turn the wheel the other way to move along the score">
+            <input type="checkbox" data-testid="reverse-wheel" checked={reverseWheel} onChange={(e) => setReverseWheel(e.target.checked)} />
+            Reverse wheel
+          </label>
+        )}
+      </>
+    ),
+    handZones: (
+      <>
+          <button
+            onClick={() => setZonesOn((z) => !z)}
+            disabled={status !== 'ready'}
+            aria-pressed={zonesOn}
+            className={`${btn} ${zonesOn ? 'ring-2 ring-sky-400' : ''}`}
+            title="JP: see which fingers move where. Each hand position is shaded on its staff; a red mark is a jump of 5+ keys with no rest before it, where you'd be fishing."
+            data-testid="hand-zones"
+          >
+            Hand zones
+          </button>
+      </>
+    ),
+    chordMoves: (
+      <>
+          <button
+            onClick={() => setChordsOn((c) => !c)}
+            disabled={status !== 'ready'}
+            aria-pressed={chordsOn}
+            className={`${btn} ${chordsOn ? 'ring-2 ring-violet-400' : ''}`}
+            title="JP: who moves, who stays? From each chord to the next in the same hand: blue = the key stays, amber = it moves (+2 = two keys up). 'same move' = the change repeats; 'all +5' = the whole hand shifts."
+            data-testid="chord-moves"
+          >
+            Chord moves
+          </button>
+      </>
+    ),
+  };
+  // A mode that is running never hides in a menu: the 5-minute run's Stop button stays on the main row.
+  const placeOf = (id: ControlId): Place => (id === 'bare' && bareNow ? 'main' : PLACEMENT[id]);
+  const at = (place: Place) => idsAt().filter((id) => placeOf(id) === place).map((id) => <Fragment key={id}>{controls[id]}</Fragment>);
+  const optionBadge = menuBadge('options', {
+    trainingWheels: showKeyboard && trainingWheels,
+    miniStaff: showKeyboard && miniStaff,
+    readAhead,
+    missSound,
+    scoreWheelFingers,
+    keyWheelFingers,
+    everyBarNumbers: !strip && everyBarNumbers,
+    bigNotes: strip && stripFitInk,
+    reverseWheel: strip && reverseWheel,
+  }, {});
+  const practiceBadge = menuBadge('practice', { simple: simplePieces.includes(piece.label), bare: !!bareNow, handZones: zonesOn, chordMoves: chordsOn },
+    { simple: 'Simple', bare: 'No hints', handZones: 'Hand zones', chordMoves: 'Chord moves' });
+
   return (
     // Strip (#5153): exactly the screen's height; the music slides sideways, never the page.
     <div className={`flex w-full flex-col gap-3 ${strip ? 'h-full min-h-0' : ''}`}>
@@ -3163,61 +3450,6 @@ export function ScoreView() {
         >
           ★ only
         </button>
-        <button
-          onClick={() => toggleSimple(piece.label)}
-          aria-pressed={simplePieces.includes(piece.label)}
-          title="Mark as simple: Sight-read picks from these first"
-          data-testid="simple-mark"
-          className={`${btn} ${simplePieces.includes(piece.label) ? 'ring-2 ring-emerald-400' : ''}`}
-        >
-          Simple
-        </button>
-        <button
-          onClick={sightRead}
-          disabled={status === 'loading'}
-          title="A piece you don't know, one hand, 5-8 bars. What you're drilling now is kept."
-          data-testid="sight-read"
-          className={btn}
-        >
-          Sight-read
-        </button>
-        <button
-          onClick={freshTune}
-          disabled={status === 'loading'}
-          title="A short folk tune you have never had, in this key. No hints until you miss."
-          data-testid="fresh-tune"
-          className={btn}
-        >
-          Fresh tune
-        </button>
-        <select
-          value={freshKey}
-          onChange={(e) => useSettingsStore.getState().setFreshKey(e.target.value)}
-          title="The key for fresh tunes"
-          data-testid="fresh-key"
-          className="rounded-md border border-gray-700 bg-gray-900 px-1 py-1 text-sm text-gray-200"
-        >
-          {FRESH_KEYS.map((k) => (
-            <option key={k.name} value={k.name}>
-              {keyTitle(k.name)}
-            </option>
-          ))}
-        </select>
-        {bareNow ? (
-          <button onClick={() => finishBare(true)} title="Stop now and see how it went" data-testid="bare-stop" className={`${btn} ring-2 ring-amber-400`}>
-            No hints {Math.floor(bareLeft / 60000)}:{String(Math.floor(bareLeft / 1000) % 60).padStart(2, '0')} ■
-          </button>
-        ) : (
-          <button
-            onClick={startBareRun}
-            disabled={status !== 'ready'}
-            title="JP: end a session with five minutes on this piece without training wheels. No green keys, little staff or note names, even after a miss. Counts the bars you get through clean."
-            data-testid="bare-start"
-            className={btn}
-          >
-            5 min, no hints
-          </button>
-        )}
         {bareMsg && (
           <span data-testid="bare-msg" className="text-xs text-amber-300">
             {bareMsg}
@@ -3308,11 +3540,6 @@ export function ScoreView() {
             onClose={() => setMixing(false)}
           />
         )}
-        {window.tutorBridge && (
-          <button onClick={openPiece} className={btn}>
-            Open piece…
-          </button>
-        )}
         {piece.photo && (
           <div className="flex overflow-hidden rounded-md border border-gray-700 text-sm" role="group" aria-label="Photo or score">
             {(['score', 'photo'] as const).map((v) => (
@@ -3388,123 +3615,14 @@ export function ScoreView() {
           <input type="checkbox" checked={showKeyboard} onChange={(e) => setShowKeyboard(e.target.checked)} />
           Keyboard
         </label>
-        {showKeyboard && (
-          <label
-            className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-            title="Show the keys to play only in the first bar of each lap; after that they fade, and come back if you pause or miss"
-          >
-            <input
-              type="checkbox"
-              data-testid="training-wheels"
-              checked={trainingWheels}
-              onChange={(e) => useSettingsStore.getState().setPrefs({ trainingWheels: e.target.checked })}
-            />
-            Training wheels
-          </label>
-        )}
-        {showKeyboard && (
-          <label
-            className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-            title="Show the notes to play now on a little staff just above the keyboard"
-          >
-            <input
-              type="checkbox"
-              data-testid="mini-staff-toggle"
-              checked={miniStaff}
-              onChange={(e) => useSettingsStore.getState().setPrefs({ miniStaff: e.target.checked })}
-            />
-            Mini staff
-          </label>
-        )}
-        <label
-          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-          title="Experimental: the notes at the cursor blank out as it reaches them, so you have to read ahead. They come back after a wrong note. No key or note-name hints while it's on"
-        >
-          <input
-            type="checkbox"
-            data-testid="read-ahead"
-            checked={readAhead}
-            onChange={(e) => useSettingsStore.getState().setPrefs({ readAhead: e.target.checked })}
-          />
-          Read ahead <span className="text-amber-300/80 text-xs">(experimental)</span>
-        </label>
-        <label
-          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-          title="A short low thud the moment a lap stops being clean (a wrong note or a grazed key), so you know it won't count"
-        >
-          <input
-            type="checkbox"
-            data-testid="miss-sound"
-            checked={missSound}
-            onChange={(e) => useSettingsStore.getState().setPrefs({ missSound: e.target.checked })}
-          />
-          Miss sound
-        </label>
-        <button
-          type="button"
-          data-testid="miss-sound-test"
-          className="ml-1 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-300 hover:bg-gray-700"
-          title="Play the miss sound once, to hear how loud it is"
-          onClick={() => void playMissSound()}
-        >
-          Test
-        </button>
-        <label
-          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-          title="On: the scroll wheel over a note on the score changes its finger. Off: the wheel there only scrolls"
-        >
-          <input
-            type="checkbox"
-            data-testid="score-wheel-fingers"
-            checked={scoreWheelFingers}
-            onChange={(e) => {
-              useSettingsStore.getState().setPrefs({ scoreWheelFingers: e.target.checked });
-              if (!e.target.checked && hoverKey === null) setHoverTarget(null);
-            }}
-          />
-          Wheel fingers on score
-        </label>
-        <label
-          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-          title="On: the scroll wheel over a key on the keyboard changes that note's finger. Off: the wheel there only scrolls"
-        >
-          <input
-            type="checkbox"
-            data-testid="key-wheel-fingers"
-            checked={keyWheelFingers}
-            onChange={(e) => useSettingsStore.getState().setPrefs({ keyWheelFingers: e.target.checked })}
-          />
-          Wheel fingers on keyboard
-        </label>
-        {!strip && (
-          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="On: a number over every bar. Off: only the bar that starts each line">
-            <input
-              type="checkbox"
-              data-testid="every-bar-numbers"
-              checked={everyBarNumbers}
-              onChange={(e) => useSettingsStore.getState().setPrefs({ everyBarNumbers: e.target.checked })}
-            />
-            Number every bar
-          </label>
-        )}
-        {strip && (
-          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="On: the music fills the panel (big notes). Off: the older, smaller fit">
-            <input
-              type="checkbox"
-              data-testid="strip-fit-ink"
-              checked={stripFitInk}
-              onChange={(e) => useSettingsStore.getState().setPrefs({ stripFitInk: e.target.checked })}
-            />
-            Big notes
-          </label>
-        )}
-        {strip && (
-          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Turn the wheel the other way to move along the score">
-            <input type="checkbox" data-testid="reverse-wheel" checked={reverseWheel} onChange={(e) => setReverseWheel(e.target.checked)} />
-            Reverse wheel
-          </label>
-        )}
         <div className="ml-auto flex items-center gap-2">
+          {at('main')}
+          <Popover label="Practice modes" badge={practiceBadge.count ? practiceBadge.names.join(', ') : undefined} testId="menu-practice" btn={btn}>
+            {at('practice')}
+          </Popover>
+          <Popover label="Options" badge={optionBadge.count ? `${optionBadge.count} on` : undefined} testId="menu-options" btn={btn}>
+            {at('options')}
+          </Popover>
           <PracticeReport btn={btn} piece={pieceName} onLoopBar={(bar) => applyLoop({ first: bar, last: bar })} onBlockBar={(bar) => {
             applyLoop({ first: bar, last: bar });
             startBlock({ first: bar, last: bar });
@@ -3559,26 +3677,6 @@ export function ScoreView() {
               {block ? 'Block: on' : 'Block'}
             </button>
           )}
-          <button
-            onClick={() => setZonesOn((z) => !z)}
-            disabled={status !== 'ready'}
-            aria-pressed={zonesOn}
-            className={`${btn} ${zonesOn ? 'ring-2 ring-sky-400' : ''}`}
-            title="JP: see which fingers move where. Each hand position is shaded on its staff; a red mark is a jump of 5+ keys with no rest before it, where you'd be fishing."
-            data-testid="hand-zones"
-          >
-            Hand zones
-          </button>
-          <button
-            onClick={() => setChordsOn((c) => !c)}
-            disabled={status !== 'ready'}
-            aria-pressed={chordsOn}
-            className={`${btn} ${chordsOn ? 'ring-2 ring-violet-400' : ''}`}
-            title="JP: who moves, who stays? From each chord to the next in the same hand: blue = the key stays, amber = it moves (+2 = two keys up). 'same move' = the change repeats; 'all +5' = the whole hand shifts."
-            data-testid="chord-moves"
-          >
-            Chord moves
-          </button>
           {chords && (
             <span data-testid="chords-msg" className="text-xs text-violet-300">
               {chords.changes} chord change{chords.changes === 1 ? '' : 's'}

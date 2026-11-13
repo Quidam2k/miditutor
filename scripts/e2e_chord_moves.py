@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
+from e2e_backwards import tid  # noqa: E402  #6054 toolbar menus
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -46,12 +47,13 @@ def main():
         value = sel.evaluate("(s, t) => [...s.options].find((o) => new RegExp(t, 'i').test(o.text)).value", title)
         sel.select_option(value)
         page.wait_for_function("() => document.querySelectorAll('.vf-notehead').length > 50", timeout=60000)
+        tid(page, "chord-moves").wait_for(timeout=15000)
         page.wait_for_function("() => !!document.querySelector('[data-testid=chord-moves]:not([disabled])')", timeout=15000)
         time.sleep(1.5)
-        if page.get_by_test_id("chord-moves").get_attribute("aria-pressed") == "true":  # left on by an earlier run
-            page.get_by_test_id("chord-moves").click()
+        if tid(page, "chord-moves").get_attribute("aria-pressed") == "true":  # left on by an earlier run
+            tid(page, "chord-moves").click()
             time.sleep(0.3)
-        page.get_by_test_id("chord-moves").click()
+        tid(page, "chord-moves").click()
         page.get_by_test_id("chords-msg").wait_for(timeout=5000)
         time.sleep(0.5)
         m = moves() or {}
@@ -71,7 +73,7 @@ def main():
         print("chord moves:", m, "| tags drawn:", tags, "| msg:", msg)
         (ROOT / "screengrab").mkdir(exist_ok=True)
         page.screenshot(path=str(ROOT / "screengrab" / "e2e-chord-moves.png"))
-        page.get_by_test_id("chord-moves").click()
+        tid(page, "chord-moves").click()
         time.sleep(0.3)
         check("off again: no rings, no report", page.get_by_test_id("chord-ring").count() == 0 and not moves())
 
