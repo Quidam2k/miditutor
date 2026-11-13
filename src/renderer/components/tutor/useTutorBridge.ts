@@ -42,6 +42,9 @@ interface TutorBridge {
   /** #5260: the note trainer's record. Null in a hidden test copy. */
   noteStatsLoad?: () => Promise<unknown>;
   noteStatsSave?: (record: unknown) => void;
+  /** #6062: toolbar control usage (control-usage.json). Null in a hidden test copy. */
+  controlUsageLoad?: () => Promise<unknown>;
+  controlUsageSave?: (record: unknown) => void;
   /** Scan review (#9664): null unless the desk app was started with a review library. */
   reviewInfo?: () => Promise<{ library: string } | null>;
 }

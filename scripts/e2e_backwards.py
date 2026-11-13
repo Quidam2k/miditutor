@@ -32,17 +32,15 @@ LETTERS = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 FAILS: list[str] = []
 
 
-# #6054: the practice-mode and option controls live in two click-to-open menus (Practice modes, Options).
-MENU_OF = {'simple-mark': 'practice', 'sight-read': 'practice', 'fresh-tune': 'practice', 'fresh-key': 'practice', 'bare-start': 'practice', 'hand-zones': 'practice', 'chord-moves': 'practice', 'training-wheels': 'options', 'mini-staff-toggle': 'options', 'read-ahead': 'options', 'miss-sound': 'options', 'miss-sound-test': 'options', 'score-wheel-fingers': 'options', 'key-wheel-fingers': 'options', 'every-bar-numbers': 'options', 'strip-fit-ink': 'options', 'reverse-wheel': 'options'}
+# #6054/#6062: controls he has not used tuck into one "More" menu; tid() opens it when a control is not on the main row.
 
 
 def tid(page, test_id: str):
-    """Locator for a toolbar control by test id, opening its menu first when it is tucked away.
-    (A running 5-minute run puts bare-stop on the main row, so ids not in MENU_OF are plain.)"""
+    """Locator for a toolbar control by test id, opening the More menu first when the control is tucked away.
+    (Day one, or a running 5-minute run's Stop, leaves it on the main row, so it is plain.)"""
     loc = page.get_by_test_id(test_id)
-    menu = MENU_OF.get(test_id)
-    if menu and (loc.count() == 0 or not loc.first.is_visible()):
-        page.get_by_test_id("menu-" + menu).click()
+    if (loc.count() == 0 or not loc.first.is_visible()) and page.get_by_test_id("menu-more").count() and not page.get_by_test_id("menu-more-panel").count():
+        page.get_by_test_id("menu-more").click()
         page.wait_for_timeout(150)
     return loc
 

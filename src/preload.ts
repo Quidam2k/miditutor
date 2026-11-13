@@ -45,6 +45,8 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   noteStatsLoad: () => ipcRenderer.invoke('noteStats:load'),
   practiceRollup: (days: number) => ipcRenderer.invoke('practice:rollup', days),
   noteStatsSave: (record: unknown) => ipcRenderer.send('noteStats:save', record),
+  controlUsageLoad: () => ipcRenderer.invoke('controlUsage:load'),
+  controlUsageSave: (record: unknown) => ipcRenderer.send('controlUsage:save', record),
   // "Bring in the tutor" (#5154): { state, error? }.
   inviteStatus: () => ipcRenderer.invoke('invite:status'),
   inviteToggle: () => ipcRenderer.invoke('invite:toggle'),

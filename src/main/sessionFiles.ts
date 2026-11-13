@@ -51,12 +51,16 @@ export function sessionFiles(dir: string) {
   const windowFile = path.join(dir, 'window-state.json');
   const marker = path.join(dir, 'restore-next');
   const noteStatsFile = path.join(dir, 'note-stats.json');
+  const controlUsageFile = path.join(dir, 'control-usage.json');
   return {
     saveSession: (value: unknown) => saveJson(sessionFile, value),
     saveWindow: (state: WindowState) => saveJson(windowFile, state),
     /** #5260: the note trainer's per-note record. Weeks of it, so no age rule. */
     saveNoteStats: (value: unknown) => saveJson(noteStatsFile, value),
     loadNoteStats: () => readJson(noteStatsFile),
+    /** #6062: which toolbar controls he uses, per session and per day. Local only, never sent to Pantheon. */
+    saveControlUsage: (value: unknown) => saveJson(controlUsageFile, value),
+    loadControlUsage: () => readJson(controlUsageFile),
 
     /** force = the marker was there; it's used up by this read. */
     async loadSession(): Promise<{ snapshot: unknown; force: boolean }> {

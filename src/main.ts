@@ -557,6 +557,10 @@ ipcMain.handle('noteStats:load', () => (useSession ? files().loadNoteStats() : n
 ipcMain.on('noteStats:save', (_e, record: unknown) => {
   if (useSession) files().saveNoteStats(record).catch((err) => console.error('[note-stats] save failed:', err));
 });
+ipcMain.handle('controlUsage:load', () => (useSession ? files().loadControlUsage() : null));
+ipcMain.on('controlUsage:save', (_e, record: unknown) => {
+  if (useSession) files().saveControlUsage(record).catch((err) => console.error('[control-usage] save failed:', err));
+});
 // MIDITUTOR_WINDOW_SIZE=1920x1080: test a TV-shaped window without showing one (#5153).
 const [winW, winH] = (process.env.MIDITUTOR_WINDOW_SIZE ?? '').split('x').map(Number);
 
