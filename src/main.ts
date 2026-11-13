@@ -22,6 +22,7 @@ import {
 import { TrustMap, parseTrust, trustFor, verifiedHolds } from './shared/trust';
 import { contentSha256 } from './main/contentSha';
 import { confirmedLines, paperPageStarts } from './shared/binderPrint';
+import { sendToPaper } from './main/binderPaper';
 import { SavedMix, VersionMap, applyTrust, groupOf, mixPlanOf, parseMixes, parseVersions, withMixes } from './shared/versions';
 
 if (started) {
@@ -171,14 +172,20 @@ const printBinder = async (slug: string, html: string) => {
     await win.loadFile(page);
     const data = await win.webContents.printToPDF({ pageSize: 'Letter', printBackground: true, margins: { marginType: 'none' } });
     await fs.writeFile(pdf, data);
+    let sent: { printer: string; job: string } | undefined;
     if (process.env.MIDITUTOR_PRINT_NO_DIALOG !== '1') {
-      await new Promise<void>((resolve) =>
-        win.webContents.print({ silent: false, printBackground: true, duplexMode: 'longEdge', margins: { marginType: 'none' } }, (ok, why) => {
-          if (!ok && why && why !== 'Print job canceled') console.warn('[print] binder:', why);
-          resolve();
-        }));
+      if (process.platform === 'darwin') {
+        // The Mac has no print dialog worth trusting: lp with duplex long-edge forced (#6090).
+        sent = await sendToPaper(pdf, `${slug} binder`);
+      } else {
+        await new Promise<void>((resolve) =>
+          win.webContents.print({ silent: false, printBackground: true, duplexMode: 'longEdge', margins: { marginType: 'none' } }, (ok, why) => {
+            if (!ok && why && why !== 'Print job canceled') console.warn('[print] binder:', why);
+            resolve();
+          }));
+      }
     }
-    return { pdf, bytes: data.length };
+    return { pdf, bytes: data.length, sent };
   } finally {
     win.destroy();
   }

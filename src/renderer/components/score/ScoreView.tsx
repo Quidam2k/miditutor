@@ -965,7 +965,9 @@ export function ScoreView() {
     try {
       const out = await bridge.printBinder(scanSlug, binderPreview.html);
       const { pages } = binderPreview;
-      setPrintNote(`${pages} page${pages === 1 ? '' : 's'}, ${pages * 2} sides (two-sided). Saved ${out.pdf}`);
+      // #6090: only say "Sent" when the Mac queued a real job; a failure throws and lands in the catch below.
+      const to = out.sent ? ` Sent to ${out.sent.printer}, two-sided (job ${out.sent.job}).` : '';
+      setPrintNote(`${pages} page${pages === 1 ? '' : 's'}, ${pages * 2} sides (two-sided).${to} Saved ${out.pdf}`);
       reportEvent('binder_print', { piece: scanSlug, pages, sides: pages * 2, pdf: out.pdf, ...(binderPreview.verified ? {} : { unverified: true }) });
       setBinderPreview(null);
     } catch (err) {
