@@ -97,6 +97,10 @@ export async function playFanfare(size: 'small' | 'medium' | 'big'): Promise<voi
  */
 export const MISS_SOUND = { db: -10, note: 'A2', seconds: 0.18 } as const;
 
+/** #5799: every wrong note thuds, but keys struck within this of the last thud share it (a chord is one). */
+export const MISS_FLOOR_MS = 120;
+export const missGateOpen = (lastAt: number, now: number) => now - lastAt >= MISS_FLOOR_MS;
+
 let missThud: Tone.MembraneSynth | null = null;
 
 /** Plays the miss thud; returns the audio context's state ('running' means it was heard). */

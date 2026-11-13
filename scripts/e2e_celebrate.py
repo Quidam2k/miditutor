@@ -75,9 +75,11 @@ def main() -> int:
         time.sleep(0.3)
         check(celebrations(seq) == [], "a lap with a wrong note: no celebration", celebrations(seq))
         got = spoiled(seq)
-        check(len(got) == 1 and got[0].get("sound") is True, "#5566: one miss sound per spoiled lap", got)
+        # #5799: every wrong note thuds, not just the first of the lap (two wrongs 300 ms apart here).
+        check(len(got) == 2 and all(e.get("sound") is True for e in got), "#5799: a miss sound for each wrong note", got)
+        check(sum(1 for e in got if e.get("first")) == 1, "#5799: only the first is flagged first", got)
         # #11561: reached the speakers, not just asked for: the audio context was running with no click first.
-        check(got and got[0].get("audio") == "running", "#11561: the miss sound played with the audio context running", got)
+        check(got and all(e.get("audio") == "running" for e in got), "#11561: the miss sounds played with the audio context running", got)
 
         tc.request("POST", "/loop", {"firstBar": 2, "lastBar": 3, "backwards": True})
         time.sleep(1)

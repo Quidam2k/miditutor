@@ -20,6 +20,8 @@ export function BarInput({ value, onCommit, testId, disabled, focus, title, from
   const [draft, setDraft] = useState<string | null>(null);
   const ref = useRef<HTMLInputElement>(null);
   const dropRef = useRef(false);
+  // #5944: the click that focuses the box selects it all; the mouse-up must not undo that.
+  const freshRef = useRef(false);
   const wheelRunRef = useRef({ at: 0, delta: 0, dir: 0 });
   const wheelTimerRef = useRef(0);
   useEffect(() => {
@@ -69,6 +71,9 @@ export function BarInput({ value, onCommit, testId, disabled, focus, title, from
         window.clearTimeout(wheelTimerRef.current);
         setDraft(e.target.value);
       }}
+      onFocus={(e) => e.currentTarget.select()}
+      onMouseDown={(e) => { freshRef.current = document.activeElement !== e.currentTarget; }}
+      onMouseUp={(e) => { if (freshRef.current) e.preventDefault(); }}
       onBlur={commit}
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur();

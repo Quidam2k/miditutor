@@ -8,7 +8,7 @@ import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import expressionXml from '../../assets/expression-test.musicxml?raw';
-import { initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote } from '../../audio/AudioEngine';
+import { initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen } from '../../audio/AudioEngine';
 import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
@@ -655,13 +655,23 @@ export function ScoreView() {
   // The whole range he chose; with Build backwards the loop itself is only the end of it.
   const overall = chunk ? { first: chunk.first, last: chunk.last } : loopBars;
   const lapWrongRef = useRef(0);
-  // #5566: a wrong note or a stray spoils the lap; the first one in a lap ticks, faintly.
-  const spoilLap = useCallback(() => {
-    if (lapWrongRef.current++ > 0) return;
-    const sound = useSettingsStore.getState().missSound;
-    // #11561: say what the audio context was doing, so "didn't hear it" can be told apart from "never played".
-    void Promise.resolve(sound ? playMissSound() : undefined).then((audio) => reportEvent('lap-spoiled', { sound, audio }));
+  // #5799: every wrong key thuds (keys within MISS_FLOOR_MS of the last thud share it).
+  const lastMissAtRef = useRef(Number.NEGATIVE_INFINITY);
+  const thudMiss = useCallback((): Promise<string> | undefined => {
+    const now = performance.now();
+    if (!useSettingsStore.getState().missSound || !missGateOpen(lastMissAtRef.current, now)) return undefined;
+    lastMissAtRef.current = now;
+    return playMissSound();
   }, []);
+  // #5566: a wrong note or a stray spoils the lap.
+  const spoilLap = useCallback(() => {
+    const first = lapWrongRef.current++ === 0;
+    const sound = useSettingsStore.getState().missSound;
+    const played = thudMiss();
+    // #11561: say what the audio context was doing, so "didn't hear it" can be told apart from "never played".
+    if (played) void played.then((audio) => reportEvent('lap-spoiled', { sound, audio, first }));
+    else if (first) reportEvent('lap-spoiled', { sound, audio: undefined, first });
+  }, [thudMiss]);
   const missSound = useSettingsStore((s) => s.missSound);
   const backwardTargets = useSettingsStore((s) => s.backwardTargets);
   const setBackwardTargets = useSettingsStore((s) => s.setBackwardTargets);
@@ -2157,9 +2167,12 @@ export function ScoreView() {
       else if (res === 'wrong') {
         setKeep((s) => s && { ...s, wrong: s.wrong + 1 });
         flashWrong();
+        // #5799: Keep going thuds on every wrong note too.
+        const played = thudMiss();
+        if (played) void played.then((audio) => reportEvent('keep-miss', { audio }));
       }
     });
-  }, [keeping, flashWrong]);
+  }, [keeping, flashWrong, thudMiss]);
 
   // --- live MIDI → follower ---
   useEffect(() => {
