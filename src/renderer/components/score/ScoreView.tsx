@@ -28,6 +28,7 @@ import { chunkLabel, grewLabel, lapDone, parseTargets, rangeEdited, reachedLabel
 import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
 import { blockInput, blockLabel, current as blockPosition, groupPositions, showKeys, startBlocking, type BlockState, type BlockStep } from '../../engine/Blocking';
 import { BarInput } from './BarInput';
+import { centreShift, fitZoom } from '../../engine/stripFit';
 import { loadStartupSnapshot, restorable, type SessionSnapshot } from './sessionSnapshot';
 import { pickBars, pickHand, pickSightPiece } from '../../engine/SightRead';
 import { FRESH_KEYS, freshTuneXml, pickFreshTune, type FreshTune } from '../../engine/FreshTune';
@@ -408,32 +409,69 @@ function pageSvgOf(osmd: OpenSheetMusicDisplay, container: HTMLElement, measureI
     ?? container.querySelector('svg');
 }
 
+// Where the music's ink really is, in client px (#6055): OSMD's SVG box carries a wide blank margin,
+// so measure what is drawn (staves, ledger lines, fingers, tempo mark, bar numbers), not the box.
+function inkRect(svg: SVGSVGElement): { top: number; bottom: number } | null {
+  const rect = svg.getBoundingClientRect();
+  const vb = svg.viewBox.baseVal;
+  const vbH = vb?.height || svg.height.baseVal.value || 0;
+  const bb = svg.getBBox();
+  if (!rect.height || !vbH || !bb.height) return null;
+  const k = rect.height / vbH;
+  const top = rect.top + (bb.y - (vb?.y ?? 0)) * k;
+  return { top, bottom: top + bb.height * k };
+}
+
+/**
+ * #6055: where the green cursor bar sits in the Strip panel, as a fraction of its width from the left.
+ * Nothing left of it matters to him, so it sits at a quarter, not the middle, and more music shows ahead.
+ */
+const STRIP_ANCHOR = 0.25;
+
 // Strip (#5153): zoom so the one long system fills the height between toolbar and keyboard.
+// #6055: fit the music's ink, not the SVG box. With stripFitInk off, the old box fit (zoom 1..1.8).
 // True when the zoom changed enough that the caller should render again.
 function fitStrip(osmd: OpenSheetMusicDisplay, container: HTMLElement, panel: HTMLElement | null): boolean {
   const svg = container.querySelector('svg');
   const free = panel ? panel.clientHeight - 32 : 0; // minus the panel's p-4
   const drawn = svg?.getBoundingClientRect().height ?? 0;
   if (!svg || free <= 0 || drawn <= 0) return false; // hidden behind the photo view
-  const zoom = Math.max(1, Math.min(1.8, (osmd.Zoom * free * 0.95) / drawn));
-  if (Math.abs(zoom - osmd.Zoom) / osmd.Zoom < 0.05) return false;
+  if (!useSettingsStore.getState().stripFitInk) {
+    const zoom = Math.max(1, Math.min(1.8, (osmd.Zoom * free * 0.95) / drawn));
+    if (Math.abs(zoom - osmd.Zoom) / osmd.Zoom < 0.05) return false;
+    osmd.Zoom = zoom;
+    return true;
+  }
+  const ink = inkRect(svg);
+  if (!ink) return false;
+  const zoom = fitZoom(ink.bottom - ink.top, free, osmd.Zoom);
+  if (zoom === osmd.Zoom) return false;
   osmd.Zoom = zoom;
   return true;
 }
 
 /**
- * #11094: in the strip, the music sits centred with a wide white gap above the treble
- * staff. Lift it by a fifth of that gap so the score sits higher, at the same size.
+ * #6055: centre the music's ink in the panel (replaces #11094's 20% lift, which hid the symptom).
+ * With stripFitInk off, the old lift of a fifth of the top gap.
  */
 const STRIP_LIFT = 0.2;
 function liftStrip(osmd: OpenSheetMusicDisplay, layer: HTMLElement | null, panel: HTMLElement | null): void {
   if (!layer) return;
   layer.style.transform = '';
   if (!panel) return;
+  const svg = layer.querySelector('svg');
+  if (!svg) return;
+  if (useSettingsStore.getState().stripFitInk) {
+    const ink = inkRect(svg);
+    if (!ink) return;
+    const pr = panel.getBoundingClientRect();
+    const shift = centreShift(ink.top, ink.bottom, pr.top + 16, pr.bottom - 16);
+    if (shift) layer.style.transform = `translateY(${shift}px)`;
+    return;
+  }
   const first = (osmd.GraphicSheet.MeasureList[0] as unknown as (OsmdMeasure | undefined)[] | undefined)?.[0];
   const lineY = first?.ParentStaffLine?.PositionAndShape.AbsolutePosition.y;
-  const svg = layer.querySelector('svg');
-  if (lineY === undefined || !svg) return;
+  if (lineY === undefined) return;
   const staffTop = svg.getBoundingClientRect().top + lineY * 10 * osmd.Zoom;
   const gap = staffTop - (panel.getBoundingClientRect().top + 16); // inside the panel's p-4
   if (gap > 0) layer.style.transform = `translateY(${-Math.round(gap * STRIP_LIFT)}px)`;
@@ -598,6 +636,7 @@ export function ScoreView() {
   const scoreWheelFingers = useSettingsStore((s) => s.scoreWheelFingers);
   const keyWheelFingers = useSettingsStore((s) => s.keyWheelFingers);
   const everyBarNumbers = useSettingsStore((s) => s.everyBarNumbers);
+  const stripFitInk = useSettingsStore((s) => s.stripFitInk);
   const setReverseWheel = useSettingsStore((s) => s.setReverseWheel);
   const [remaining, setRemaining] = useState<number[]>([]);
   const [playHint, setPlayHint] = useState('');
@@ -1118,8 +1157,8 @@ export function ScoreView() {
     if (!stripRef.current || !panel || !el) return;
     const c = el.getBoundingClientRect();
     const p = panel.getBoundingClientRect();
-    const left = panel.scrollLeft + (c.left + c.width / 2) - (p.left + panel.clientLeft + panel.clientWidth / 2);
-    panel.scrollTo({ left, behavior });
+    const left = panel.scrollLeft + (c.left + c.width / 2) - (p.left + panel.clientLeft + panel.clientWidth * STRIP_ANCHOR);
+    panel.scrollTo({ left: Math.max(0, left), behavior }); // at the start the clef, key and 'Piano' stay on screen
   }, []);
 
   // Move the visible cursor to step index i (relative moves; OSMD has no seek).
@@ -2468,6 +2507,19 @@ export function ScoreView() {
     };
   }, []);
 
+  // #6055: flipping "Big notes" re-fits from the default zoom (the render override does the fitting).
+  const firstFitRef = useRef(true);
+  useEffect(() => {
+    if (firstFitRef.current) { firstFitRef.current = false; return; }
+    const osmd = osmdRef.current;
+    if (!strip || status !== 'ready' || !osmd) return;
+    osmd.Zoom = 1;
+    osmd.render();
+    setMarks([]);
+    chordLitRef.current = noChord();
+    setLayoutTick((t) => t + 1);
+  }, [stripFitInk]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Strip: the free height also changes without a window resize (Keyboard, Original, a task
   // panel), so re-fit the zoom when the panel itself changes height.
   useEffect(() => {
@@ -3436,6 +3488,17 @@ export function ScoreView() {
           </label>
         )}
         {strip && (
+          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="On: the music fills the panel (big notes). Off: the older, smaller fit">
+            <input
+              type="checkbox"
+              data-testid="strip-fit-ink"
+              checked={stripFitInk}
+              onChange={(e) => useSettingsStore.getState().setPrefs({ stripFitInk: e.target.checked })}
+            />
+            Big notes
+          </label>
+        )}
+        {strip && (
           <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Turn the wheel the other way to move along the score">
             <input type="checkbox" data-testid="reverse-wheel" checked={reverseWheel} onChange={(e) => setReverseWheel(e.target.checked)} />
             Reverse wheel
@@ -3757,20 +3820,20 @@ export function ScoreView() {
       {/* OSMD draws black notation, so give it a light panel. Blue heads = what he played
           right; red heads = a wrong note; red accidental = wrong sharp/flat/natural;
           yellow = the loop range. */}
-      {/* Strip: the panel is the sideways scroller; half-panel spacers either side let the
-          first and last beats sit in the middle too. */}
+      {/* Strip: the panel is the sideways scroller; a spacer after the music lets the last beat sit at the
+          anchor too (none before it: the piece starts at the left edge). */}
       <div
         ref={panelRef}
+        data-testid="score-panel"
         onClick={onScoreClick}
         className={`overflow-x-auto rounded-lg bg-white p-4 ring-4 transition-shadow ${
           wrongFlash ? 'ring-red-500' : 'ring-transparent'
-        } ${picking !== 'off' ? 'cursor-pointer' : ''} ${strip ? 'flex min-h-0 flex-1 overflow-y-auto' : ''}`}
+        } ${picking !== 'off' ? 'cursor-pointer' : ''} ${strip ? `flex min-h-0 flex-1 ${stripFitInk ? 'overflow-y-hidden' : 'overflow-y-auto'}` : ''}`}
         style={strip ? { alignItems: 'safe center' } : undefined}
       >
         {showPhoto && piece.photo && (
           <img src={piece.photo} alt={`Photo of ${piece.label}`} className="mx-auto max-h-[70vh] w-auto max-w-full" />
         )}
-        {strip && !showPhoto && <div className="shrink-0 basis-1/2" />}
         <div ref={layerRef} className={showPhoto ? 'hidden' : strip ? 'relative shrink-0' : 'relative'}>
           {/* OSMD makes each page as wide as this container, so it is half the panel and
               the second column of pages overflows into the other half on purpose. */}
@@ -3794,7 +3857,7 @@ export function ScoreView() {
           <PlayedOverlay marks={marks} bands={bands} />
           {wave && <WaveOverlay key={wave.key} dots={wave.dots} peak={wave.peak} />}
         </div>
-        {strip && !showPhoto && <div className="shrink-0 basis-1/2" />}
+        {strip && !showPhoto && <div className="shrink-0" style={{ flexBasis: `${(1 - STRIP_ANCHOR) * 100}%` }} />}
       </div>
       {fingerPick && (
         <div
