@@ -11,7 +11,9 @@ import { TutorButton } from './components/tutor/TutorButton';
 import { ReviewView } from './components/review/ReviewView';
 import { TopClock } from './components/TopClock';
 import { readStartupSnapshot } from './components/score/sessionSnapshot';
+import { PauseButton, PauseBanner } from './components/PauseButton';
 import { useSettingsStore } from './store/useSettingsStore';
+import { useMidiStore } from './store/useMidiStore';
 import { useTutorStore } from './store/useTutorStore';
 
 type View = 'practice' | 'monitor' | 'score' | 'review';
@@ -64,7 +66,10 @@ export function App() {
   }, [pieceRequested]);
 
   // Every tab click does something visible: switch, back to the top, and Practice restarts (#5058).
+  // #5948: a pause never carries over to another screen.
+  useEffect(() => useMidiStore.getState().setPaused(false), [view]);
   const go = (next: View) => {
+    useMidiStore.getState().setPaused(false); // also when it is the same tab: Practice restarts
     if (next === 'practice') setPracticeVisit((n) => n + 1);
     setView(next);
     mainRef.current?.scrollTo({ top: 0 });
@@ -104,11 +109,14 @@ export function App() {
         </div>
         <TopClock />
         <div className="flex items-center gap-4">
+          <PauseButton />
           <TutorButton />
           <RecordButton />
           <MidiStatus />
         </div>
       </header>
+
+      <PauseBanner />
 
       {/* Main content */}
       <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center p-6 gap-6">

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { MidiDevice, MidiNoteEvent, MidiLogEntry } from '../types/midi';
+import { pauseHolds } from '../engine/Pause';
 import { midiNumberToPitch, pitchToDisplayName } from '../engine/MusicTheory';
 
 const MAX_LOG = 200;
@@ -28,7 +29,10 @@ interface MidiState {
   held: ReadonlySet<number>;
   /** Keys released while the pedal is down: still ringing until it lifts. */
   pedalRinging: ReadonlySet<number>;
+  /** #5948: when Pause was pressed (ms), null when not paused. */
+  pausedAt: number | null;
 
+  setPaused: (on: boolean) => void;
   setConnected: (connected: boolean) => void;
   setDevices: (devices: MidiDevice[]) => void;
   setActiveDevice: (device: MidiDevice | null) => void;
@@ -53,7 +57,9 @@ export const useMidiStore = create<MidiState>((set) => ({
   pedal: false,
   held: new Set<number>(),
   pedalRinging: new Set<number>(),
+  pausedAt: null,
 
+  setPaused: (on) => set((state) => (on ? (state.pausedAt === null ? { pausedAt: Date.now() } : {}) : state.pausedAt === null ? {} : { pausedAt: null })),
   setConnected: (connected) => set({ connected }),
   setDevices: (devices) => set({ devices }),
   setActiveDevice: (device) => set({ activeDevice: device, connected: device !== null }),
@@ -76,6 +82,12 @@ export const useMidiStore = create<MidiState>((set) => ({
       const held = new Set(state.held);
       const pedalRinging = new Set(state.pedalRinging);
       if (kind === 'noteon') {
+        // #5948: paused, his note is logged (the tutor feed and recorder still see him playing) but
+        // nothing judges it: no held key, no lastNoteOn. A pause that ran out lets go here too.
+        if (state.pausedAt !== null) {
+          if (pauseHolds(state.pausedAt, Date.now())) return { noteLog };
+          return { noteLog, pausedAt: null, held: new Set(state.held).add(note), pedalRinging, lastNoteOn: { note, velocity, timestamp: ts } };
+        }
         held.add(note);
         pedalRinging.delete(note);
         return { noteLog, held, pedalRinging, lastNoteOn: { note, velocity, timestamp: ts } };

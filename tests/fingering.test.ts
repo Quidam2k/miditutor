@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import {
   holdsOf,
+  planSpread,
   setFingering,
+  spreadFingering,
   setHold,
   type Digit,
   type FingerTarget,
@@ -407,5 +409,201 @@ describe('passLoopEdge (#5560)', () => {
     passLoopEdge(e, 7, 1, 1000);
     passLoopEdge(e, 7, 1, 2000);
     expect(passLoopEdge(e, 7, 1, 9000)).toBe(false);
+  });
+});
+
+describe('spreadFingering (#5947)', () => {
+  const mark = (digit: string) =>
+    `<notations><technical><fingering>${digit}</fingering></technical></notations>`;
+
+  const bars = (...bodies: string[]) =>
+    `<score-partwise><part id="P1">${bodies.map((body, i) =>
+      `<measure number="${i + 1}"><attributes><divisions>4</divisions></attributes>${body}</measure>`,
+    ).join('')}</part></score-partwise>`;
+
+  const byNote = (xml: string) => {
+    const notes = impl.parse(xml).getElementsByTagName('note');
+    return Array.from({ length: notes.length }, (_, i) => fingerings(notes.item(i)!));
+  };
+
+  const apply = (xml: string, selected: FingerTarget = target) => {
+    const result = spreadFingering(xml, selected, impl);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.reason);
+    return result;
+  };
+
+  it('spreads a single note across bars and onsets, leaving the picked spot alone', () => {
+    const xml = bars(note('C', 4, mark('3')), note() + note());
+    const preview = planSpread(xml, target, impl);
+    expect(preview).toEqual({
+      ok: true,
+      plan: {
+        pattern: [60],
+        fingers: { 60: '3' },
+        matches: [
+          [{ ...target, measure: 2 }],
+          [{ ...target, measure: 2, onset: 1 }],
+        ],
+      },
+      spots: 2,
+      applicable: 2,
+      skipped: 0,
+    });
+    const result = apply(xml);
+    expect(result).toMatchObject({ spots: 2, applied: 2, skipped: 0 });
+    expect(byNote(result.xml)).toEqual([['3'], ['3'], ['3']]);
+    expect(byNote(xml)).toEqual([['3'], [], []]);
+  });
+
+  it('spreads both interval digits by pitch when the note order is reversed', () => {
+    const xml = bars(
+      note('C', 4, mark('1')) + note('E', 4, mark('3'), '<chord/>'),
+      note('E') + note('C', 4, '', '<chord/>'),
+    );
+    const result = apply(xml, { ...target, midi: 64 });
+    expect(result).toMatchObject({ spots: 1, applied: 2, skipped: 0 });
+    expect(byNote(result.xml)).toEqual([['1'], ['3'], ['3'], ['1']]);
+  });
+
+  it('spreads all three chord digits to their own pitches', () => {
+    const xml = bars(
+      note('C', 4, mark('1')) +
+        note('E', 4, mark('3'), '<chord/>') +
+        note('G', 4, mark('5'), '<chord/>'),
+      note('G') + note('C', 4, '', '<chord/>') + note('E', 4, '', '<chord/>'),
+    );
+    const result = apply(xml);
+    expect(result).toMatchObject({ spots: 1, applied: 3, skipped: 0 });
+    expect(byNote(result.xml)).toEqual([['1'], ['3'], ['5'], ['5'], ['1'], ['3']]);
+  });
+
+  it('leaves the same pitches on another staff untouched', () => {
+    const xml = bars(
+      note('C', 4, mark('2')),
+      note('C', 4, '<staff>1</staff>') +
+        '<backup><duration>4</duration></backup>' +
+        note('C', 4, '<staff>2</staff>'),
+    );
+    const result = apply(xml);
+    expect(result).toMatchObject({ spots: 1, applied: 1, skipped: 0 });
+    expect(byNote(result.xml)).toEqual([['2'], ['2'], []]);
+  });
+
+  it('counts a different existing digit as skipped and preserves it', () => {
+    const xml = bars(note('C', 4, mark('2')), note('C', 4, mark('4')), note());
+    const preview = planSpread(xml, target, impl);
+    expect(preview).toMatchObject({ ok: true, spots: 2, applicable: 1, skipped: 1 });
+    const result = apply(xml);
+    expect(result).toMatchObject({ spots: 1, applied: 1, skipped: 1 });
+    expect(byNote(result.xml)).toEqual([['2'], ['4'], ['2']]);
+  });
+
+  it('treats the same existing digit as a no-op', () => {
+    const xml = bars(note('C', 4, mark('2')), note('C', 4, mark('2')));
+    expect(planSpread(xml, target, impl))
+      .toMatchObject({ ok: true, spots: 1, applicable: 0, skipped: 0 });
+    const result = apply(xml);
+    expect(result).toMatchObject({ spots: 0, applied: 0, skipped: 0 });
+    expect(byNote(result.xml)).toEqual([['2'], ['2']]);
+  });
+
+  it('does not match the same pitch classes in another octave', () => {
+    const xml = bars(
+      note('C', 4, mark('1')) + note('E', 4, mark('3'), '<chord/>'),
+      note('C', 5) + note('E', 5, '', '<chord/>'),
+    );
+    for (const run of [planSpread, spreadFingering]) {
+      expect(run(xml, target, impl)).toEqual({ ok: false, reason: 'no matching spots' });
+    }
+  });
+
+  it('excludes tie stops, including a stop that also starts a tie', () => {
+    const xml = bars(
+      note('C', 4, mark('2')),
+      note('C', 4, '', '<tie type="stop"/><tie type="start"/>'),
+      note('C', 4, '', '<tie type="start"/>'),
+    );
+    const result = apply(xml);
+    expect(result).toMatchObject({ spots: 1, applied: 1, skipped: 0 });
+    expect(byNote(result.xml)).toEqual([['2'], [], ['2']]);
+  });
+
+  it('excludes grace notes from both the picked pattern and matching spots', () => {
+    const grace = note('D', 4, mark('4'), '<grace/>').replace('<duration>4</duration>', '');
+    const xml = bars(
+      grace + note('C', 4, mark('2')),
+      grace + note(),
+      note('C', 4, '', '<grace/>').replace('<duration>4</duration>', ''),
+    );
+    expect(planSpread(xml, target, impl))
+      .toMatchObject({ ok: true, plan: { pattern: [60], fingers: { 60: '2' } }, spots: 1 });
+    const result = apply(xml);
+    expect(result).toMatchObject({ spots: 1, applied: 1, skipped: 0 });
+    expect(byNote(result.xml)).toEqual([['4'], ['2'], ['4'], ['2'], []]);
+  });
+
+  it('previews exactly the number applied and leaves unassigned pitches alone', () => {
+    const interval = (extra = '') =>
+      note('C', 4, extra) + note('E', 4, '', '<chord/>');
+    const xml = bars(interval(mark('1')), interval(), interval(mark('4')), interval(mark('1')));
+    const preview = planSpread(xml, target, impl);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) throw new Error(preview.reason);
+    const result = apply(xml);
+    expect(preview).toMatchObject({ spots: 3, applicable: 1, skipped: 1 });
+    expect(preview.applicable).toBe(result.applied);
+    expect(result).toMatchObject({ spots: 1, skipped: 1 });
+    expect(byNote(result.xml)).toEqual([['1'], [], ['1'], [], ['4'], [], ['1'], []]);
+  });
+
+  it('reads the first fingering across technical and notations elements', () => {
+    const marks = '<notations><technical><up-bow/></technical></notations>' +
+      `<notations><technical><fingering>3</fingering><fingering>5</fingering></technical></notations>`;
+    const result = apply(bars(note('C', 4, marks), note()));
+    expect(byNote(result.xml)).toEqual([['3', '5'], ['3']]);
+  });
+
+  it('rejects an unfingered picked spot and does not use a later digit', () => {
+    for (const extra of ['', mark('0'), mark('x') + mark('3')]) {
+      const xml = bars(note('C', 4, extra), note());
+      for (const run of [planSpread, spreadFingering]) {
+        expect(run(xml, target, impl))
+          .toEqual({ ok: false, reason: 'nothing fingered on that spot' });
+      }
+    }
+  });
+
+  it('returns failures for a missing target and parser errors without throwing', () => {
+    const broken: XmlImpl = {
+      parse: () => { throw new Error('parse error'); },
+      serialize: impl.serialize,
+    };
+    for (const run of [planSpread, spreadFingering]) {
+      expect(run(bars(note()), { ...target, midi: 61 }, impl))
+        .toEqual({ ok: false, reason: 'no such note' });
+      expect(run('<', target, broken)).toEqual({ ok: false, reason: 'parse error' });
+      expect(run('<parsererror/>', target, impl)).toEqual({ ok: false, reason: 'parse error' });
+    }
+  });
+
+  it('parses one document and serializes once when applying multiple digits', () => {
+    const xml = bars(
+      note('C', 4, mark('1')) + note('E', 4, mark('3'), '<chord/>'),
+      note() + note('E', 4, '', '<chord/>'),
+    );
+    let parses = 0;
+    let serializations = 0;
+    const counted: XmlImpl = {
+      parse: source => { parses += 1; return impl.parse(source); },
+      serialize: doc => { serializations += 1; return impl.serialize(doc); },
+    };
+    expect(planSpread(xml, target, counted)).toMatchObject({ ok: true, applicable: 2 });
+    expect(parses).toBe(1);
+    expect(serializations).toBe(0);
+    parses = 0;
+    expect(spreadFingering(xml, target, counted)).toMatchObject({ ok: true, applied: 2 });
+    expect(parses).toBe(1);
+    expect(serializations).toBe(1);
   });
 });

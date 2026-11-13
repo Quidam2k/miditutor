@@ -323,3 +323,100 @@ export function holdsOf(xml: string, impl?: XmlImpl): FingerTarget[] {
     return [];
   }
 }
+
+// #5947: apply the fingering of one spot (a note, interval or chord) to every other spot on the same
+// staff with exactly the same pitches. A note that already has a different finger is left alone.
+export interface SpreadPlan {
+  pattern: number[];
+  fingers: Record<number, Digit>;
+  matches: FingerTarget[][];
+}
+
+export type SpreadResult =
+  | { ok: true; xml: string; spots: number; applied: number; skipped: number; changes: (FingerTarget & { digit: Digit })[] }
+  | { ok: false; reason: string };
+
+function spreadDigit(note: Element): string | undefined {
+  for (const notation of children(note, 'notations')) {
+    for (const technical of children(notation, 'technical')) {
+      const fingering = child(technical, 'fingering');
+      if (fingering) return (fingering.textContent || '').trim();
+    }
+  }
+  return undefined;
+}
+
+function prepareSpread(xml: string, target: FingerTarget, impl?: XmlImpl) {
+  const parsed = parseScore(xml, impl);
+  if (typeof parsed === 'string') throw new Error(parsed);
+  const spots: { note: Element; at: FingerTarget }[][] = [];
+  walkNotes(parsed.part, Infinity, (note, at) => {
+    if (at.staff !== target.staff || child(note, 'grace') ||
+        children(note, 'tie').some(t => t.getAttribute('type') === 'stop')) return;
+    const spot = spots.find(s => s[0].at.measure === at.measure &&
+      Math.abs(s[0].at.onset - at.onset) < 1e-6);
+    if (spot) spot.push({ note, at });
+    else spots.push([{ note, at }]);
+  });
+  const picked = spots.find(s => s.some(({ at }) => at.measure === target.measure &&
+    Math.abs(at.onset - target.onset) < 1e-6 && at.midi === target.midi));
+  if (!picked) throw new Error('no such note');
+  const fingers: Record<number, Digit> = {};
+  for (const { note, at } of picked) {
+    const digit = spreadDigit(note);
+    if (digit !== undefined && /^[1-5]$/.test(digit)) fingers[at.midi] = digit as Digit;
+  }
+  if (!Object.keys(fingers).length) throw new Error('nothing fingered on that spot');
+  const pitches = (spot: typeof picked) => spot.map(n => n.at.midi).sort((a, b) => a - b);
+  const pattern = pitches(picked);
+  const matches = spots.filter(s => s !== picked && s.length === pattern.length &&
+    pitches(s).every((pitch, i) => pitch === pattern[i]));
+  if (!matches.length) throw new Error('no matching spots');
+  let skipped = 0;
+  const updates = matches.map(spot => {
+    const changes: { note: Element; at: FingerTarget; digit: Digit }[] = [];
+    for (const { note, at } of spot) {
+      const digit = fingers[at.midi];
+      if (digit === undefined) continue;
+      const existing = spreadDigit(note);
+      if (existing === undefined) changes.push({ note, at, digit });
+      else if (existing !== digit) skipped += 1;
+    }
+    return changes;
+  });
+  const plan: SpreadPlan = { pattern, fingers, matches: matches.map(s => s.map(n => n.at)) };
+  return { parsed, plan, updates, skipped };
+}
+
+/** Preview matching spots and newly applicable fingerings without changing the score. */
+export function planSpread(xml: string, target: FingerTarget, impl?: XmlImpl):
+  { ok: true; plan: SpreadPlan; spots: number; applicable: number; skipped: number } |
+  { ok: false; reason: string } {
+  try {
+    const { plan, updates, skipped } = prepareSpread(xml, target, impl);
+    return { ok: true, plan, spots: plan.matches.length,
+      applicable: updates.reduce((sum, changes) => sum + changes.length, 0), skipped };
+  } catch (error: unknown) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'parse error' };
+  }
+}
+
+export function spreadFingering(xml: string, target: FingerTarget, impl?: XmlImpl): SpreadResult {
+  try {
+    const { parsed, updates, skipped } = prepareSpread(xml, target, impl);
+    let spots = 0;
+    let applied = 0;
+    const done: (FingerTarget & { digit: Digit })[] = [];
+    for (const changes of updates) {
+      if (changes.length) spots += 1;
+      for (const { note, at, digit } of changes) {
+        edit(parsed.doc, note, digit);
+        applied += 1;
+        done.push({ ...at, digit });
+      }
+    }
+    return { ok: true, xml: parsed.impl.serialize(parsed.doc), spots, applied, skipped, changes: done };
+  } catch (error: unknown) {
+    return { ok: false, reason: error instanceof Error ? error.message : 'parse error' };
+  }
+}

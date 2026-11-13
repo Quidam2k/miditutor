@@ -209,6 +209,14 @@ export function NoteExercise() {
     saveRecord(next);
   }, []);
 
+  // #5948: time spent paused is not thinking time: the clock restarts when he resumes.
+  useEffect(
+    () => useMidiStore.subscribe((s, p) => {
+      if (p.pausedAt !== null && s.pausedAt === null) presentedAt.current = Date.now();
+    }),
+    [],
+  );
+
   // Subscribe to every note-on, as the interval drill does: only the first press answers.
   useEffect(() => {
     return useMidiStore.subscribe((state, prev) => {

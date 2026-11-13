@@ -47,7 +47,7 @@ import { ChordOverlay, type ChordRing, type ChordTag } from './ChordOverlay';
 import { chordChanges, movedBy } from '../../engine/ChordMoves';
 import { MixBuilder } from './MixBuilder';
 import { OriginalScan, useScanLayout } from './OriginalScan';
-import { holdsOf, setFingering, setHold, type Digit, type FingerTarget } from '../../../shared/fingering';
+import { holdsOf, planSpread, setFingering, setHold, spreadFingering, type Digit, type FingerTarget } from '../../../shared/fingering';
 import { ChordSymbol, chordSymbol, playsChord } from './chordSymbols';
 import {
   WrittenNote,
@@ -527,6 +527,8 @@ export function ScoreView() {
   const wheelAccRef = useRef({ at: 0, delta: 0, dir: 0 });
   const keyStripRef = useRef<HTMLDivElement>(null);
   const [fingerMsg, setFingerMsg] = useState('');
+  // #5947: the note he just fingered; "apply to all matching" spreads its spot's whole fingering.
+  const [spreadFrom, setSpreadFrom] = useState<{ target: FingerTarget; name: string } | null>(null);
   const resumeStepRef = useRef<number | null>(null);
   // #10134: the loop he had set when a fingering edit re-rendered the score.
   const resumeLoopRef = useRef<{ first: number; last: number } | null>(null);
@@ -923,6 +925,19 @@ export function ScoreView() {
   }, [piece.id, quietNew, keyFirst, fifths, setKeyGate]);
   const pieceLabelRef = useRef(piece.label);
   pieceLabelRef.current = piece.label;
+  // #5948: a pause never carries over to another piece.
+  useEffect(() => {
+    useMidiStore.getState().setPaused(false);
+    setSpreadFrom(null); // #5947: the note he just fingered belongs to the old piece
+  }, [piece.id]);
+  // #5948: Keep going's clock doesn't wait, so pausing ends the run (restart clears a pause; put it back).
+  const paused = useMidiStore((s) => s.pausedAt !== null);
+  useEffect(() => {
+    if (paused && keepRef.current) {
+      restart();
+      useMidiStore.getState().setPaused(true);
+    }
+  }, [paused]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Name notes as the page spells them: the written notes at the cursor first, then
   // the key signature, so a 4-flat piece says "Db5", never "C#5".
@@ -1203,6 +1218,7 @@ export function ScoreView() {
     const b = blockRef.current;
     if (b) setBlock(startBlocking(b.positions, useMidiStore.getState().held, b.need));
     setWrongCount(0);
+    useMidiStore.getState().setPaused(false); // #5948
     setLap(f.lap);
     lapStartRef.current = null;
     lastAdvanceRef.current = null;
@@ -2728,6 +2744,7 @@ export function ScoreView() {
     }
     const what = digit ? `Finger ${digit} on ${pick.name}` : `Finger removed from ${pick.name}`;
     reportEvent('fingering', { ...pick.target, digit, name: pick.name });
+    setSpreadFrom(digit ? { target: pick.target, name: pick.name } : null);
     const bridge = window.tutorBridge;
     if (!scanSlug || !bridge?.writeScore) {
       setFingerMsg(`${what} (this session only: the piece has no file to save to).`);
@@ -2740,6 +2757,39 @@ export function ScoreView() {
       .then((sent) => setFingerMsg(sent
         ? `${what}: saved; the library copy updates next time Review runs on the desk.`
         : `${what}: saved here (no scan review for this piece, so a re-sync from the desk will undo it).`))
+      .catch((err: unknown) => setFingerMsg(`${what}, but saving failed: ${err instanceof Error ? err.message : String(err)}`));
+  };
+
+  // #5947: every other spot with exactly these pitches (same staff, same octave) gets this spot's
+  // whole fingering; a note that already has a different finger is kept. There is no undo, so the
+  // button shows what it will do first.
+  const spreadPlan = useMemo(() => (spreadFrom ? planSpread(piece.xml, spreadFrom.target) : null), [spreadFrom, piece.xml]);
+  const spreadAll = () => {
+    const from = spreadFrom;
+    setSpreadFrom(null);
+    if (!from) return;
+    const result = spreadFingering(piece.xml, from.target);
+    if (!result.ok) {
+      setFingerMsg(`Couldn't apply to the others: ${result.reason}`);
+      return;
+    }
+    showEditedXml(result.xml);
+    const kept = result.skipped ? `, kept ${result.skipped} you fingered differently` : '';
+    const what = `Fingered ${result.applied} more note${result.applied === 1 ? '' : 's'} like ${from.name}${kept}`;
+    reportEvent('fingering-spread', { ...from.target, applied: result.applied, skipped: result.skipped, spots: result.spots });
+    const bridge = window.tutorBridge;
+    if (!scanSlug || !bridge?.writeScore) {
+      setFingerMsg(`${what} (this session only: the piece has no file to save to).`);
+      return;
+    }
+    const slug = scanSlug;
+    const append = scanLayout && bridge.reviewAppend ? bridge.reviewAppend : null;
+    void bridge
+      .writeScore(slug, result.xml)
+      .then(async () => {
+        for (const c of result.changes) await append?.(slug, { kind: 'fingering', measure: c.measure, staff: c.staff, onset: c.onset, midi: c.midi, digit: c.digit });
+      })
+      .then(() => setFingerMsg(`${what}: saved.`))
       .catch((err: unknown) => setFingerMsg(`${what}, but saving failed: ${err instanceof Error ? err.message : String(err)}`));
   };
 
@@ -3642,6 +3692,16 @@ export function ScoreView() {
             <span className="text-purple-300" data-testid="finger-msg">
               {fingerMsg}
             </span>
+          )}
+          {spreadFrom && spreadPlan?.ok && spreadPlan.applicable > 0 && (
+            <button
+              onClick={spreadAll}
+              className="rounded bg-purple-700 px-2 py-0.5 text-sm font-medium text-white hover:bg-purple-600"
+              title="Give every other spot with exactly these notes (same hand, same octave) this spot's fingering. A note you already fingered differently is left alone."
+              data-testid="spread-fingering"
+            >
+              Same fingering on {spreadPlan.applicable} more{spreadPlan.skipped ? ` (keeps ${spreadPlan.skipped} you fingered differently)` : ''}
+            </button>
           )}
           {pedalTip && (
             <span className="font-medium text-amber-300" data-testid="pedal-tip">

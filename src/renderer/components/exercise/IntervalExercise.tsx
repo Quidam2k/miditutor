@@ -117,6 +117,14 @@ export function IntervalExercise() {
     finish();
   }, [intervalNameIt, finish]);
 
+  // #5948: time spent paused is not thinking time: the clock restarts when he resumes.
+  useEffect(
+    () => useMidiStore.subscribe((s, p) => {
+      if (p.pausedAt !== null && s.pausedAt === null) useExerciseStore.setState({ presentedAt: Date.now() });
+    }),
+    [],
+  );
+
   // Subscribe to every note-on: two keys struck together can land in one React render,
   // and an effect on lastNoteOn would see only one.
   useEffect(() => {
