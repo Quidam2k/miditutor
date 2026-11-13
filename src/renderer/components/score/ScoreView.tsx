@@ -27,7 +27,7 @@ import { BinderPreview, type BinderPreviewData } from './BinderPreview';
 import { fingersLowToHigh, nextFinger, passLoopEdge, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, grewLabel, lapDone, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
-import { blockInput, blockLabel, current as blockPosition, groupPositions, showKeys, startBlocking, type BlockState, type BlockStep } from '../../engine/Blocking';
+import { BLOCK_WRONG_NOTE, blockHowTo, blockInput, blockLabel, current as blockPosition, pressTogether, groupPositions, showKeys, startBlocking, type BlockState, type BlockStep } from '../../engine/Blocking';
 import { BarInput } from './BarInput';
 import { centreShift, fitZoom } from '../../engine/stripFit';
 import { Popover } from './Popover';
@@ -535,6 +535,32 @@ type Feedback =
   | { kind: 'wrong'; played: number; expected: number[]; remaining: number[]; hint: string }
   | { kind: 'complete' };
 
+// One band per line of music a run of steps crosses, for one hand (Hand zones and Block, #6086).
+function bandsOf(
+  placeOf: (step: number, h: 'L' | 'R') => { x: number; top: number } | null,
+  space: number,
+  steps: number[],
+  h: 'L' | 'R',
+  index: number,
+): ZoneBand[] {
+  const bands: ZoneBand[] = [];
+  let run: { x0: number; x1: number; top: number } | null = null;
+  const flush = () => {
+    if (run) bands.push({ x: run.x0 - space, y: run.top - space, w: run.x1 - run.x0 + 2 * space, h: 6 * space, hand: h, index });
+  };
+  for (const st of steps) {
+    const pl = placeOf(st, h);
+    if (!pl) continue;
+    if (run && Math.abs(pl.top - run.top) < 1 && pl.x >= run.x0) run.x1 = Math.max(run.x1, pl.x);
+    else {
+      flush();
+      run = { x0: pl.x, x1: pl.x, top: pl.top };
+    }
+  }
+  flush();
+  return bands;
+}
+
 export function ScoreView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const osmdRef = useRef<OpenSheetMusicDisplay | null>(null);
@@ -688,6 +714,11 @@ export function ScoreView() {
   chunkRef.current = chunk;
   // #5657c blocking: his loop pressed one hand position at a time, as a chord, no timing.
   const [block, setBlockState] = useState<BlockState | null>(null);
+  // #6086: Block's how-to card; opens by itself the first time he turns Block on.
+  const [blockTipOpen, setBlockTipOpen] = useState(false);
+  const [blockBands, setBlockBands] = useState<ZoneBand[] | null>(null);
+  const blockTipRef = useRef(false);
+  blockTipRef.current = blockTipOpen;
   const blockRef = useRef<BlockState | null>(null);
   const setBlock = useCallback((b: BlockState | null) => {
     blockRef.current = b;
@@ -1528,6 +1559,49 @@ export function ScoreView() {
     reportEvent('block', { on: true, firstBar: bars.first, lastBar: bars.last, positions: positions.length, at: i });
   }, [moveCursorTo, setBlock, blockSteps]);
 
+  // A step's first head for one hand: its x, and the top line of its staff, px in the layer.
+  const makePlacer = useCallback(() => {
+    const osmd = osmdRef.current!;
+    const container = containerRef.current!;
+    const f = followerRef.current!;
+    const layerRect = layerRef.current!.getBoundingClientRect();
+    const space = 10 * osmd.Zoom;
+    const placeOf = (step: number, h: 'L' | 'R') => {
+      const bar = f.steps[step]?.measure;
+      const note = (stepNotesRef.current[step] ?? []).find((n) => !n.IsGraceNote && (staffOf(n) === 0 ? 'R' : 'L') === h);
+      if (bar === undefined || !note) return null;
+      const svg = pageSvgOf(osmd, container, bar - 1);
+      const gm = osmd.GraphicSheet.MeasureList[bar - 1]?.[staffOf(note)] as unknown as OsmdMeasure | undefined;
+      const top = gm?.ParentStaffLine?.PositionAndShape.AbsolutePosition.y;
+      const g = osmd.EngravingRules.GNote(note as never) as unknown as OsmdGraphicalNote | undefined;
+      const el = g?.getSVGGElement?.();
+      const head = el?.querySelector('.vf-notehead') ?? el;
+      if (!svg || top === undefined || !head) return null;
+      const r = head.getBoundingClientRect();
+      return { x: r.left + r.width / 2 - layerRect.left, top: svg.getBoundingClientRect().top - layerRect.top + top * space };
+    };
+    return { placeOf, space };
+  }, []);
+
+  // #6086: shade the notes of the position he is on (both hands), so "this position" is visible.
+  const blockCur = block && !block.done ? block.positions[block.at] : null;
+  useEffect(() => {
+    if (!blockCur || !osmdRef.current || !containerRef.current || !layerRef.current || !followerRef.current || status !== 'ready' || view !== 'score') {
+      setBlockBands(null);
+      return;
+    }
+    try {
+      const { placeOf, space } = makePlacer();
+      const steps: number[] = [];
+      for (let i = blockCur.firstStep; i <= blockCur.lastStep; i++) steps.push(i);
+      const hands = new Set(blockCur.fingers.map((n) => n.hand));
+      setBlockBands([...hands].flatMap((h) => bandsOf(placeOf, space, steps, h, 0)));
+    } catch (err) {
+      console.warn('[block] could not shade the position', err);
+      setBlockBands(null);
+    }
+  }, [blockCur, status, layoutTick, stepsVersion, view, zoneTick, makePlacer]);
+
   // #11354 item 4 (JP homework 11/6: "see which fingers are moving where and how to set things
   // down so that you can reach the most notes possible without fishing"): each hand's positions
   // shaded on its staff, and a mark where a hand jumps 5+ keys with no rest before it.
@@ -1543,23 +1617,7 @@ export function ScoreView() {
     }
     try {
       const handOf = (n: OsmdNote) => (staffOf(n) === 0 ? 'R' : 'L');
-      const layerRect = layer.getBoundingClientRect();
-      const space = 10 * osmd.Zoom;
-      // A step's first head for one hand: its x, and the top line of its staff, px in the layer.
-      const placeOf = (step: number, h: 'L' | 'R') => {
-        const bar = f.steps[step]?.measure;
-        const note = (stepNotesRef.current[step] ?? []).find((n) => !n.IsGraceNote && handOf(n) === h);
-        if (bar === undefined || !note) return null;
-        const svg = pageSvgOf(osmd, container, bar - 1);
-        const gm = osmd.GraphicSheet.MeasureList[bar - 1]?.[staffOf(note)] as unknown as OsmdMeasure | undefined;
-        const top = gm?.ParentStaffLine?.PositionAndShape.AbsolutePosition.y;
-        const g = osmd.EngravingRules.GNote(note as never) as unknown as OsmdGraphicalNote | undefined;
-        const el = g?.getSVGGElement?.();
-        const head = el?.querySelector('.vf-notehead') ?? el;
-        if (!svg || top === undefined || !head) return null;
-        const r = head.getBoundingClientRect();
-        return { x: r.left + r.width / 2 - layerRect.left, top: svg.getBoundingClientRect().top - layerRect.top + top * space };
-      };
+      const { placeOf, space } = makePlacer();
       const steps = blockSteps(1, Number.MAX_SAFE_INTEGER);
       const bands: ZoneBand[] = [];
       const marks: ZoneMark[] = [];
@@ -1569,21 +1627,7 @@ export function ScoreView() {
         const zs = handZones(steps, h);
         count[h] = zs.length;
         for (const z of zs) {
-          // One band per line of music the position runs across.
-          let run: { x0: number; x1: number; top: number } | null = null;
-          const flush = () => {
-            if (run) bands.push({ x: run.x0 - space, y: run.top - space, w: run.x1 - run.x0 + 2 * space, h: 6 * space, hand: h, index: z.index });
-          };
-          for (const st of z.steps) {
-            const pl = placeOf(st, h);
-            if (!pl) continue;
-            if (run && Math.abs(pl.top - run.top) < 1 && pl.x >= run.x0) run.x1 = Math.max(run.x1, pl.x);
-            else {
-              flush();
-              run = { x0: pl.x, x1: pl.x, top: pl.top };
-            }
-          }
-          flush();
+          bands.push(...bandsOf(placeOf, space, z.steps, h, z.index));
         }
         const rests = new Set<number>();
         stepRestsRef.current.forEach((rs, i) => {
@@ -2473,6 +2517,15 @@ export function ScoreView() {
 
   // #5657c: while blocking, every press and release is judged against the hand position.
   const blockOn = !!block;
+  // #6086: the how-to card shows itself the first time Block turns on.
+  useEffect(() => {
+    if (blockOn && !useSettingsStore.getState().blockTipSeen) setBlockTipOpen(true);
+    if (!blockOn) setBlockTipOpen(false);
+  }, [blockOn]);
+  const closeBlockTip = useCallback(() => {
+    setBlockTipOpen(false);
+    useSettingsStore.getState().setPrefs({ blockTipSeen: true });
+  }, []);
   useEffect(() => {
     if (!blockOn) return;
     return useMidiStore.subscribe((state, prev) => {
@@ -2495,10 +2548,12 @@ export function ScoreView() {
         return;
       }
       noteCredit(null);
+      // His first clean hold means he has the idea: the card can go.
+      if (blockTipRef.current) closeBlockTip();
       if (event === 'next') moveCursorTo(next.positions[next.at].firstStep);
       if (event === 'done' && useSettingsStore.getState().celebrateChime) void playLapChime();
     });
-  }, [blockOn, setBlock, flashWrong, noteCredit, moveCursorTo, noteName]);
+  }, [blockOn, setBlock, flashWrong, noteCredit, moveCursorTo, noteName, closeBlockTip]);
 
   // Key releases, for the length of a fermata on the last note. A wrong note shows
   // only while its key is down (#9630), so the score doesn't fill up with red.
@@ -3265,6 +3320,17 @@ export function ScoreView() {
               {block ? 'Block: on' : 'Block'}
             </button>
           )}
+          {loopBars && !chunk && block && (
+            <button
+              onClick={() => setBlockTipOpen((o) => !o)}
+              className={btn}
+              title="How Block works"
+              aria-label="How Block works"
+              data-testid="block-help"
+            >
+              ?
+            </button>
+          )}
       </>
     ),
     prev: (
@@ -3846,6 +3912,17 @@ export function ScoreView() {
       {showOriginal && scanLayout && scanSlug && status === 'ready' && (
         <OriginalScan slug={scanSlug} layout={scanLayout} bar={measure} />
       )}
+      {status === 'ready' && block && blockTipOpen && (
+        <div className="rounded-md border border-yellow-500/60 bg-yellow-950/40 px-3 py-2 text-sm text-yellow-100" data-testid="block-tip">
+          <div className="font-semibold text-yellow-300">How Block works</div>
+          {blockHowTo(block.positions.length).map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+          <button onClick={closeBlockTip} className="mt-1 rounded bg-yellow-500 px-3 py-0.5 font-medium text-gray-950 hover:bg-yellow-400" data-testid="block-tip-got-it">
+            Got it
+          </button>
+        </div>
+      )}
       {status === 'ready' && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded-md bg-gray-900/60 px-3 py-2 text-sm">
           <label className="flex items-center gap-1 text-gray-400">
@@ -3855,8 +3932,8 @@ export function ScoreView() {
           {blockPos ? (
             // #5657c: the whole position, held together; hidden with the keys once he has it.
             <span className="text-gray-400" data-testid="next-notes">
-              Hold together:{' '}
-              <span className="font-mono font-semibold text-indigo-300">{blockHints ? namesOf(blockPos.keys) : '…'}</span>
+              Press together:{' '}
+              <span className="font-mono font-semibold text-indigo-300">{blockHints ? pressTogether(blockPos, noteName) : '…'}</span>
             </span>
           ) : (
             <span className="text-gray-400" data-testid="next-notes">
@@ -3921,6 +3998,11 @@ export function ScoreView() {
           {block && (
             <span className="font-semibold text-yellow-300" data-testid="block-status">
               {blockLabel(block)}
+            </span>
+          )}
+          {block && !block.done && block.spoiled && (
+            <span className="font-semibold text-red-300" data-testid="block-wrong">
+              {BLOCK_WRONG_NOTE}
             </span>
           )}
           {/* His live tempo, big enough to read from the bench (#8979). */}
@@ -4046,6 +4128,7 @@ export function ScoreView() {
             } : undefined}
           />
           {zones && <ZoneOverlay bands={zones.bands} marks={zones.marks} />}
+          {blockBands && <ZoneOverlay bands={blockBands} marks={[]} prefix="block" tint="#facc15" />}
           {chords && <ChordOverlay rings={chords.rings} tags={chords.tags} />}
           <PlayedOverlay marks={marks} bands={bands} />
           {wave && <WaveOverlay key={wave.key} dots={wave.dots} peak={wave.peak} />}

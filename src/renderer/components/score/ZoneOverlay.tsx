@@ -20,10 +20,12 @@ export interface ZoneMark {
 
 const TINTS = { R: ['#38bdf8', '#a78bfa'], L: ['#34d399', '#fbbf24'] } as const;
 
-export function ZoneOverlay({ bands, marks }: { bands: ZoneBand[]; marks: ZoneMark[] }) {
+// #6086: Block mode reuses this layer for the current position, in one yellow tint
+// (prefix 'block' keeps its test ids apart from the Hand zones overlay).
+export function ZoneOverlay({ bands, marks, prefix = 'zone', tint }: { bands: ZoneBand[]; marks: ZoneMark[]; prefix?: string; tint?: string }) {
   if (bands.length === 0 && marks.length === 0) return null;
   return (
-    <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" data-testid="zone-overlay">
+    <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible" data-testid={`${prefix}-overlay`}>
       {bands.map((b, i) => (
         <rect
           key={`z-${i}`}
@@ -32,9 +34,9 @@ export function ZoneOverlay({ bands, marks }: { bands: ZoneBand[]; marks: ZoneMa
           width={b.w}
           height={b.h}
           rx={3}
-          fill={TINTS[b.hand][b.index % 2]}
-          fillOpacity={0.16}
-          data-testid="zone-band"
+          fill={tint ?? TINTS[b.hand][b.index % 2]}
+          fillOpacity={tint ? 0.28 : 0.16}
+          data-testid={`${prefix}-band`}
           data-hand={b.hand}
         />
       ))}

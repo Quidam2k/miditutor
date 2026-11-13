@@ -224,18 +224,44 @@ export function current(s: BlockState): Position | null {
   return s.done ? null : s.positions[s.at] ?? null;
 }
 
-/** Describe progress without timing information. */
+/** Describe progress without timing information, in words a first-timer gets (#6086). */
 export function blockLabel(s: BlockState): string {
   if (s.done) {
-    return `Blocking: all ${s.positions.length} positions held clean`;
+    return `All ${s.positions.length} positions held clean`;
   }
 
   const position = s.positions[s.at]!;
   const bars = position.firstBar === position.lastBar
     ? `bar ${position.firstBar}`
     : `bars ${position.firstBar}–${position.lastBar}`;
+  const left = s.need - s.clean;
+  const holds = s.clean === 0
+    ? `hold it ${s.need} times`
+    : `hold it ${left} more time${left === 1 ? '' : 's'}`;
 
-  return `Blocking: position ${s.at + 1}/${s.positions.length} · ${bars} · hold ${s.clean}/${s.need}`;
+  return `Position ${s.at + 1} of ${s.positions.length} (${bars}): ${holds}`;
+}
+
+/** The notes to press together, by hand: "Left: C3 G3 · Right: E4 G4". */
+export function pressTogether(p: Position, name: (midi: number) => string): string {
+  const side = (hand: 'L' | 'R') => {
+    const notes = p.fingers.filter(n => n.hand === hand).map(n => n.midi).sort((a, b) => a - b);
+    return notes.length ? `${hand === 'L' ? 'Left' : 'Right'}: ${notes.map(name).join(' ')}` : '';
+  };
+  return [side('L'), side('R')].filter(Boolean).join(' · ');
+}
+
+/** After a wrong note only that attempt is void; holds already counted stay. */
+export const BLOCK_WRONG_NOTE =
+  'Wrong note: let go of everything, then press the whole position again. Holds you already got still count.';
+
+/** The how-to card, plain words (#6086). */
+export function blockHowTo(positions: number): string[] {
+  return [
+    'A position is the notes one hand reaches without moving.',
+    `Press every note of the position together, hold it, then let go. Three clean holds and it moves to the next position. It walks the whole loop (${positions} position${positions === 1 ? '' : 's'}). No timing.`,
+    BLOCK_WRONG_NOTE,
+  ];
 }
 
 /** Show hints until a clean hold, or when assistance is needed. */

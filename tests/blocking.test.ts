@@ -5,6 +5,9 @@ import {
   BLOCK_HOLDS,
   blockInput,
   blockLabel,
+  blockHowTo,
+  BLOCK_WRONG_NOTE,
+  pressTogether,
   current,
   groupPositions,
   showKeys,
@@ -479,7 +482,7 @@ describe('blocking helpers', () => {
     const state = startBlocking(positions, new Set());
 
     expect(blockLabel(state))
-      .toBe('Blocking: position 1/7 · bar 3 · hold 0/3');
+      .toBe('Position 1 of 7 (bar 3): hold it 3 times');
 
     const ranged = {
       ...state,
@@ -490,11 +493,13 @@ describe('blocking helpers', () => {
       ),
     };
     expect(blockLabel(ranged))
-      .toBe('Blocking: position 2/7 · bars 3–4 · hold 1/3');
+      .toBe('Position 2 of 7 (bars 3–4): hold it 2 more times');
     expect(blockLabel({ ...ranged, done: true }))
-      .toBe('Blocking: all 7 positions held clean');
+      .toBe('All 7 positions held clean');
+    expect(blockLabel({ ...ranged, clean: 2 }))
+      .toBe('Position 2 of 7 (bars 3–4): hold it 1 more time');
     expect(blockLabel({ ...state, need: 5 }))
-      .toBe('Blocking: position 1/7 · bar 3 · hold 0/5');
+      .toBe('Position 1 of 7 (bar 3): hold it 5 times');
   });
 
   it('shows hints initially, while hesitating, or during a spoiled attempt', () => {
@@ -506,5 +511,36 @@ describe('blocking helpers', () => {
     expect(showKeys(practiced, true)).toBe(true);
     expect(showKeys({ ...practiced, spoiled: true }, false)).toBe(true);
     expect(showKeys({ ...practiced, spoiled: true }, true)).toBe(true);
+  });
+
+  it('names the keys to press together by hand', () => {
+    const p = {
+      ...position([64, 67], 1),
+      fingers: [
+        { midi: 55, hand: 'L' as const },
+        { midi: 48, hand: 'L' as const },
+        { midi: 67, hand: 'R' as const },
+        { midi: 64, hand: 'R' as const },
+      ],
+    };
+    const name = (m: number) => `n${m}`;
+    expect(pressTogether(p, name)).toBe('Left: n48 n55 · Right: n64 n67');
+    expect(pressTogether({ ...p, fingers: p.fingers.filter((f) => f.hand === 'R') }, name)).toBe('Right: n64 n67');
+  });
+
+  it('says the same thing about a wrong note on the card and the status line, and the engine agrees', () => {
+    expect(blockHowTo(8).join(' ')).toContain(BLOCK_WRONG_NOTE);
+    expect(blockHowTo(8).join(' ')).toContain('whole loop (8 positions)');
+    // Truth: a wrong note voids that attempt only; holds already counted stay.
+    const positions = [position([60, 62], 1), position([64], 2)];
+    let state = startBlocking(positions, new Set());
+    state = blockInput(state, new Set([60, 62]), 62).state;
+    state = blockInput(state, new Set(), undefined).state;
+    expect(state.clean).toBe(1);
+    state = blockInput(state, new Set([60]), 60).state;
+    state = blockInput(state, new Set([60, 62, 61]), 61).state;
+    expect(state.spoiled).toBe(true);
+    const spoiledHold = blockInput(state, new Set([60, 62, 61]), undefined);
+    expect(spoiledHold.state.clean).toBe(1);
   });
 });

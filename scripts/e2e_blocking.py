@@ -177,17 +177,37 @@ def main():
         check("initial clean zero", block.get("clean") == 0)
         check("initially armed", block.get("armed") is True)
         check(
-            "status shows position 1/2",
-            "position 1/2" in page.get_by_test_id("block-status").inner_text(),
+            "status shows position 1 of 2, with the bars and holds to go",
+            page.get_by_test_id("block-status").inner_text() == "Position 1 of 2 (bar 1): hold it 3 times",
         )
+        # #6086: first turn-on explains itself; "Got it" persists; "?" brings it back.
+        tip = page.get_by_test_id("block-tip")
+        check("how-to card shows on first turn-on", tip.count() == 1)
+        tip_text = tip.inner_text() if tip.count() else ""
+        check("card says what a position is", "notes one hand reaches without moving" in tip_text)
+        check("card says it walks the whole loop", "whole loop (2 positions)" in tip_text)
+        check("card says what a wrong note does", "let go of everything, then press the whole position again" in tip_text)
+        check("current position is shaded on the score", page.get_by_test_id("block-band").count() >= 1)
         check(
             "says hold C-F together",
-            page.get_by_test_id("next-notes").inner_text().strip() == "Hold together: F4 + E4 + D4 + C4",
+            page.get_by_test_id("next-notes").inner_text().strip() == "Press together: Right: C4 D4 E4 F4",
         )
         green = page.locator('[data-testid="keyboard-strip"]').inner_text()
         check("keys carry fingers 1-4", all(d in green for d in "1234"))
 
+        page.get_by_test_id("block-tip-got-it").click()
+        time.sleep(0.3)
+        check("Got it closes the card", page.get_by_test_id("block-tip").count() == 0)
+        page.get_by_test_id("block-help").click()
+        time.sleep(0.3)
+        check("? re-opens the card", page.get_by_test_id("block-tip").count() == 1)
+
         hold(first)
+        check("first clean hold closes the card", page.get_by_test_id("block-tip").count() == 0)
+        check(
+            "status counts holds down",
+            page.get_by_test_id("block-status").inner_text() == "Position 1 of 2 (bar 1): hold it 2 more times",
+        )
         hold(first)
         block = screen().get("block") or {}
         check("two clean holds", block.get("clean") == 2)
@@ -198,9 +218,15 @@ def main():
         check("partial hold keeps clean at two", block.get("clean") == 2)
 
         send("noteon", 61)
-        time.sleep(0.02)
+        time.sleep(0.3)
+        check(
+            "wrong note says what to do",
+            "let go of everything, then press the whole position again"
+            in page.get_by_test_id("block-wrong").inner_text(),
+        )
         send("noteoff", 61)
         hold(first)
+        check("message gone after a fresh attempt", page.get_by_test_id("block-wrong").count() == 0)
         block = screen().get("block") or {}
         check("spoiled hold keeps clean at two", block.get("clean") == 2)
         events = block_events()
@@ -227,7 +253,7 @@ def main():
         check("block done", block.get("done") is True)
         check(
             "status shows all positions held clean",
-            "all 2 positions held clean"
+            "All 2 positions held clean"
             in page.get_by_test_id("block-status").inner_text(),
         )
         check(
