@@ -4,6 +4,7 @@ import {
   binderSpreads,
   paperPageStarts,
   confirmedLines,
+  binderWarning, // #6083
 } from '../src/shared/binderPrint';
 
 const layout = {
@@ -129,5 +130,17 @@ describe('confirmedLines', () => {
     }]) {
       expect(confirmedLines(malformed, events)).toEqual({ confirmed: 0, total: 0 });
     }
+  });
+});
+
+describe('binderWarning (#6083)', () => {
+  it('has no banner for a verified score', () => {
+    expect(binderWarning(true, 0, 0)).toBe('');
+  });
+  it('warns in plain words, and says it still prints', () => {
+    expect(binderWarning(false, 0, 0)).toBe('Not verified yet. You can still print it, but check it against your paper first.');
+  });
+  it('adds the confirmed lines when there are some', () => {
+    expect(binderWarning(false, 3, 9)).toContain('(3 of 9 lines confirmed)');
   });
 });

@@ -89,3 +89,10 @@ export function confirmedLines(layout: unknown, eventsJsonl: string): { confirme
   }
   return { confirmed: Math.min(confirmed.size, total), total };
 }
+
+/** #6083: the amber line above the print preview; '' for a verified score (no banner). */
+export function binderWarning(verified: boolean, confirmed: number, total: number): string {
+  if (verified) return '';
+  const lines = total > 0 && confirmed > 0 ? ` (${confirmed} of ${total} lines confirmed)` : '';
+  return `Not verified yet${lines}. You can still print it, but check it against your paper first.`;
+}

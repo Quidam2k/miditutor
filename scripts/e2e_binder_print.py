@@ -74,14 +74,31 @@ def run(pieces: Path) -> None:
         page.wait_for_timeout(1500)
         page.get_by_role("button", name="Score", exact=True).click()
 
+        # #6083: an unverified piece warns in a preview and prints only from Print
         pick(page, "Aura Lee")
         page.locator("[data-testid=print-binder]").click()
-        msg = note(page)
-        check(msg.startswith("Not verified yet"), "an unverified piece is refused, and says why", msg)
-        check(not (pieces / "print" / f"{UNVERIFIED}-binder.pdf").exists(), "no PDF for the unverified piece")
+        page.wait_for_selector("[data-testid=binder-preview]", timeout=60000)
+        warn = page.locator("[data-testid=binder-preview-warning]").inner_text()
+        check(warn.startswith("Not verified yet"), "an unverified piece warns in the preview", warn)
+        check(page.locator("[data-testid=binder-preview-frame]").count() == 1, "the preview shows the pages")
+        check(not (pieces / "print" / f"{UNVERIFIED}-binder.pdf").exists(), "nothing printed before Print is pressed")
+        page.locator("[data-testid=binder-preview-cancel]").click()
+        page.wait_for_selector("[data-testid=binder-preview]", state="detached", timeout=5000)
+        check(not (pieces / "print" / f"{UNVERIFIED}-binder.pdf").exists(), "Cancel prints nothing")
+        page.locator("[data-testid=print-binder]").click()
+        page.wait_for_selector("[data-testid=binder-preview]", timeout=60000)
+        page.locator("[data-testid=binder-preview-print]").click()
+        page.wait_for_function(
+            "() => /Saved|failed/.test(document.querySelector('[data-testid=print-binder-note]')?.innerText ?? '')",
+            timeout=120000)
+        check((pieces / "print" / f"{UNVERIFIED}-binder.pdf").exists(), "the unverified piece prints after Print is pressed")
 
         pick(page, "Sorcerer")
         page.locator("[data-testid=print-binder]").click()
+        page.wait_for_selector("[data-testid=binder-preview]", timeout=120000)
+        check(page.locator("[data-testid=binder-preview-warning]").count() == 0, "a verified piece has no warning")
+        check(not (pieces / "print" / f"{VERIFIED}-binder.pdf").exists(), "verified piece: nothing printed before Print")
+        page.locator("[data-testid=binder-preview-print]").click()
         page.wait_for_function(
             "() => /Saved|failed/.test(document.querySelector('[data-testid=print-binder-note]')?.innerText ?? '')",
             timeout=120000)

@@ -23,6 +23,7 @@ import { PedalCoach } from '../../engine/PedalCoach';
 import { rememberRef, resolvePieceId } from './lastPiece';
 import { orderChordFingers } from './chordFingers';
 import { renderBinderHtml } from './binderRender';
+import { BinderPreview, type BinderPreviewData } from './BinderPreview';
 import { fingersLowToHigh, nextFinger, passLoopEdge, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, grewLabel, lapDone, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
@@ -901,10 +902,13 @@ export function ScoreView() {
     ? piece.id.slice(5).replace(/\.(musicxml|xml|mxl)$/i, '')
     : /^[a-z0-9][a-z0-9-]*$/.test(piece.label) ? piece.label : null;
   const scanLayout = useScanLayout(scanSlug);
-  // #5723: print for his binder, only once he has verified the score in Review.
+  // #5723: print for his binder; #6083: preview first, and an unverified score warns instead of blocking.
   const [printing, setPrinting] = useState(false);
   const [printNote, setPrintNote] = useState('');
   useEffect(() => setPrintNote(''), [piece.id]);
+  const [binderPreview, setBinderPreview] = useState<BinderPreviewData | null>(null);
+  useEffect(() => setBinderPreview(null), [piece.id]);
+  // #6083: the click only renders and shows the preview; nothing prints until Print inside it.
   const printForBinder = async () => {
     const bridge = window.tutorBridge;
     if (!scanSlug || !bridge?.binderInfo || !bridge.printBinder) return;
@@ -912,21 +916,36 @@ export function ScoreView() {
     setPrintNote('');
     try {
       const info = await bridge.binderInfo(scanSlug);
-      if (piece.trust?.status !== 'verified') {
-        // Lines aren't confirmed one by one any more (#5729): he submits the piece in Review.
-        setPrintNote('Not verified yet. Submit it in Review first.');
-        reportEvent('binder_print', { piece: scanSlug, refused: 'unverified', confirmed: info.confirmed, total: info.total });
-        return;
-      }
       const { html, pages } = await renderBinderHtml({ musicxml: piece.xml, title: piece.label, pageStarts: info.pageStarts });
-      const out = await bridge.printBinder(scanSlug, html);
-      setPrintNote(`${pages} page${pages === 1 ? '' : 's'}, ${pages * 2} sides (two-sided). Saved ${out.pdf}`);
-      reportEvent('binder_print', { piece: scanSlug, pages, sides: pages * 2, pdf: out.pdf, paperPages: info.pageStarts.length });
+      const verified = piece.trust?.status === 'verified';
+      setBinderPreview({ html, pages, confirmed: info.confirmed, total: info.total, verified });
+      reportEvent('binder_print', { piece: scanSlug, preview: true, pages, ...(verified ? {} : { warned: 'unverified', confirmed: info.confirmed, total: info.total }) });
     } catch (err) {
       setPrintNote(`Print failed: ${(err as Error).message}`);
     } finally {
       setPrinting(false);
     }
+  };
+  const confirmBinderPrint = async () => {
+    const bridge = window.tutorBridge;
+    if (!scanSlug || !bridge?.printBinder || !binderPreview) return;
+    setPrinting(true);
+    try {
+      const out = await bridge.printBinder(scanSlug, binderPreview.html);
+      const { pages } = binderPreview;
+      setPrintNote(`${pages} page${pages === 1 ? '' : 's'}, ${pages * 2} sides (two-sided). Saved ${out.pdf}`);
+      reportEvent('binder_print', { piece: scanSlug, pages, sides: pages * 2, pdf: out.pdf, ...(binderPreview.verified ? {} : { unverified: true }) });
+      setBinderPreview(null);
+    } catch (err) {
+      setPrintNote(`Print failed: ${(err as Error).message}`);
+      setBinderPreview(null);
+    } finally {
+      setPrinting(false);
+    }
+  };
+  const cancelBinderPrint = () => {
+    reportEvent('binder_print_cancel', { piece: scanSlug });
+    setBinderPreview(null);
   };
   const [showOriginal, setShowOriginal] = useState(false);
   // #10258: what's drawn. A finger edit changes piece.xml but has already changed the drawing in
@@ -3704,12 +3723,15 @@ export function ScoreView() {
             disabled={status !== 'ready' || printing}
             className={btn}
             data-testid="print-binder"
-            title="Each page on both sides of its own sheet, so every turn shows two pages; every bar numbered. Only once verified in Review."
+            title="Each page on both sides of its own sheet, so every turn shows two pages; every bar numbered. Shows a preview first; warns if the score isn't verified in Review."
           >
             {printing ? 'Printing…' : 'Print for binder'}
           </button>
         )}
         {printNote && <span className="text-xs text-gray-300" data-testid="print-binder-note">{printNote}</span>}
+        {binderPreview && (
+          <BinderPreview data={binderPreview} busy={printing} onPrint={() => void confirmBinderPrint()} onCancel={cancelBinderPrint} />
+        )}
         {mixing && mixPlan && easyPiece && harderPiece && (
           <MixBuilder
             title={piece.label}
