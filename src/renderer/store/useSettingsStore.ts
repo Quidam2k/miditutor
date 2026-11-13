@@ -84,6 +84,8 @@ interface SettingsState {
   celebrateFinale: boolean;
   /** #5566: a very faint tick the moment a lap stops being clean. */
   missSound: boolean;
+  /** #6047: how loud the miss sound is, 0-100 (100 = its loudest). */
+  missVolume: number;
   /** #5624: the notes to play now on a scrap of staff just above the keyboard. */
   miniStaff: boolean;
   /** #5630: the wheel over a note on the score changes its finger. Off: only over a key. */
@@ -127,7 +129,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -180,6 +182,7 @@ export const useSettingsStore = create<SettingsState>()(
       celebrateWave: false,
       celebrateFinale: true,
       missSound: true,
+      missVolume: 100,
       miniStaff: true,
       scoreWheelFingers: false,
       keyWheelFingers: true,

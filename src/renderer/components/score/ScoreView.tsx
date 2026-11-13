@@ -707,7 +707,7 @@ export function ScoreView() {
     const now = performance.now();
     if (!useSettingsStore.getState().missSound || !missGateOpen(lastMissAtRef.current, now)) return undefined;
     lastMissAtRef.current = now;
-    return playMissSound();
+    return playMissSound(useSettingsStore.getState().missVolume);
   }, []);
   // #5566: a wrong note or a stray spoils the lap.
   const spoilLap = useCallback(() => {
@@ -719,6 +719,7 @@ export function ScoreView() {
     else if (first) reportEvent('lap-spoiled', { sound, audio: undefined, first });
   }, [thudMiss]);
   const missSound = useSettingsStore((s) => s.missSound);
+  const missVolume = useSettingsStore((s) => s.missVolume);
   const backwardTargets = useSettingsStore((s) => s.backwardTargets);
   const setBackwardTargets = useSettingsStore((s) => s.setBackwardTargets);
   const [bands, setBands] = useState<Band[]>([]);
@@ -3476,10 +3477,25 @@ export function ScoreView() {
           data-stay
           className="ml-1 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-300 hover:bg-gray-700"
           title="Play the miss sound once, to hear how loud it is"
-          onClick={() => void playMissSound()}
+          onClick={() => void playMissSound(missVolume)}
         >
           Test
         </button>
+        <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="How loud the miss sound is. Turn it up until you can hear it over your playing, then press Test">
+          Miss volume
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={missVolume}
+            data-testid="miss-volume"
+            aria-label="Miss volume"
+            className="w-24"
+            onChange={(e) => useSettingsStore.getState().setPrefs({ missVolume: Number(e.target.value) })}
+          />
+          <span className="w-8 text-xs text-gray-400" data-testid="miss-volume-value">{missVolume}%</span>
+        </label>
       </>
     ),
     scoreWheelFingers: (

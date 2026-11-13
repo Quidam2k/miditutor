@@ -90,38 +90,88 @@ export async function playFanfare(size: 'small' | 'medium' | 'big'): Promise<voi
 }
 
 /**
- * #11561: the miss sound. #5566's tick (70 ms of pink noise at -30 dB, 22 dB under the notes
- * at -8 dB) was too quiet to hear at the piano. Now a short low thud, a dropping drum hit
- * rather than a held pitch, so it never sounds like part of the music; about as loud as a
- * played note at mp (not startling). The level is a constant so a test can pin it.
+ * #6047: the miss sound. #11561's -10 dB thud (A2, 110 Hz, 0.18 s) was inaudible on his TV: TV and
+ * laptop speakers can't reproduce much under ~150 Hz, and the piano's mid-range masked it. Now a short
+ * mid-range knock, a band-passed noise click plus a quick falling tone with nothing under ~250 Hz,
+ * so any speaker plays it and it never sounds like a pitch in the music. `db` is the level of the
+ * mix at full Miss volume; the slider scales it down from there (missVolumeDb). Constants so tests pin them.
  */
-export const MISS_SOUND = { db: -10, note: 'A2', seconds: 0.18 } as const;
+export const MISS_SOUND = {
+  db: 0,
+  seconds: 0.12,
+  noise: { hz: 1800, q: 0.7, db: -4, decay: 0.07 },
+  tone: { hz: 520, endHz: 300, db: -8, decay: 0.1 },
+  lowCutHz: 250,
+} as const;
+
+/** Miss volume is a 0-100 slider; 100 is the loudest the sound goes. */
+export const MISS_VOLUME_DEFAULT = 100;
+
+/** Slider percent -> dB under full level (100 -> 0 dB, 50 -> -6 dB); null = muted at 0. */
+export function missVolumeDb(percent: number): number | null {
+  const p = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : MISS_VOLUME_DEFAULT));
+  return p <= 0 ? null : 20 * Math.log10(p / 100);
+}
 
 /** #5799: every wrong note thuds, but keys struck within this of the last thud share it (a chord is one). */
 export const MISS_FLOOR_MS = 120;
 export const missGateOpen = (lastAt: number, now: number) => now - lastAt >= MISS_FLOOR_MS;
 
-let missThud: Tone.MembraneSynth | null = null;
+/** The miss voice on whatever audio context is current (live, or Tone.Offline's while measuring). */
+function buildMissVoice() {
+  const out = new Tone.Volume(MISS_SOUND.db).toDestination();
+  const { noise: n, tone: t } = MISS_SOUND;
+  const noise = new Tone.NoiseSynth({
+    noise: { type: 'white' },
+    envelope: { attack: 0.001, decay: n.decay, sustain: 0, release: 0.02 },
+    volume: n.db,
+  });
+  noise.chain(new Tone.Filter({ type: 'bandpass', frequency: n.hz, Q: n.q }), out);
+  const tone = new Tone.Synth({
+    oscillator: { type: 'square' },
+    envelope: { attack: 0.001, decay: t.decay, sustain: 0, release: 0.02 },
+    volume: t.db,
+  });
+  tone.chain(new Tone.Filter({ type: 'highpass', frequency: MISS_SOUND.lowCutHz }), out);
+  return {
+    fire(at: number, percent: number) {
+      const db = missVolumeDb(percent);
+      out.mute = db === null;
+      if (db !== null) out.volume.value = MISS_SOUND.db + db;
+      noise.triggerAttackRelease(n.decay, at);
+      tone.triggerAttackRelease(t.hz, t.decay, at);
+      tone.frequency.setValueAtTime(t.hz, at);
+      tone.frequency.exponentialRampToValueAtTime(t.endHz, at + t.decay);
+    },
+  };
+}
 
-/** Plays the miss thud; returns the audio context's state ('running' means it was heard). */
-export async function playMissSound(): Promise<string> {
+let missVoice: ReturnType<typeof buildMissVoice> | null = null;
+
+/** Plays the miss sound at `percent` of full; returns the audio context's state ('running' means it was heard). */
+export async function playMissSound(percent: number = MISS_VOLUME_DEFAULT): Promise<string> {
   try {
     await initAudio();
     const ctx = Tone.getContext();
     if (ctx.state !== 'running') await ctx.resume();
-    missThud ??= new Tone.MembraneSynth({
-      pitchDecay: 0.03,
-      octaves: 2,
-      envelope: { attack: 0.002, decay: MISS_SOUND.seconds, sustain: 0, release: 0.05 },
-      volume: MISS_SOUND.db,
-    }).toDestination();
-    missThud.triggerAttackRelease(MISS_SOUND.note, MISS_SOUND.seconds, Tone.now());
+    missVoice ??= buildMissVoice();
+    missVoice.fire(Tone.now(), percent);
     return ctx.state;
   } catch (err) {
     console.warn('[miss] could not play:', err);
     return 'error';
   }
 }
+
+/**
+ * Renders the miss sound offline (no speakers) and returns its mono samples, so scripts/measure_miss_sound.py
+ * can measure peak, RMS and spectrum of the real graph. Also on window.__missSoundProbe in the renderer.
+ */
+export async function renderMissSound(percent: number = MISS_VOLUME_DEFAULT): Promise<{ sampleRate: number; samples: number[] }> {
+  const buffer = await Tone.Offline(() => buildMissVoice().fire(0, percent), 0.4);
+  return { sampleRate: buffer.sampleRate, samples: Array.from(buffer.getChannelData(0)) };
+}
+if (typeof window !== 'undefined') (window as unknown as { __missSoundProbe?: typeof renderMissSound }).__missSoundProbe = renderMissSound;
 
 export function isInitialized(): boolean {
   return initialized;
