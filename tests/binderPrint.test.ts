@@ -5,6 +5,7 @@ import {
   paperPageStarts,
   confirmedLines,
   binderWarning, // #6083
+  pageStartsFromIndexes, // #6121
 } from '../src/shared/binderPrint';
 
 const layout = {
@@ -164,5 +165,19 @@ describe('binder sheet fill (#6090)', () => {
     expect(HOLE_IN).toBeGreaterThanOrEqual(0.55);
     expect(HOLE_IN + EDGE_IN).toBeLessThan(2);
     expect(FOLIO_IN).toBeGreaterThan(0);
+  });
+});
+
+describe('OSMD page starts for pieces with no usable layout (#6121)', () => {
+  it('turns each first-bar index into 1-based starts', () => {
+    expect(pageStartsFromIndexes([0, 11, 24])).toEqual([1, 12, 25]);
+    expect(pageStartsFromIndexes([0])).toEqual([1]);
+  });
+  it('gives nothing (old OSMD paging) when a page start is unreadable or out of order', () => {
+    expect(pageStartsFromIndexes([])).toEqual([]);
+    expect(pageStartsFromIndexes([0, undefined])).toEqual([]);
+    expect(pageStartsFromIndexes([0, 5, 5])).toEqual([]);
+    expect(pageStartsFromIndexes([3, 9])).toEqual([]); // must open on bar 1
+    expect(pageStartsFromIndexes([0, -1])).toEqual([]);
   });
 });

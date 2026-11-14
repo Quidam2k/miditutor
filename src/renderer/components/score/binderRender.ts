@@ -1,5 +1,5 @@
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
-import { binderSides, EDGE_IN, FOLIO_IN, HOLE_IN, gapForFill } from '../../../shared/binderPrint';
+import { binderSides, EDGE_IN, FOLIO_IN, HOLE_IN, gapForFill, pageStartsFromIndexes } from '../../../shared/binderPrint';
 import { orderChordFingers } from './chordFingers';
 import { drawRangeByPosition } from './drawRange';
 
@@ -48,6 +48,30 @@ const FINGER_INK = '#1e3a8a';
 const WIDE_PX = 1400;
 const NARROW_PX = 760;
 
+/** OSMD's own Letter paging: the first bar (counted by position, as the layouts do) of each page. */
+async function osmdPageStarts(div: HTMLDivElement, musicxml: string): Promise<number[]> {
+  div.replaceChildren();
+  div.style.width = WIDE_PX + 'px';
+  const osmd = new OpenSheetMusicDisplay(div, {
+    autoResize: false,
+    backend: 'svg',
+    autoBeam: true,
+    pageFormat: 'Letter_P',
+    newSystemFromXML: true,
+    drawMeasureNumbers: true,
+    drawMeasureNumbersOnlyAtSystemStart: true,
+    drawPartNames: false,
+    drawFingerings: true,
+    cursorsOptions: [],
+  });
+  await osmd.load(musicxml);
+  osmd.render();
+  const firsts = (osmd.GraphicSheet?.MusicPages ?? []).map(
+    (page) => page.MusicSystems?.[0]?.GraphicalMeasures?.[0]?.[0]?.parentSourceMeasure?.measureListIndex);
+  div.replaceChildren();
+  return pageStartsFromIndexes(firsts);
+}
+
 /** Render duplicated score pages as a complete Letter print document. */
 export async function renderBinderHtml(opts: {
   musicxml: string;
@@ -63,8 +87,12 @@ export async function renderBinderHtml(opts: {
     document.body.appendChild(div);
     // With his paper's page starts, each paper page is drawn on its own (just its bars) and
     // scaled to fit one sheet, so the print pages match his paper. Without, OSMD pages it.
-    const ranges = pageStarts.length
-      ? pageStarts.map((first, k) => [first, k + 1 < pageStarts.length ? pageStarts[k + 1] - 1 : Number.MAX_SAFE_INTEGER])
+    // No usable scan layout (#6121): take OSMD's own Letter paging as the page starts, so those pieces
+    // go through the same range draw and sheet fill. They follow OSMD's pages, not his paper's lines.
+    const synthetic = pageStarts.length === 0;
+    const starts = synthetic ? await osmdPageStarts(div, musicxml) : pageStarts;
+    const ranges = starts.length
+      ? starts.map((first, k) => [first, k + 1 < starts.length ? starts[k + 1] - 1 : Number.MAX_SAFE_INTEGER])
       : [null];
     const svgs: SVGSVGElement[] = [];
     for (const [k, range] of ranges.entries()) {
@@ -122,9 +150,11 @@ export async function renderBinderHtml(opts: {
         osmd = await draw(hi);
         // Whatever height is still spare goes between the lines, re-drawn until the shape fits the sheet.
         let gap = osmd.EngravingRules.MinimumDistanceBetweenSystems;
+        // A short last page of an OSMD-paged piece must not have its few lines blown apart.
+        const cap = synthetic && systemsOf(osmd) < 3 ? gap * 2 : Number.POSITIVE_INFINITY;
         for (let pass = 0; pass < 3; pass++) {
           const { w, h } = sizeOf();
-          const next = gapForFill(w, h, systemsOf(osmd), gap);
+          const next = Math.min(gapForFill(w, h, systemsOf(osmd), gap), cap);
           if (Math.abs(next - gap) < 0.25) break;
           gap = next;
           osmd.EngravingRules.MinimumDistanceBetweenSystems = gap;

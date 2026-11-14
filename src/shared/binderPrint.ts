@@ -50,6 +50,18 @@ export function binderSpreads(pages: number): [number, number][] {
   return spreads;
 }
 
+/** First bars (1-based) of each page from OSMD's own paging, given each page's first bar index (0-based); [] if any is unreadable. */
+export function pageStartsFromIndexes(indexes: unknown[]): number[] {
+  const starts: number[] = [];
+  for (const index of indexes) {
+    if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) return [];
+    const start = index + 1;
+    if (start <= (starts[starts.length - 1] ?? 0)) return [];
+    starts.push(start);
+  }
+  return starts[0] === 1 ? starts : [];
+}
+
 /** Read the first measure of each paper page in system order. */
 export function paperPageStarts(layout: unknown): number[] {
   const systems = layoutSystems(layout);
