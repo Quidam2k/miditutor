@@ -22,6 +22,7 @@ import {
 import { TrustMap, parseTrust, trustFor, verifiedHolds } from './shared/trust';
 import { contentSha256 } from './main/contentSha';
 import { confirmedLines, paperPageStarts } from './shared/binderPrint';
+import { parseNotebook } from './shared/lessonNotebook';
 import { sendToPaper } from './main/binderPaper';
 import { SavedMix, VersionMap, applyTrust, groupOf, mixPlanOf, parseMixes, parseVersions, withMixes } from './shared/versions';
 
@@ -95,6 +96,15 @@ const readScoreFile = async (filePath: string): Promise<string> => {
 // survives a restart. Not ~/Documents: macOS privacy-gates that folder for an
 // unsigned app, and the listing came back empty on Pinocchio.
 // MIDITUTOR_PIECES_DIR points tests at a scratch folder.
+/** #6112: the lesson notebook entries; an absent or unreadable file is an empty notebook. */
+async function readNotebook() {
+  try {
+    return parseNotebook(await fs.readFile(path.join(piecesDir(), 'lesson-notebook.jsonl'), 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
 const piecesDir = () =>
   process.env.MIDITUTOR_PIECES_DIR || path.join(app.getPath('home'), 'MidiTutor Pieces');
 
@@ -441,6 +451,8 @@ const startTutorApi = () => {
   ipcMain.handle('pieces:binderInfo', (_e, slug: string) => binderInfo(slug));
   ipcMain.handle('pieces:printBinder', (_e, slug: string, html: string) => printBinder(slug, html));
   // JP's newest lesson entry, written by scripts/homework_sync.py; null until the first sync (#5058).
+  // #6112: the lesson notebook (lesson-notebook.jsonl, written by scripts/lesson_notebook_add.py), newest first.
+  ipcMain.handle('notebook:get', readNotebook);
   ipcMain.handle('homework:get', async () => {
     try {
       return JSON.parse(await fs.readFile(path.join(piecesDir(), 'homework.json'), 'utf8'));
@@ -504,6 +516,7 @@ const startTutorApi = () => {
     invite,
     autoInvite: () => autoInvite.enabled,
     keepAwake,
+    notebook: readNotebook,
   });
   ipcMain.on('tutor:note', (_e, ev) => {
     tutorApi?.onNote(ev);

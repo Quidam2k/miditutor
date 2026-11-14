@@ -157,6 +157,17 @@ describe('TutorApi', () => {
     expect(saved).toEqual([['Stormy Sea', musicxml]]);
   });
 
+  it('serves the lesson notebook on request only (#6112), empty when there is none', async () => {
+    expect(await (await request('/notebook')).json()).toEqual({ notes: [] });
+    await api.stop();
+    const notes = [{ date: '2026-11-06', summary: 'Block your fingers.' }];
+    api = new TutorApi({ port: 0, token: 't', allowInject: true, sendToRenderer: () => undefined,
+      notebook: async () => notes });
+    base = `http://127.0.0.1:${await api.start()}`;
+    expect(await (await request('/notebook')).json()).toEqual({ notes });
+    expect((await fetch(`${base}/notebook`)).status).toBe(401);
+  });
+
   it('accepts a photo-only piece', async () => {
     const photo = 'data:image/jpeg;base64,/9j/4AAQ';
     expect((await request('/piece', 'POST', { title: 'Photo only', photo })).status).toBe(200);

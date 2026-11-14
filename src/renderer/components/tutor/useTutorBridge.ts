@@ -10,6 +10,7 @@ import type { PieceTrust } from '../../../shared/trust';
 import type { PieceGroupRef } from '../../../shared/versions';
 import type { MixChoice } from '../../../shared/mix';
 import type { Homework } from '../../engine/Homework';
+import type { LessonNote } from '../../../shared/lessonNotebook';
 
 // Wires the renderer to the tutor API in the main process: every note that
 // goes through the store's single ingest path is reported up, and commands
@@ -29,6 +30,7 @@ interface TutorBridge {
   reviewAppend?: (slug: string, event: Record<string, unknown>) => Promise<unknown>;
   saveMix?: (slug: string, mix: { harder: string; choice: MixChoice[]; musicxml: string; trust: PieceTrust }) => Promise<{ file: string }>;
   getHomework?: () => Promise<Homework | null>;
+  getNotebook?: () => Promise<LessonNote[]>;
   onCommand: (cb: (cmd: RendererCommand) => void) => () => void;
   toggleRecording?: () => Promise<RecordingStatus>;
   recordingStatus?: () => Promise<RecordingStatus>;

@@ -123,6 +123,8 @@ export class TutorApi {
     autoInvite?: () => boolean;
     /** #5522: `keepAwake` in /state = the display-sleep blocker is held right now. */
     keepAwake?: { readonly held: boolean };
+    /** #6112: GET /notebook, the lesson notebook, read only on request (never pushed to the tutor). */
+    notebook?: () => Promise<unknown>;
   }) {
     this.now = opts.now ?? Date.now;
   }
@@ -358,6 +360,8 @@ export class TutorApi {
         invite: this.opts.invite?.state() ?? null, lastNoteAt: this.opts.invite?.lastNoteAt ?? null,
         autoInvite: this.opts.autoInvite?.() ?? false,
         keepAwake: this.opts.keepAwake?.held ?? null });
+    } else if (route === 'GET /notebook') {
+      send({ notes: this.opts.notebook ? await this.opts.notebook() : [] });
     } else if (route === 'GET /events' || route === 'GET /gestures') {
       const since = this.number(url, 'since', 0);
       const limit = this.number(url, 'limit', 200, 2000, 1);

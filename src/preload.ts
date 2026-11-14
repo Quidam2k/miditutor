@@ -24,6 +24,8 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   printBinder: (slug: string, html: string) => ipcRenderer.invoke('pieces:printBinder', slug, html),
   // ~/MidiTutor Pieces/homework.json (JP's newest lesson entry), or null.
   getHomework: () => ipcRenderer.invoke('homework:get'),
+  // #6112: lesson notebook entries, newest first ([] when none).
+  getNotebook: () => ipcRenderer.invoke('notebook:get'),
   // Take recorder (#9574): toggle, current status, and the piano audio rendered after Stop.
   toggleRecording: () => ipcRenderer.invoke('recorder:toggle'),
   recordingStatus: () => ipcRenderer.invoke('recorder:status'),
