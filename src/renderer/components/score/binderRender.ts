@@ -21,7 +21,7 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-/** Fingerings bold black, so they read apart from the (normal-weight) bar numbers. */
+/** Fingerings navy bold sans-serif, so they never read as the (plain serif black) bar numbers, even on a grey print (#6107). */
 function inkFingerings(osmd: OpenSheetMusicDisplay) {
   for (const staves of osmd.GraphicSheet.MeasureList) {
     for (const measure of staves) {
@@ -31,14 +31,18 @@ function inkFingerings(osmd: OpenSheetMusicDisplay) {
           if (!(node instanceof SVGElement)) continue;
           for (const element of [node, ...node.querySelectorAll('*')]) {
             if (!(element instanceof SVGElement)) continue;
-            element.style.fill = '#000000';
+            element.style.fill = FINGER_INK;
             element.style.fontWeight = 'bold';
+            element.style.fontFamily = 'Arial, Helvetica, sans-serif';
           }
         }
       }
     }
   }
 }
+
+/** Navy, not one of the app's hint colours (those are blanked in print). */
+const FINGER_INK = '#1e3a8a';
 
 // Draw widths (px): wide keeps his paper's line breaks; no narrower than this or bars get crowded.
 const WIDE_PX = 1400;
@@ -80,7 +84,9 @@ export async function renderBinderHtml(opts: {
           pageFormat: range ? 'Endless' : 'Letter_P',
           pageBackgroundColor: '#FFFFFF',
           newSystemFromXML: true,
-          measureNumberInterval: 1,
+          // Bar numbers only at the start of each line (#6107), like his paper; fingering has its own ink.
+          drawMeasureNumbers: true,
+          drawMeasureNumbersOnlyAtSystemStart: true,
           drawPartNames: false,
           defaultColorMusic: '#000000',
           coloringEnabled: false,

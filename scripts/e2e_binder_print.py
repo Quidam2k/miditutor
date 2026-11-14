@@ -115,10 +115,12 @@ def run(pieces: Path) -> None:
     low = html.lower()
     left = [c for c in HINT_COLOURS if c in low]
     check(not left, "no hint colour left in the print", ",".join(left))
-    # Every bar numbered: bar numbers are SVG text; all of 2..69 should appear somewhere.
-    texts = set(re.findall(r">\s*(\d{1,3})\s*</text>", html))
-    missing = [n for n in range(2, 70) if str(n) not in texts]
-    check(len(missing) <= 3, "every bar carries its number (2..69)", f"missing={missing[:12]}")
+    # #6107: bar numbers only at the start of each line (Sorcerer: 4+5+4 = 13 lines). Bar numbers are SVG
+    # text above 5 (fingers are 1-5); a number on every bar would be ~60 of them.
+    nums = [int(n) for n in re.findall(r">\s*(\d{1,3})\s*</text>", html) if int(n) > 5]
+    check(0 < len(set(nums)) <= 16, "bar numbers only at line starts (about 13 lines)", f"distinct={len(set(nums))}")
+    # Fingerings carry their own ink + font, apart from the bar numbers.
+    check("rgb(30, 58, 138)" in html and "arial" in html.lower(), "fingerings are navy sans-serif")
     # Paper page breaks: page 2 must open on bar 23 and page 3 on bar 51.
     pages = re.split(r'<div class="side(?: back)?" data-page="\d+">', html)[1:]
     firsts = []
