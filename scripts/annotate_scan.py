@@ -548,7 +548,10 @@ def _add_direction(measure, note, direction):
         index = children.index(note)
     signature = _signature(direction, ignore_id=True)
     previous = index - 1
-    while previous >= 0 and _name(children[previous]) in ("harmony", "direction"):
+    # Walk back over everything that takes no time (print, attributes, other
+    # directions...) so an identical mark earlier in the bar counts; stop at
+    # anything that moves the cursor.
+    while previous >= 0 and _name(children[previous]) not in ("note", "backup", "forward"):
         if _signature(children[previous], ignore_id=True) == signature:
             return False
         previous -= 1
