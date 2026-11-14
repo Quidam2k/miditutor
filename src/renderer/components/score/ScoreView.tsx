@@ -9,6 +9,7 @@ import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen } from '../../audio/AudioEngine';
+import { emitRep } from '../../store/useRepStore';
 import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
@@ -1327,6 +1328,12 @@ export function ScoreView() {
     syncUi();
   }, [moveCursorTo, centerCursor, syncUi, trackChord]);
 
+  // #6122: Restart pressed by hand starts a rep (restart() itself also runs internally).
+  const restartByHand = useCallback(() => {
+    restart();
+    emitRep('start');
+  }, [restart]);
+
   const buildFollower = useCallback((osmd: OpenSheetMusicDisplay) => {
     const { steps, notes, ringing, ties, chords, restBefore, rests } = extractSteps(osmd, handRef.current, holdsOf(drawnXml));
     stepRestRef.current = restBefore;
@@ -1441,6 +1448,7 @@ export function ScoreView() {
     moveCursorTo(first);
     setMeasure(steps[first].measure);
     setMarks([]);
+    emitRep('start'); // #6122: the count-in is about to run
     reportEvent('keep', { on: true, bpm, startMs: run.startMs, firstBar: steps[first].measure, lastBar: steps[last].measure, looping });
 
     const tick = () => {
@@ -1451,6 +1459,7 @@ export function ScoreView() {
       const prefs = useSettingsStore.getState();
       if (t >= lapEndMs(r, steps)) {
         const lap = closeLap(r, steps, prefs.keepStepUp, piece.targetBpm);
+        emitRep('end'); // #6122
         setKeepLast(lapLabel(lap));
         reportEvent('keep', { ...lap });
         if (lap.nextBpm !== lap.bpm) {
@@ -1805,6 +1814,7 @@ export function ScoreView() {
   // them and the loop starts a bar earlier. A wrong lap just doesn't count.
   // Returns true when the note that wrapped it shouldn't be judged (grew or stopped).
   const chunkLap = useCallback(() => {
+    emitRep('end'); // #6122: a rep (one lap) is done
     const wrong = lapWrongRef.current;
     lapWrongRef.current = 0;
     const c = chunkRef.current;
@@ -2337,6 +2347,7 @@ export function ScoreView() {
         // The chunk grew a bar: the cursor jumped back, so this note was not aimed at it.
         if (settled.kind === 'loop' && chunkLap()) return;
       } else if (settled?.kind === 'complete') {
+        emitRep('end'); // #6122: the whole piece, once
         paintHeldTies(settled.from, f.steps.length - 1);
       }
       const idx = f.index;
@@ -2454,6 +2465,7 @@ export function ScoreView() {
           break;
         }
         case 'complete': {
+          emitRep('end'); // #6122
           paintHeldTies(result.from, f.steps.length - 1);
           const fresh = freshRef.current;
           const begun = lapStartRef.current;
@@ -3902,7 +3914,7 @@ export function ScoreView() {
             </span>
           )}
           <button
-            onClick={restart}
+            onClick={restartByHand}
             disabled={status !== 'ready'}
             className="rounded-md bg-indigo-600 px-3 py-1 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
           >
@@ -4062,7 +4074,7 @@ export function ScoreView() {
           {/* Focused so the trackball click or Enter both go again (#5382). */}
           <button
             autoFocus
-            onClick={restart}
+            onClick={restartByHand}
             className="rounded-md bg-green-600 px-5 py-2 text-lg font-semibold text-white hover:bg-green-500"
             data-testid="target-reached-restart"
           >

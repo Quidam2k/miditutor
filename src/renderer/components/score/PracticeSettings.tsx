@@ -84,7 +84,7 @@ export function PracticeSettings({ btn }: { btn: string }) {
           <Check
             k="wristReminder"
             label="Wrist reminder"
-            title="Off by default. When on, after 20 seconds with no notes, one quiet line on screen reminds you to check your wrists and hand position. Never while you are playing; no sound."
+            title="Off by default. When on, one quiet line on screen reminds you to check your wrists and hand position: at the start of a rep (a lap of your loop, or the piece once), at its end after your hands are still for 2 seconds, or after a minute with no notes. One line per pause. Never while you are playing; no sound."
           />
           <button
             onClick={() => { setNotes(true); setOpen(false); }}
