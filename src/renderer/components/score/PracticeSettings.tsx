@@ -78,6 +78,11 @@ export function PracticeSettings({ btn }: { btn: string }) {
             label="Key first"
             title="Before a fresh tune or Sight-read piece starts, play the key signature's sharps or flats (any octave, any order), so you've worked out the key before the first note. Also in Practice > Notes with Keys on."
           />
+          <Check
+            k="wristReminder"
+            label="Wrist reminder"
+            title="Off by default. When on, after 20 seconds with no notes, one quiet line on screen reminds you to check your wrists and hand position. Never while you are playing; no sound."
+          />
           <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Keep going</div>
           <Check k="keepClick" label="Click on the beat" title="Keep going plays a click on every beat (higher on the first beat of the bar), like a metronome at your back" />
           <Check

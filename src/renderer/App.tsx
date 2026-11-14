@@ -12,6 +12,7 @@ import { ReviewView } from './components/review/ReviewView';
 import { TopClock } from './components/TopClock';
 import { readStartupSnapshot } from './components/score/sessionSnapshot';
 import { PauseButton, PauseBanner } from './components/PauseButton';
+import { WristReminder } from './components/WristReminder';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useMidiStore } from './store/useMidiStore';
 import { useTutorStore } from './store/useTutorStore';
@@ -117,6 +118,7 @@ export function App() {
       </header>
 
       <PauseBanner />
+      <WristReminder />
 
       {/* Main content */}
       <main ref={mainRef} className="flex-1 min-h-0 overflow-y-auto flex flex-col items-center p-6 gap-6">

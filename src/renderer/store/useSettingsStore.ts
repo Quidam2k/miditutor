@@ -55,6 +55,8 @@ interface SettingsState {
   parkedDrills: Record<string, SessionSnapshot>;
   /** #10254: the wheel off a note in Strip moves the other way. */
   reverseWheel: boolean;
+  /** #6105: opt-in, off by default: after a 20 s pause in playing, one on-screen line to check wrists and hand position. */
+  wristReminder: boolean;
   /** #5516: a key this many ms after the strike that finished a step is a graze (0 = off). */
   grazeMs: number;
   /** #5516: keys softer than this velocity are strays (0 = off). */
@@ -131,7 +133,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -168,6 +170,7 @@ export const useSettingsStore = create<SettingsState>()(
       freshSeen: [],
       parkedDrills: {},
       reverseWheel: false,
+      wristReminder: false,
       grazeMs: GRAZE_MS,
       minVelocity: 0,
       keepAwake: true,
