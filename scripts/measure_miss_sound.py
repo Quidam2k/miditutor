@@ -2,6 +2,7 @@
 
     python scripts/measure_miss_sound.py [--cdp http://localhost:9359]
 
+Also prints the A-weighted level of each miss sound (click, buzz, knock) at 100% and 200% against the app's piano note (#5799).
 "before" is the old graph (#11561: MembraneSynth A2, pitchDecay .03, octaves 2, 0.18 s, -10 dB), rebuilt in a
 plain headless page from node_modules/tone. "after" is the real app code: the packaged app's
 window.__missSoundProbe (AudioEngine.renderMissSound), reached over --cdp. Prints peak and RMS dBFS and the
@@ -50,8 +51,15 @@ def stats(label: str, r: dict) -> dict:
     y = np.fft.irfft(spec_hi, n=len(x))
     tv_peak = float(np.max(np.abs(y)))
     db = lambda v: 20 * math.log10(v) if v > 0 else float("-inf")  # noqa: E731
-    out = {"peak": db(peak), "rms": db(rms), "above250": hi * 100, "tv_peak": db(tv_peak)}
-    print(f"{label:<22} peak {out['peak']:7.1f} dBFS | rms {out['rms']:7.1f} dBFS | >=250 Hz {out['above250']:5.1f}% of energy | peak with <250 Hz removed {out['tv_peak']:7.1f} dBFS")
+    # A-weighted level (how loud it SOUNDS: the ear is most sensitive near 3 kHz), over the sound's first 0.25 s.
+    f = np.maximum(freqs, 1.0)
+    f2 = f**2
+    ra = (12194**2 * f2**2) / ((f2 + 20.6**2) * np.sqrt((f2 + 107.7**2) * (f2 + 737.9**2)) * (f2 + 12194**2))
+    a_gain = ra / ra[np.argmin(np.abs(freqs - 1000))]
+    xa = np.fft.irfft(np.fft.rfft(x) * a_gain, n=len(x))[: int(sr * 0.25)]
+    arms = float(np.sqrt(np.mean(xa**2))) if len(xa) else 0.0
+    out = {"peak": db(peak), "rms": db(rms), "above250": hi * 100, "tv_peak": db(tv_peak), "arms": db(arms)}
+    print(f"{label:<26} peak {out['peak']:6.1f} | rms {out['rms']:6.1f} | A-weighted rms {out['arms']:6.1f} dBFS | >=250 Hz {out['above250']:5.1f}% | peak <250 Hz removed {out['tv_peak']:6.1f}")
     return out
 
 
@@ -72,12 +80,12 @@ def main() -> int:
         app = p.chromium.connect_over_cdp(args.cdp)
         ap_page = app.contexts[0].pages[0]
         res = {}
-        for pct in (100, 50):
-            res[pct] = stats(f"after, Miss volume {pct}%", ap_page.evaluate(f"() => window.__missSoundProbe({pct})"))
-    gain = res[100]["rms"] - old["rms"]
-    print(f"\nRMS change at 100%: {gain:+.1f} dB; peak with <250 Hz removed (what a TV plays): "
-          f"before {old['tv_peak']:.1f} -> after {res[100]['tv_peak']:.1f} dBFS ({res[100]['tv_peak'] - old['tv_peak']:+.1f} dB)")
-    print(f"vs the app's own piano note: after rms {res[100]['rms'] - piano['rms']:+.1f} dB re piano rms")
+        for kind in ("click", "buzz", "knock"):
+            for pct in (100, 200):
+                res[(kind, pct)] = stats(f"{kind}, Miss volume {pct}%", ap_page.evaluate(f"() => window.__missSoundProbe({pct}, '{kind}')"))
+    print("\nHow loud it sounds (A-weighted rms) against the app's own piano note C4, and against the #6047 knock at 100%:")
+    for (kind, pct), r in res.items():
+        print(f"  {kind:<6} {pct:>3}%: {r['arms'] - piano['arms']:+6.1f} dB re piano, {r['arms'] - res[('knock', 100)]['arms']:+6.1f} dB re old knock")
     return 0
 
 

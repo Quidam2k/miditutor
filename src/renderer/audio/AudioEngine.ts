@@ -90,26 +90,72 @@ export async function playFanfare(size: 'small' | 'medium' | 'big'): Promise<voi
 }
 
 /**
- * #6047: the miss sound. #11561's -10 dB thud (A2, 110 Hz, 0.18 s) was inaudible on his TV: TV and
- * laptop speakers can't reproduce much under ~150 Hz, and the piano's mid-range masked it. Now a short
- * mid-range knock, a band-passed noise click plus a quick falling tone with nothing under ~250 Hz,
- * so any speaker plays it and it never sounds like a pitch in the music. `db` is the level of the
- * mix at full Miss volume; the slider scales it down from there (missVolumeDb). Constants so tests pin them.
+ * #6047: the miss sound. #11561's -10 dB thud (A2, 110 Hz) was inaudible on his TV, so #6047 made it a
+ * mid-range knock (a 520 -> 300 Hz tone and a noise click). That was still masked by the piano: 300-500 Hz
+ * is where a piano's loudest notes are, and the knock sat at full scale already, so the slider had nowhere to go.
+ * #5799 (his words: "it needs to be more obvious, maybe choose a different sound"): three sounds, chosen with
+ * Test, two of them outside the piano's main range and short, bright and percussive, in the 2-4 kHz band where
+ * the ear is most sensitive and a piano has little energy:
+ *   click: a woodblock tock (two inharmonic partials near 2.4 and 3.3 kHz and a band-passed noise tick)
+ *   buzz:  two quick square-wave blips near 2.2 kHz
+ *   knock: the #6047 mid-range knock, for a TV that plays nothing above it
+ * The voice ends in a soft clip (tanh), so Miss volume can go past 100% (up to +6 dB) and saturates instead of cracking.
+ * `db` is the level at full (100%) Miss volume. Constants, so tests pin them.
  */
-export const MISS_SOUND = {
-  db: 0,
-  seconds: 0.12,
-  noise: { hz: 1800, q: 0.7, db: -4, decay: 0.07 },
-  tone: { hz: 520, endHz: 300, db: -8, decay: 0.1 },
-  lowCutHz: 250,
-} as const;
+import { MISS_KIND_DEFAULT, type MissKind } from './missKinds';
+export { MISS_KINDS, MISS_KIND_DEFAULT, MISS_KIND_LABEL } from './missKinds';
+export type { MissKind } from './missKinds';
 
-/** Miss volume is a 0-100 slider; 100 is the loudest the sound goes. */
+interface MissTone { hz: number; endHz: number; db: number; decay: number; at: number; type: 'square' | 'sine' | 'triangle' }
+interface MissSpec {
+  db: number;
+  seconds: number;
+  /** A band-passed noise tick; null for none. */
+  noise: { hz: number; q: number; db: number; decay: number } | null;
+  tones: readonly MissTone[];
+  /** Nothing below this reaches the output (the tones are high-passed here). */
+  lowCutHz: number;
+}
+
+export const MISS_SOUNDS: Record<MissKind, MissSpec> = {
+  click: {
+    db: -3,
+    seconds: 0.12,
+    noise: { hz: 3200, q: 1.1, db: -2, decay: 0.05 },
+    tones: [
+      { hz: 2400, endHz: 2300, db: -2, decay: 0.09, at: 0, type: 'square' },
+      { hz: 3300, endHz: 3200, db: -5, decay: 0.07, at: 0, type: 'square' },
+    ],
+    lowCutHz: 1500,
+  },
+  buzz: {
+    db: -6,
+    seconds: 0.18,
+    noise: null,
+    tones: [
+      { hz: 2200, endHz: 1900, db: -2, decay: 0.06, at: 0, type: 'square' },
+      { hz: 2200, endHz: 1900, db: -2, decay: 0.06, at: 0.1, type: 'square' },
+    ],
+    lowCutHz: 1200,
+  },
+  knock: {
+    db: 0,
+    seconds: 0.12,
+    noise: { hz: 1800, q: 0.7, db: -4, decay: 0.07 },
+    tones: [{ hz: 520, endHz: 300, db: -8, decay: 0.1, at: 0, type: 'square' }],
+    lowCutHz: 250,
+  },
+};
+/** The #6047 knock, kept under its old name. */
+export const MISS_SOUND = MISS_SOUNDS.knock;
+
+/** Miss volume is a 0-200 slider: 100 is the sound's own full level, up to 200 (+6 dB, soft-clipped) is headroom past it. */
 export const MISS_VOLUME_DEFAULT = 100;
+export const MISS_VOLUME_MAX = 200;
 
-/** Slider percent -> dB under full level (100 -> 0 dB, 50 -> -6 dB); null = muted at 0. */
+/** Slider percent -> dB re full level (100 -> 0 dB, 50 -> -6 dB, 200 -> +6 dB); null = muted at 0. */
 export function missVolumeDb(percent: number): number | null {
-  const p = Math.min(100, Math.max(0, Number.isFinite(percent) ? percent : MISS_VOLUME_DEFAULT));
+  const p = Math.min(MISS_VOLUME_MAX, Math.max(0, Number.isFinite(percent) ? percent : MISS_VOLUME_DEFAULT));
   return p <= 0 ? null : 20 * Math.log10(p / 100);
 }
 
@@ -118,44 +164,54 @@ export const MISS_FLOOR_MS = 120;
 export const missGateOpen = (lastAt: number, now: number) => now - lastAt >= MISS_FLOOR_MS;
 
 /** The miss voice on whatever audio context is current (live, or Tone.Offline's while measuring). */
-function buildMissVoice() {
-  const out = new Tone.Volume(MISS_SOUND.db).toDestination();
-  const { noise: n, tone: t } = MISS_SOUND;
-  const noise = new Tone.NoiseSynth({
-    noise: { type: 'white' },
-    envelope: { attack: 0.001, decay: n.decay, sustain: 0, release: 0.02 },
-    volume: n.db,
+function buildMissVoice(kind: MissKind) {
+  const spec = MISS_SOUNDS[kind];
+  const out = new Tone.Volume(spec.db);
+  // A soft clip as the last stage: nothing can pass full scale, and a hot setting saturates instead of cracking.
+  out.chain(new Tone.WaveShaper((x) => Math.tanh(x), 2048), Tone.getDestination());
+  const n = spec.noise;
+  const noise = n
+    ? new Tone.NoiseSynth({
+        noise: { type: 'white' },
+        envelope: { attack: 0.001, decay: n.decay, sustain: 0, release: 0.02 },
+        volume: n.db,
+      })
+    : null;
+  if (noise && n) noise.chain(new Tone.Filter({ type: 'bandpass', frequency: n.hz, Q: n.q }), out);
+  const tones = spec.tones.map((t) => {
+    const synth = new Tone.Synth({
+      oscillator: { type: t.type },
+      envelope: { attack: 0.001, decay: t.decay, sustain: 0, release: 0.02 },
+      volume: t.db,
+    });
+    synth.chain(new Tone.Filter({ type: 'highpass', frequency: spec.lowCutHz }), out);
+    return synth;
   });
-  noise.chain(new Tone.Filter({ type: 'bandpass', frequency: n.hz, Q: n.q }), out);
-  const tone = new Tone.Synth({
-    oscillator: { type: 'square' },
-    envelope: { attack: 0.001, decay: t.decay, sustain: 0, release: 0.02 },
-    volume: t.db,
-  });
-  tone.chain(new Tone.Filter({ type: 'highpass', frequency: MISS_SOUND.lowCutHz }), out);
   return {
     fire(at: number, percent: number) {
       const db = missVolumeDb(percent);
       out.mute = db === null;
-      if (db !== null) out.volume.value = MISS_SOUND.db + db;
-      noise.triggerAttackRelease(n.decay, at);
-      tone.triggerAttackRelease(t.hz, t.decay, at);
-      tone.frequency.setValueAtTime(t.hz, at);
-      tone.frequency.exponentialRampToValueAtTime(t.endHz, at + t.decay);
+      if (db !== null) out.volume.value = spec.db + db;
+      if (noise && n) noise.triggerAttackRelease(n.decay, at);
+      spec.tones.forEach((t, i) => {
+        const synth = tones[i];
+        synth.triggerAttackRelease(t.hz, t.decay, at + t.at);
+        synth.frequency.setValueAtTime(t.hz, at + t.at);
+        synth.frequency.exponentialRampToValueAtTime(t.endHz, at + t.at + t.decay);
+      });
     },
   };
 }
 
-let missVoice: ReturnType<typeof buildMissVoice> | null = null;
+const missVoices: Partial<Record<MissKind, ReturnType<typeof buildMissVoice>>> = {};
 
 /** Plays the miss sound at `percent` of full; returns the audio context's state ('running' means it was heard). */
-export async function playMissSound(percent: number = MISS_VOLUME_DEFAULT): Promise<string> {
+export async function playMissSound(percent: number = MISS_VOLUME_DEFAULT, kind: MissKind = MISS_KIND_DEFAULT): Promise<string> {
   try {
     await initAudio();
     const ctx = Tone.getContext();
     if (ctx.state !== 'running') await ctx.resume();
-    missVoice ??= buildMissVoice();
-    missVoice.fire(Tone.now(), percent);
+    (missVoices[kind] ??= buildMissVoice(kind)).fire(Tone.now(), percent);
     return ctx.state;
   } catch (err) {
     console.warn('[miss] could not play:', err);
@@ -167,8 +223,11 @@ export async function playMissSound(percent: number = MISS_VOLUME_DEFAULT): Prom
  * Renders the miss sound offline (no speakers) and returns its mono samples, so scripts/measure_miss_sound.py
  * can measure peak, RMS and spectrum of the real graph. Also on window.__missSoundProbe in the renderer.
  */
-export async function renderMissSound(percent: number = MISS_VOLUME_DEFAULT): Promise<{ sampleRate: number; samples: number[] }> {
-  const buffer = await Tone.Offline(() => buildMissVoice().fire(0, percent), 0.4);
+export async function renderMissSound(
+  percent: number = MISS_VOLUME_DEFAULT,
+  kind: MissKind = MISS_KIND_DEFAULT,
+): Promise<{ sampleRate: number; samples: number[] }> {
+  const buffer = await Tone.Offline(() => buildMissVoice(kind).fire(0, percent), 0.4);
   return { sampleRate: buffer.sampleRate, samples: Array.from(buffer.getChannelData(0)) };
 }
 if (typeof window !== 'undefined') (window as unknown as { __missSoundProbe?: typeof renderMissSound }).__missSoundProbe = renderMissSound;

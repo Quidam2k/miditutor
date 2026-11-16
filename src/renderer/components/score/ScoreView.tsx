@@ -8,7 +8,7 @@ import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import expressionXml from '../../assets/expression-test.musicxml?raw';
-import { initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen } from '../../audio/AudioEngine';
+import { MISS_KINDS, MISS_KIND_LABEL, MISS_VOLUME_MAX, initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen } from '../../audio/AudioEngine';
 import { emitRep } from '../../store/useRepStore';
 import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
@@ -739,7 +739,7 @@ export function ScoreView() {
     const now = performance.now();
     if (!useSettingsStore.getState().missSound || !missGateOpen(lastMissAtRef.current, now)) return undefined;
     lastMissAtRef.current = now;
-    return playMissSound(useSettingsStore.getState().missVolume);
+    return playMissSound(useSettingsStore.getState().missVolume, useSettingsStore.getState().missKind);
   }, []);
   // #5566: a wrong note or a stray spoils the lap.
   const spoilLap = useCallback(() => {
@@ -752,6 +752,7 @@ export function ScoreView() {
   }, [thudMiss]);
   const missSound = useSettingsStore((s) => s.missSound);
   const missVolume = useSettingsStore((s) => s.missVolume);
+  const missKind = useSettingsStore((s) => s.missKind);
   const backwardTargets = useSettingsStore((s) => s.backwardTargets);
   const setBackwardTargets = useSettingsStore((s) => s.setBackwardTargets);
   const [bands, setBands] = useState<Band[]>([]);
@@ -3541,7 +3542,7 @@ export function ScoreView() {
       <>
         <label
           className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-          title="A short low thud the moment a lap stops being clean (a wrong note or a grazed key), so you know it won't count"
+          title="A short sound the moment a lap stops being clean (a wrong note or a grazed key), so you know it won't count"
         >
           <input
             type="checkbox"
@@ -3557,16 +3558,32 @@ export function ScoreView() {
           data-stay
           className="ml-1 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-300 hover:bg-gray-700"
           title="Play the miss sound once, to hear how loud it is"
-          onClick={() => void playMissSound(missVolume)}
+          onClick={() => void playMissSound(missVolume, missKind)}
         >
           Test
         </button>
-        <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="How loud the miss sound is. Turn it up until you can hear it over your playing, then press Test">
+        <select
+          data-testid="miss-kind"
+          aria-label="Miss sound"
+          className="ml-1 rounded bg-gray-800 px-1 py-0.5 text-xs text-gray-300"
+          title="Which sound: Click and Buzz are high and sharp so they cut through the piano; Knock is lower, for a speaker with no highs"
+          value={missKind}
+          onChange={(e) => {
+            const kind = e.target.value as typeof missKind;
+            useSettingsStore.getState().setPrefs({ missKind: kind });
+            void playMissSound(missVolume, kind);
+          }}
+        >
+          {MISS_KINDS.map((k) => (
+            <option key={k} value={k}>{MISS_KIND_LABEL[k]}</option>
+          ))}
+        </select>
+        <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="How loud the miss sound is. Turn it up until you can hear it over your playing, then press Test. Past 100% it is boosted and softly clipped, so it gets louder without cracking">
           Miss volume
           <input
             type="range"
             min={0}
-            max={100}
+            max={MISS_VOLUME_MAX}
             step={5}
             value={missVolume}
             data-testid="miss-volume"

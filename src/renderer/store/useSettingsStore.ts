@@ -5,6 +5,7 @@ import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
 import { ExerciseType } from '../types/exercise';
 import type { TrainerClef } from '../engine/NoteTrainer';
+import type { MissKind } from '../audio/missKinds';
 import type { SessionSnapshot } from '../components/score/sessionSnapshot';
 
 /** Strip = one long line of music, current beat centred (#5153); pages / scroll (#5137). */
@@ -86,8 +87,10 @@ interface SettingsState {
   celebrateFinale: boolean;
   /** #5566: a very faint tick the moment a lap stops being clean. */
   missSound: boolean;
-  /** #6047: how loud the miss sound is, 0-100 (100 = its loudest). */
+  /** #6047: how loud the miss sound is, 0-200 (100 = its full level, above it is limited headroom, #5799). */
   missVolume: number;
+  /** #5799: which miss sound: click, buzz or knock. */
+  missKind: MissKind;
   /** #5624: the notes to play now on a scrap of staff just above the keyboard. */
   miniStaff: boolean;
   /** #5630: the wheel over a note on the score changes its finger. Off: only over a key. */
@@ -133,7 +136,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'missKind' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -188,6 +191,7 @@ export const useSettingsStore = create<SettingsState>()(
       celebrateFinale: true,
       missSound: true,
       missVolume: 100,
+      missKind: 'click',
       miniStaff: true,
       scoreWheelFingers: false,
       keyWheelFingers: true,
