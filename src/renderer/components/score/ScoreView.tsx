@@ -10,6 +10,7 @@ import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { MISS_KINDS, MISS_KIND_LABEL, MISS_VOLUME_MAX, initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen } from '../../audio/AudioEngine';
 import { emitRep } from '../../store/useRepStore';
+import { overrunNote, startOverrun, type Overrun } from '../../engine/Overrun';
 import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
@@ -733,6 +734,8 @@ export function ScoreView() {
   // The whole range he chose; with Build backwards the loop itself is only the end of it.
   const overall = chunk ? { first: chunk.first, last: chunk.last } : loopBars;
   const lapWrongRef = useRef(0);
+  // #5945: opened at each loop wrap; notes played on past the loop's end are overruns.
+  const overrunRef = useRef<Overrun | null>(null);
   // #5799: every wrong key thuds (keys within MISS_FLOOR_MS of the last thud share it).
   const lastMissAtRef = useRef(Number.NEGATIVE_INFINITY);
   const thudMiss = useCallback((): Promise<string> | undefined => {
@@ -2306,6 +2309,10 @@ export function ScoreView() {
         // #5799: Keep going thuds on every wrong note too.
         const played = thudMiss();
         if (played) void played.then((audio) => reportEvent('keep-miss', { audio }));
+      } else if (res === 'overrun') {
+        // #5945: played on past the loop's end: the thud, but no red and no wrong count.
+        const played = thudMiss();
+        if (played) void played.then((audio) => reportEvent('keep-overrun', { audio }));
       }
     });
   }, [keeping, flashWrong, thudMiss]);
@@ -2345,6 +2352,7 @@ export function ScoreView() {
         if (settled.kind === 'loop') setMarks([]);
         moveCursorTo(settled.to);
         paintHeldTies(settled.kind === 'loop' ? (f.range?.first ?? settled.to) - 1 : settled.from, settled.to);
+        if (settled.kind === 'loop') overrunRef.current = f.range ? startOverrun(f.steps, f.range.last, ev.timestamp) : null;
         // The chunk grew a bar: the cursor jumped back, so this note was not aimed at it.
         if (settled.kind === 'loop' && chunkLap()) return;
       } else if (settled?.kind === 'complete') {
@@ -2373,7 +2381,18 @@ export function ScoreView() {
         pedalTipTimerRef.current = window.setTimeout(() => setPedalTip(''), 6000);
         reportEvent('pedal-gap', { bar: gap.bar, step: gap.step, gapMs: gap.gapMs, next: playedName, text });
       }
+      // #5945: the piece carrying on past the loop's end, soon after the wrap. Taken before the
+      // follower judges it, so it can't reset a chord in progress or be called a graze.
+      if (ev.velocity >= prefs.minVelocity && !f.expected.includes(ev.note) &&
+          overrunNote(overrunRef.current, f.steps, ev.note, ev.timestamp)) {
+        const played = thudMiss(); // he hears it was off, but it isn't a failure: no red, no count
+        if (played) void played.then((audio) => reportEvent('overrun', { audio, note: ev.note, name: playedName, bar: step?.measure }));
+        else reportEvent('overrun', { note: ev.note, name: playedName, bar: step?.measure });
+        return;
+      }
       const result = f.noteOn(ev.note, ev.timestamp, keysDown, ev.velocity);
+      // A note that does count may be the one the continuation starts with too (C C D ...).
+      if (result.kind === 'advance' || result.kind === 'partial') overrunNote(overrunRef.current, f.steps, ev.note, ev.timestamp);
       // #5568: a tied note struck again turns blue, here or at the step he just left
       // (only steps with nothing to play lie between: he has not played on yet).
       if (result.kind === 'ignored') {
@@ -2455,6 +2474,7 @@ export function ScoreView() {
             if (beats > 0) setLapBpm(Math.round(beats / ((ev.timestamp - start) / 60000)));
           }
           lapStartRef.current = null;
+          overrunRef.current = range ? startOverrun(f.steps, range.last, ev.timestamp) : null;
           setMarks([]);
           moveCursorTo(result.to);
           // From the loop's first step: empty steps (ties only) there were skipped.

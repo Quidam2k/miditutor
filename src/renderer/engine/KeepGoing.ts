@@ -3,6 +3,7 @@
 // it is the step under the cursor, and nothing waits for him. JP 8/26: "it's very
 // useful to have [the metronome] at your back"; 9/11: go up a few clicks at a time.
 import type { ScoreStep } from './ScoreFollower';
+import { overrunNote, startOverrun, type Overrun } from './Overrun';
 
 /** A note this far before a step's beat still counts for that step (an early hit). */
 export const EARLY_MS = 120;
@@ -28,6 +29,8 @@ export interface KeepRun {
   wrong: number;
   /** Wrong notes per bar, this lap. */
   wrongBars: Map<number, number>;
+  /** #5945: the grace after the previous lap's end, for notes that play on past it. */
+  over: Overrun | null;
 }
 
 export interface KeepLap {
@@ -65,7 +68,7 @@ export function countInBeats(steps: ScoreStep[], first: number): number {
 }
 
 export function startKeep(first: number, last: number, bpm: number, startMs: number): KeepRun {
-  return { first, last, bpm: clampBpm(bpm), startMs, lap: 1, struck: new Map(), wrong: 0, wrongBars: new Map() };
+  return { first, last, bpm: clampBpm(bpm), startMs, lap: 1, struck: new Map(), wrong: 0, wrongBars: new Map(), over: null };
 }
 
 const stepStart = (run: KeepRun, steps: ScoreStep[], i: number) =>
@@ -83,13 +86,15 @@ export function stepAt(run: KeepRun, steps: ScoreStep[], t: number): number {
 }
 
 /** He struck midi at time t: a hit for the step it belongs to, or a wrong note. */
-export function keepNote(run: KeepRun, steps: ScoreStep[], midi: number, t: number): 'hit' | 'wrong' | 'ignored' {
+export function keepNote(run: KeepRun, steps: ScoreStep[], midi: number, t: number): 'hit' | 'wrong' | 'overrun' | 'ignored' {
   const i = stepAt(run, steps, t);
   const has = (j: number) => j >= run.first && j <= run.last && steps[j].notes.includes(midi) && !run.struck.get(j)?.has(midi);
   const strike = (j: number) => {
     const set = run.struck.get(j) ?? new Set<number>();
     set.add(midi);
     run.struck.set(j, set);
+    // #5945: it may be the note the piece carries on with too (C C D ...): count it there as well.
+    overrunNote(run.over, steps, midi, t);
     return 'hit' as const;
   };
   // Early for the next step (or the first step, during the count-in's last moment).
@@ -103,6 +108,8 @@ export function keepNote(run: KeepRun, steps: ScoreStep[], midi: number, t: numb
   if (has(i)) return strike(i);
   // A held-over or tied note re-struck isn't wrong; nor is repeating a note he just hit.
   if (steps[i].ringing?.includes(midi) || run.struck.get(i)?.has(midi)) return 'ignored';
+  // #5945: the piece carrying on past the loop's end: it thuds, but isn't a wrong note.
+  if (overrunNote(run.over, steps, midi, t)) return 'overrun';
   run.wrong++;
   const bar = steps[i].measure;
   run.wrongBars.set(bar, (run.wrongBars.get(bar) ?? 0) + 1);
@@ -144,6 +151,7 @@ export function closeLap(run: KeepRun, steps: ScoreStep[], stepUp: boolean, capB
   }
   const lap: KeepLap = { lap: run.lap, bpm: run.bpm, notes, hit, missed: notes - hit, wrong: run.wrong, worstBars, nextBpm };
   run.startMs = lapEndMs(run, steps);
+  run.over = startOverrun(steps, run.last, run.startMs);
   run.bpm = nextBpm;
   run.lap++;
   run.struck = new Map();
