@@ -82,6 +82,31 @@ run = subprocess.run([sys.executable, "-c", probe], env=dict(env, MIDITUTOR_LOAD
                      capture_output=True, text=True)
 check("sweep: empty inbox skips music21", run.stdout.strip().endswith("False"))
 
+# 7. #6309: a played take with triplets and 16ths in one bar reads with no odd tuplets; a clean one is unchanged.
+import re  # noqa: E402
+
+def tuplet_kinds(xml):
+    return set(re.findall(r"<actual-notes>(\d+)</actual-notes>\s*<normal-notes>(\d+)", xml))
+
+def mixed_bar_midi(path, jitter):
+    take = stream.Stream()
+    take.append([tempo.MetronomeMark(number=100), key.KeySignature(0), meter.TimeSignature("4/4")])
+    rng2 = random.Random(11)
+    for bar in range(6):
+        base = bar * 4
+        points = [(0, 1 / 3), (1 / 3, 1 / 3), (2 / 3, 1 / 3), (1, .25), (1.25, .25), (1.5, .25), (1.75, .25), (2, 1), (3, 1)]
+        for (o, d), midi in zip(points, (67, 69, 71, 72, 74, 76, 77, 79, 72)):
+            take.insert(base + o + rng2.uniform(-jitter, jitter) if o else base + o, note.Note(midi, quarterLength=d * 0.9))
+    take.write("midi", fp=str(path))
+
+for label, jitter in (("clean", 0.0), ("loose", 0.03)):
+    p7 = lib / f"mixed_{label}.mid"
+    mixed_bar_midi(p7, jitter)
+    x7 = m.convert(p7, lib).read_text(encoding="utf-8")
+    check(f"mixed bar ({label}): only 3:2 tuplets", tuplet_kinds(x7) <= {("3", "2")} and bool(tuplet_kinds(x7)))
+    check(f"mixed bar ({label}): 16ths kept", x7.count("<type>16th") >= 6 * 4 - 1)
+    check(f"mixed bar ({label}): no 32nds", "<type>32nd" not in x7)
+
 print("FAILS:", FAILS)
 # #5015: pytest collects this file; the exit below only runs as a script.
 def test_script_checks():

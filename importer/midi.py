@@ -15,6 +15,8 @@ from fractions import Fraction
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from .quantize import snap_events
+
 from music21 import (
     chord,
     clef,
@@ -28,15 +30,6 @@ from music21 import (
     stream,
     tempo,
 )
-
-
-def _quantize(value: float) -> Fraction:
-    """Round to the nearest point on either quarterLength divisor grid."""
-    candidates = [
-        Fraction(math.floor(value * divisor + 0.5), divisor)
-        for divisor in (4, 3)
-    ]
-    return min(candidates, key=lambda candidate: (abs(float(candidate) - value), candidate))
 
 
 def _discard_percussion(source: stream.Stream) -> None:
@@ -71,7 +64,7 @@ def midi_to_musicxml(
     every pitch when simultaneously starting notes have different lengths.
     """
     try:
-        source = converter.parse(os.fspath(path))
+        source = converter.parse(os.fspath(path), quantizePost=False)
     except Exception as exc:  # music21 raises its own exception types for bad MIDI
         raise ValueError(f"not a readable MIDI file: {exc}") from exc
     if not source.flatten().notes:
@@ -96,22 +89,24 @@ def midi_to_musicxml(
         deepcopy(first_time) if first_time is not None else meter.TimeSignature("4/4")
     )
 
-    events: list[tuple[Fraction, Fraction, tuple[int, ...]]] = []
+    # Snap each staff on its own (one grid per beat, small gaps closed); see quantize.py.
+    staff_events: list[list[tuple[float, float, list[int]]]] = [[], []]
     for event in source.flatten().notes:
         if isinstance(event, note.Note):
-            pitches = (int(event.pitch.midi),)
+            pitches = [int(event.pitch.midi)]
         elif isinstance(event, chord.Chord):
-            pitches = tuple(int(pitch.midi) for pitch in event.pitches)
+            pitches = [int(pitch.midi) for pitch in event.pitches]
         else:
             continue
-        if not pitches:
-            continue
-        offset = max(Fraction(0), _quantize(float(event.offset)))
-        duration = max(Fraction(1, 4), _quantize(float(event.duration.quarterLength)))
-        events.append((offset, duration, pitches))
+        offset, length = float(event.offset), float(event.duration.quarterLength)
+        for staff_index in (0, 1):
+            staff_pitches = [p for p in pitches if (p >= 60) == (staff_index == 0)]
+            if staff_pitches:
+                staff_events[staff_index].append((offset, length, staff_pitches))
 
-    if not events:
+    if not any(staff_events):
         raise ValueError("MIDI file has no notes")
+    snapped = [snap_events(events) for events in staff_events]
 
     treble = stream.Part(id="treble")
     bass = stream.Part(id="bass")
@@ -130,19 +125,17 @@ def midi_to_musicxml(
         treble.insert(0, deepcopy(first_tempo))
 
     groups: dict[tuple[Fraction, int], tuple[set[int], Fraction]] = {}
-    for offset, duration, pitches in events:
-        for staff_index in (0, 1):
-            staff_pitches = {
-                pitch for pitch in pitches if (pitch >= 60) == (staff_index == 0)
-            }
-            if not staff_pitches:
-                continue
-            group_key = (offset, staff_index)
+    end = Fraction(0)
+    for staff_index, events in enumerate(snapped):
+        for offset, length, pitches in events:
+            start = Fraction(offset).limit_denominator(24)
+            duration = max(Fraction(1, 4), Fraction(length).limit_denominator(24))
+            end = max(end, start + duration)
             previous_pitches, previous_duration = groups.get(
-                group_key, (set(), Fraction(0))
+                (start, staff_index), (set(), Fraction(0))
             )
-            groups[group_key] = (
-                previous_pitches | staff_pitches,
+            groups[(start, staff_index)] = (
+                previous_pitches | set(pitches),
                 max(previous_duration, duration),
             )
 
@@ -151,7 +144,6 @@ def midi_to_musicxml(
         staff_chord.duration.quarterLength = duration
         parts[staff_index].insert(offset, staff_chord)
 
-    end = max(offset + duration for offset, duration, _ in events)
     bar_length = Fraction(time_signature.barDuration.quarterLength)
     notation_end = math.ceil(end / bar_length) * bar_length
 

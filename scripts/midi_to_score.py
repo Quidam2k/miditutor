@@ -21,7 +21,9 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import localcfg  # noqa: E402
+from importer.quantize import close_gaps, fit_gap, snap_events  # noqa: E402
 from typing import Any
 
 Event = tuple[float, float, list[int]]
@@ -93,7 +95,7 @@ def monophonize(events: list[Event]) -> list[Event]:
         straight = abs(offset * 4 - round(offset * 4)) < 1e-7
         duration = max(duration, 1 / 3 if triplet and not straight else 0.25)
         if index + 1 < len(merged):
-            duration = min(duration, merged[index + 1][0] - offset)
+            duration = fit_gap(min(duration, merged[index + 1][0] - offset), merged[index + 1][0] - offset)
         result.append((offset, duration, pitches))
     return result
 
@@ -151,7 +153,8 @@ def convert(path: Path, library: Path, title: str | None = None) -> Path:
     from music21 import metadata, meter, note, stream, tempo
 
     path, library = Path(path), Path(library)
-    score = converter.parse(str(path), quantizePost=True, quarterLengthDivisors=(4, 3))
+    # Timing is snapped by importer.quantize (one grid per beat), not music21's note-by-note quantizePost.
+    score = converter.parse(str(path), quantizePost=False)
     ts = next(iter(score.recurse().getElementsByClass(meter.TimeSignature)), meter.TimeSignature("4/4"))
     ks = next(iter(score.recurse().getElementsByClass(key.KeySignature)), None)
     if ks is None:
@@ -184,11 +187,20 @@ def convert(path: Path, library: Path, title: str | None = None) -> Path:
         raise ValueError("MIDI contains no pitched notes")
     if len(parts) == 2:
         parts.sort(key=lambda es: sum(p for _, _, ps in es for p in ps) / sum(len(ps) for _, _, ps in es), reverse=True)
-        hands = parts
-    else:
-        hands = split_hands([e for part in parts for e in part])
-    shift = pickup_shift(hands, ts.barDuration.quarterLength)
-    hands = [monophonize([(offset + shift, duration, ps) for offset, duration, ps in hand]) for hand in hands]
+
+    def reduce(shift: float) -> list[list[Event]]:
+        """Two hands, snapped to the beat. The shift goes on BEFORE snapping so triplet beats stay on their grid."""
+        moved = [[(offset + shift, duration, ps) for offset, duration, ps in part] for part in parts]
+        if len(moved) == 2:
+            return [snap_events(part) for part in moved]
+        together = [e for part in moved for e in part]
+        snapped = snap_events(together, close=False)
+        hands = split_hands(snapped)
+        # A file already on the grid keeps its own rests.
+        return [close_gaps(h) for h in hands] if snapped != together else hands
+
+    shift = pickup_shift(reduce(0.0), ts.barDuration.quarterLength)
+    hands = [monophonize(hand) for hand in (reduce(shift) if shift else reduce(0.0))]
     flats = ks.sharps < 0
     end = max(offset + duration for hand in hands for offset, duration, _ in hand)
     output = stream.Score()
