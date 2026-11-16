@@ -1,0 +1,105 @@
+{
+ "edits": [
+  {
+   "op": "add_tie",
+   "measure": 1,
+   "staff": 1,
+   "pitch": "A5"
+  },
+  {
+   "op": "add_tie",
+   "measure": 2,
+   "staff": 1,
+   "pitch": "A4"
+  },
+  {
+   "op": "add_tie",
+   "measure": 3,
+   "staff": 1,
+   "pitch": "A3"
+  },
+  {
+   "op": "add_tie",
+   "measure": 5,
+   "staff": 1,
+   "pitch": "C5",
+   "nth": 3,
+   "to_measure": 6
+  },
+  {
+   "op": "add_tie",
+   "measure": 6,
+   "staff": 1,
+   "pitch": "C5"
+  },
+  {
+   "op": "add_tie",
+   "measure": 7,
+   "staff": 1,
+   "pitch": "E5",
+   "nth": 2
+  },
+  {
+   "op": "add_tie",
+   "measure": 9,
+   "staff": 1,
+   "pitch": "C5",
+   "nth": 3,
+   "to_measure": 10
+  },
+  {
+   "op": "add_tie",
+   "measure": 10,
+   "staff": 1,
+   "pitch": "C5"
+  },
+  {
+   "op": "add_tie",
+   "measure": 11,
+   "staff": 1,
+   "pitch": "E5"
+  },
+  {
+   "op": "add_tie",
+   "measure": 13,
+   "staff": 1,
+   "pitch": "C5",
+   "nth": 3,
+   "to_measure": 14
+  },
+  {
+   "op": "add_tie",
+   "measure": 14,
+   "staff": 1,
+   "pitch": "C5"
+  },
+  {
+   "op": "add_tie",
+   "measure": 15,
+   "staff": 1,
+   "pitch": "E5",
+   "nth": 2
+  },
+  {
+   "op": "add_tie",
+   "measure": 17,
+   "staff": 1,
+   "pitch": "E5",
+   "nth": 2
+  },
+  {
+   "op": "add_tie",
+   "measure": 18,
+   "staff": 1,
+   "pitch": "E5",
+   "nth": 2
+  },
+  {
+   "op": "add_tie",
+   "measure": 19,
+   "staff": 1,
+   "pitch": "E5",
+   "nth": 2
+  }
+ ]
+}

@@ -1,7 +1,10 @@
 """Apply reviewed repairs to one MusicXML score.
 
 Ops: set_time, set_key, delete_measure, replace_measure, split_measure, transpose_note,
-delete_note, move_staff. Measure references are original, one-based positions.
+delete_note, move_staff, add_tie. Measure references are original, one-based positions.
+add_tie (#5085): {"op": "add_tie", "measure": 5, "staff": 1, "pitch": "C5", "nth": 3, "to_measure": 6}
+ties the nth (default 1) note of that pitch in the measure to the next note of the same pitch: the first
+one in to_measure, or when to_measure is left out the next one in the same measure.
 apply_edits returns a repaired copy; its input tree is never modified.
 """
 import argparse
@@ -29,7 +32,7 @@ VALUES = [("whole", Fraction(4)), ("half", Fraction(2)), ("quarter", Fraction(1)
           ("eighth", Fraction(1, 2)), ("16th", Fraction(1, 4)),
           ("32nd", Fraction(1, 8)), ("64th", Fraction(1, 16))]
 OPS = {"set_time", "set_key", "delete_measure", "replace_measure", "split_measure",
-       "transpose_note", "delete_note", "move_staff"}
+       "transpose_note", "delete_note", "move_staff", "add_tie"}
 
 
 def _positive(value, label):
@@ -324,6 +327,50 @@ def _edit_notes(measure, edit):
     return f"s{staff}: " + "; ".join(details)
 
 
+def _same_pitch(measure, edit):
+    """Non-grace notes on the edit's staff with the edit's pitch, in document order."""
+    staff = _positive(edit["staff"], "staff")
+    pitch = _pitch(edit["pitch"])
+    return [note for note in _children(measure, "note")
+            if _child(note, "grace") is None and _note_pitch(note) == pitch
+            and _positive(_text(note, "staff", "1"), "staff") == staff]
+
+
+def _tie_end(note, kind):
+    """One <tie> and one <tied> of this type on the note, in schema order; a repeat is a no-op."""
+    if not any(t.get("type") == kind for t in _children(note, "tie")):
+        tie = ET.Element(_tag(note, "tie"), {"type": kind})
+        index = next((i for i, c in enumerate(note) if NOTE_RANKS.get(_name(c), len(NOTE_RANKS)) > NOTE_RANKS["tie"]), len(note))
+        note.insert(index, tie)
+    notations = _child(note, "notations")
+    if notations is None:
+        notations = ET.Element(_tag(note, "notations"))
+        index = next((i for i, c in enumerate(note) if NOTE_RANKS.get(_name(c), len(NOTE_RANKS)) > NOTE_RANKS["notations"]), len(note))
+        note.insert(index, notations)
+    if not any(t.get("type") == kind for t in _children(notations, "tied")):
+        notations.insert(0, ET.Element(_tag(notations, "tied"), {"type": kind}))
+
+
+def _add_tie(measure, target, edit):
+    nth = _positive(edit.get("nth", 1), "nth")
+    starts = _same_pitch(measure, edit)
+    if nth > len(starts):
+        raise ValueError(f"only {len(starts)} {edit['pitch']} on staff {edit['staff']}; nth {nth} asked")
+    start = starts[nth - 1]
+    if target is measure:
+        if nth >= len(starts):
+            raise ValueError(f"no later {edit['pitch']} in this measure to tie to")
+        stop = starts[nth]
+    else:
+        later = _same_pitch(target, edit)
+        if not later:
+            raise ValueError(f"no {edit['pitch']} on staff {edit['staff']} in to_measure")
+        stop = later[0]
+    _tie_end(start, "start")
+    _tie_end(stop, "stop")
+    return f"{edit['pitch']} #{nth} tied to the next {edit['pitch']}"
+
+
 def _move(root, measures, edit, log):
     source = _positive(edit["from_staff"], "from_staff")
     target = _positive(edit["to_staff"], "to_staff")
@@ -431,6 +478,11 @@ def apply_edits(root, edits, log=lambda message: None):
                     part.insert(list(part).index(measure) + 1, second)
                     structural = True
                 detail = "replaced" if op == "replace_measure" else "split into two measures"
+            elif op == "add_tie":
+                to = edit.get("to_measure")
+                if to is not None and not 1 <= _positive(to, "to_measure") <= len(original):
+                    raise ValueError(f"to_measure outside 1..{len(original)}")
+                detail = _add_tie(measure, measure if to is None else original[int(to) - 1], edit)
             else:
                 detail = _edit_notes(measure, edit)
             log(f"[{op}] m{position}: {detail}")

@@ -220,3 +220,39 @@ def test_set_time_updates_every_time_element_in_measure():
     times = _measures(out)[0].findall("attributes/time")
     assert len(times) == 2
     assert all(t.findtext("beats") == "6" and t.findtext("beat-type") == "8" for t in times)
+
+
+def _ties(note):
+    return [t.get("type") for t in note.findall("tie")], [t.get("type") for t in note.findall("notations/tied")]
+
+
+def test_add_tie_in_one_measure_ties_nth_to_the_next_same_pitch():
+    score = _score([(_note("A5", 2, 1) + _note("A5", 2, 1) + _note("B5", 2, 1) + _note("A5", 2, 1), _note("C3", 8, 2))])
+    out = omr_fix.apply_edits(_root(score), [{"op": "add_tie", "measure": 1, "staff": 1, "pitch": "A5"}])
+    notes = [n for n in _measures(out)[0].findall("note") if n.findtext("staff") == "1"]
+    assert _ties(notes[0]) == (["start"], ["start"])
+    assert _ties(notes[1]) == (["stop"], ["stop"])
+    assert _ties(notes[2]) == ([], []) and _ties(notes[3]) == ([], [])  # B5 and the third A5 untouched
+    assert [c.tag for c in notes[1]][:4] == ["pitch", "duration", "tie", "voice"]  # schema order
+
+
+def test_add_tie_across_a_bar_line_and_chained_on_a_held_note():
+    score = _score([(_note("C5", 2, 1) + _note("C5", 2, 1), _note("C3", 4, 2)),
+                    (_note("C5", 4, 1) + _note("C5", 2, 1), _note("C3", 6, 2))])
+    edits = [{"op": "add_tie", "measure": 1, "staff": 1, "pitch": "C5", "nth": 2, "to_measure": 2},
+             {"op": "add_tie", "measure": 2, "staff": 1, "pitch": "C5"}]
+    out = omr_fix.apply_edits(_root(score), edits)
+    first, second = [n for n in _measures(out)[1].findall("note") if n.findtext("staff") == "1"]
+    assert _ties(second) == (["stop"], ["stop"])
+    assert sorted(_ties(first)[0]) == ["start", "stop"] and sorted(_ties(first)[1]) == ["start", "stop"]
+    # no change to the input tree, and a repeat of the same edit adds nothing
+    again = omr_fix.apply_edits(out, edits)
+    assert [len(n.findall("tie")) for n in _measures(again)[1].findall("note")] == [len(n.findall("tie")) for n in _measures(out)[1].findall("note")]
+
+
+def test_add_tie_rejects_a_missing_partner():
+    score = _score([(_note("A5", 4, 1), _note("C3", 4, 2))])
+    with pytest.raises(ValueError, match="no later A5"):
+        omr_fix.apply_edits(_root(score), [{"op": "add_tie", "measure": 1, "staff": 1, "pitch": "A5"}])
+    with pytest.raises(ValueError, match="only 1 A5"):
+        omr_fix.apply_edits(_root(score), [{"op": "add_tie", "measure": 1, "staff": 1, "pitch": "A5", "nth": 2}])
