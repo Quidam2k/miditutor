@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import localcfg  # noqa: E402
 from importer.quantize import close_gaps, fit_gap, snap_events  # noqa: E402
+from importer.titles import nice_title, pick_title  # noqa: E402,F401
 from typing import Any
 
 Event = tuple[float, float, list[int]]
@@ -76,10 +77,6 @@ FLATS = ["C", "D-", "D", "E-", "E", "F", "G-", "G", "A-", "A", "B-", "B"]
 def spell(midi: int, flats: bool) -> str:
     """music21 pitch name for a MIDI number: flats in flat keys, sharps otherwise (D# in A minor, not Eb)."""
     return f"{(FLATS if flats else SHARPS)[midi % 12]}{midi // 12 - 1}"
-
-def nice_title(stem: str) -> str:
-    """'fur_Elise_WoO59' -> 'Fur Elise WoO59': capitalize lowercase words, leave the rest alone."""
-    return " ".join(w[:1].upper() + w[1:] for w in re.split(r"[_\s-]+", stem) if w)
 
 def monophonize(events: list[Event]) -> list[Event]:
     """Merge simultaneous pitches and clip durations at the following onset."""
@@ -168,6 +165,8 @@ def convert(path: Path, library: Path, title: str | None = None) -> Path:
     generic = r"(track|part|piano|grand piano|acoustic grand piano|untitled|midi(?: file)?|music21 fragment)(?:[ _-]*\d+)?"
     if not candidate or re.fullmatch(generic, candidate, re.I):
         candidate = nice_title(path.stem)
+    else:
+        candidate = pick_title(candidate, path.stem)
     title = title if title is not None else candidate
     parts = []
     for part in list(score.parts) or [score]:

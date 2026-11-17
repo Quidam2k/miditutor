@@ -25,6 +25,23 @@ export function scoreTitle(xml: string): string | null {
     .replace(/&amp;/g, '&');
 }
 
+const titleWords = (t: string) => t.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
+/**
+ * #6368: the title to list a score under. Its own title, unless that is only the first word(s)
+ * of a spoken file name ("Spin" in "Spin the Wheel (intermediate).musicxml", a MIDI track name):
+ * then the file name is the fuller title. Library slugs (no spaces: "fur-elise-easy") never
+ * override the score's title. No title: the file name.
+ */
+export function pieceTitle(xml: string, filePath: string): string {
+  const own = scoreTitle(xml);
+  const fromFile = titleFromPath(filePath);
+  if (!own) return fromFile;
+  const a = titleWords(own);
+  const b = titleWords(fromFile);
+  return /\s/.test(fromFile) && a.length > 0 && a.length < b.length && a.every((w, i) => w === b[i]) ? fromFile : own;
+}
+
 /** True for a file name the Pieces folder lists (dot files and other types are skipped). */
 export function isPieceFileName(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';

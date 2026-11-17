@@ -244,7 +244,9 @@ def tutor_load_piece(path: str, title: str | None = None) -> dict:
     source = Path(path).expanduser()
     if not source.is_file():
         return {"error": f"No file at {source}"}
-    name = title or source.stem
+    from importer.titles import nice_title
+
+    name = title or nice_title(source.stem)
     suffix = source.suffix.lower()
 
     if suffix in _MUSICXML_SUFFIXES:

@@ -16,7 +16,7 @@ import {
   isPieceFileName,
   isScoreXml,
   pieceFileName,
-  scoreTitle,
+  pieceTitle,
   titleFromPath,
 } from './shared/pieceFiles';
 import { TrustMap, parseTrust, trustFor, verifiedHolds } from './shared/trust';
@@ -244,7 +244,7 @@ const listPieces = async () => {
         const group = groupOf(versions, name);
         pieces.push({
           file: name,
-          title: scoreTitle(musicxml) ?? titleFromPath(name),
+          title: pieceTitle(musicxml, name),
           musicxml,
           ...(entry ? { trust: entry } : {}),
           ...(group ? { group } : {}),

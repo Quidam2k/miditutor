@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Layout, MarkCheck, MarkState, Proposal, ReviewEvent, ReviewState, foldReview, markCheck, orderEvents } from '../shared/review';
-import { scoreTitle, titleFromPath } from '../shared/pieceFiles';
+import { pieceTitle } from '../shared/pieceFiles';
 import { contentSha256 } from './contentSha';
 
 export interface ReviewConfig {
@@ -240,7 +240,7 @@ export class Review {
       else if (proposal && markCheck(mark, proposal, sha) === 'done') checks[mark.id] = { state: 'done', proposal };
       else checks[mark.id] = { state: 'needed' };
     }
-    return { slug, title: scoreTitle(musicxml) ?? titleFromPath(slug), musicxml, sha, layout, events, state, checks };
+    return { slug, title: pieceTitle(musicxml, slug), musicxml, sha, layout, events, state, checks };
   }
 
   /** (Re)build the piece's layout when it is missing or made from another version of the score. */

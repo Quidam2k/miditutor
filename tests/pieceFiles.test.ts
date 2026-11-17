@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPieceFileName, isScoreXml, pieceFileName, scoreTitle, titleFromPath } from '../src/shared/pieceFiles';
+import { isPieceFileName, isScoreXml, pieceFileName, pieceTitle, scoreTitle, titleFromPath } from '../src/shared/pieceFiles';
 
 describe('isScoreXml', () => {
   it('accepts partwise and timewise scores', () => {
@@ -52,5 +52,20 @@ describe('pieceFileName', () => {
     expect(pieceFileName("The Sorcerer's Apprentice")).toBe("The Sorcerer's Apprentice.musicxml");
     expect(pieceFileName('a/b:c?')).toBe('a b c.musicxml');
     expect(pieceFileName('../..')).toBe('Untitled.musicxml');
+  });
+});
+
+describe('pieceTitle (#6368)', () => {
+  const xml = (t: string) => `<work><work-title>${t}</work-title></work>`;
+  it('uses the file name when the score title is just its first word', () => {
+    expect(pieceTitle(xml('Spin'), 'Spin the Wheel (intermediate).musicxml')).toBe('Spin the Wheel (intermediate)');
+  });
+  it('keeps a real score title, even when the file name differs', () => {
+    expect(pieceTitle(xml('The Stormy Sea'), 'the-stormy-sea.musicxml')).toBe('The Stormy Sea');
+    expect(pieceTitle(xml('Spin the Wheel'), 'spin.musicxml')).toBe('Spin the Wheel');
+    expect(pieceTitle(xml('Fur Elise'), 'fur-elise-easy.musicxml')).toBe('Fur Elise');
+  });
+  it('falls back to the file name with no title', () => {
+    expect(pieceTitle('<score-partwise/>', 'Minuet in G.musicxml')).toBe('Minuet in G');
   });
 });

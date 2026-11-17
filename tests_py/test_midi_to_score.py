@@ -39,6 +39,10 @@ check("pickup: aligned file left alone", m.pickup_shift([[], [(o, 1.0, [45]) for
 # 4. Spelling follows the key; titles keep their capitals.
 check("spell: sharps", m.spell(63, False) == "D#4" and m.spell(63, True) == "E-4")
 check("title", m.nice_title("fur_Elise_WoO59") == "Fur Elise WoO59")
+# #6368: a MIDI track name that is only the file name's first word is not the title.
+check("pick: first-word track name", m.pick_title("Spin", "spin-the-wheel-intermediate") == "Spin The Wheel Intermediate")
+check("pick: real title kept", m.pick_title("Fur Elise", "beethoven_fur_elise") == "Fur Elise")
+check("pick: empty", m.pick_title("", "spin_the_wheel") == "Spin The Wheel")
 
 # 5. End to end with music21: one-track two-hand file, G major 3/4, played a little unevenly.
 from music21 import chord, key, meter, note, stream, tempo  # noqa: E402
