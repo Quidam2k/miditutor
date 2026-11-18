@@ -8,7 +8,7 @@ import minuetXml from '../../assets/minuet-in-g.musicxml?raw';
 import aMinorXml from '../../assets/a-minor-scale.musicxml?raw';
 // eslint-disable-next-line import/no-unresolved -- Vite ?raw import, not resolvable by eslint-plugin-import
 import expressionXml from '../../assets/expression-test.musicxml?raw';
-import { MISS_KINDS, MISS_KIND_LABEL, MISS_VOLUME_MAX, initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen } from '../../audio/AudioEngine';
+import { MISS_KINDS, MISS_KIND_LABEL, MISS_VOLUME_MAX, initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen, releaseChords } from '../../audio/AudioEngine';
 import { emitRep } from '../../store/useRepStore';
 import { overrunNote, startOverrun, type Overrun } from '../../engine/Overrun';
 import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
@@ -19,7 +19,7 @@ import { PracticeSettings } from './PracticeSettings';
 import { WaveOverlay, WAVE_FLARE_MS, waveDelays, type WaveDot } from './WaveOverlay';
 import { hesitationMs, PACE_SAMPLES } from '../../engine/TrainingWheels';
 import { useMidiStore } from '../../store/useMidiStore';
-import { ScoreFollower, ScoreStep, heldTies } from '../../engine/ScoreFollower';
+import { ScoreFollower, ScoreStep, heldTies, soundUntil } from '../../engine/ScoreFollower';
 import { ExpressionTracker, describeMark, parseExpression, type ExpressionFinding } from '../../engine/Expression';
 import { PedalCoach } from '../../engine/PedalCoach';
 import { rememberRef, resolvePieceId } from './lastPiece';
@@ -1299,7 +1299,10 @@ export function ScoreView() {
     setWatchNotes([]);
     const bpm = watchBpmRef.current;
     watchBpmRef.current = null;
-    if (bpm !== null) reportEvent('watch', { on: false, bpm });
+    if (bpm !== null) {
+      releaseChords();
+      reportEvent('watch', { on: false, bpm });
+    }
     const osmd = osmdRef.current;
     const f = followerRef.current;
     if (!osmd || !f) return;
@@ -1390,7 +1393,12 @@ export function ScoreView() {
       moveCursorTo(i);
       setMeasure(step.measure);
       setWatchNotes(step.notes);
-      if (step.notes.length) playChord(step.notes, durationSeconds);
+      // #6425: tied chords and held notes sound their full written length.
+      const byEnd = new Map<number, number[]>();
+      for (const [midi, end] of soundUntil(f.steps, i, last, f.steps[last].beat + 1)) {
+        byEnd.set(end, [...(byEnd.get(end) ?? []), midi]);
+      }
+      for (const [end, group] of byEnd) playChord(group, (end - step.beat) * 60 / bpm);
       watchTimerRef.current = window.setTimeout(() => {
         if (i < last) playStep(i + 1);
         else if (range) playStep(first);
@@ -1409,7 +1417,10 @@ export function ScoreView() {
       window.clearTimeout(watchTimerRef.current);
       const bpm = watchBpmRef.current;
       watchBpmRef.current = null;
-      if (bpm !== null) reportEvent('watch', { on: false, bpm });
+      if (bpm !== null) {
+        releaseChords();
+        reportEvent('watch', { on: false, bpm });
+      }
     };
   }, [piece.id, drawnXml]);
 

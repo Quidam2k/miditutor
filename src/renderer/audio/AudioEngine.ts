@@ -43,6 +43,13 @@ export function playChord(midiNumbers: number[], duration: string | number = '4n
   if (!synth || !initialized) return;
   const notes = midiNumbers.map(midiToToneNote);
   synth.triggerAttackRelease(notes, duration);
+  // #6425: e2e scripts set window.__playLog = [] to read what "Play it for me" sounds.
+  (window as unknown as { __playLog?: unknown[] }).__playLog?.push({ notes: midiNumbers, duration });
+}
+
+/** #6425: let go of every chord still sounding (a long tie when "Play it for me" stops). */
+export function releaseChords(): void {
+  synth?.releaseAll();
 }
 
 /**

@@ -43,6 +43,24 @@ export type FollowResult =
  * he is still sounding (key down, or let go under the pedal). `ties[i]` = the MIDI
  * pitches tied over into step i. After a lap wrap, pass from = the loop's first step - 1.
  */
+export function soundUntil(steps: readonly ScoreStep[], i: number, last: number, runEnd: number): Map<number, number> {
+  // #6425: "Play it for me" holds each note struck at step i until the first later step
+  // where it is struck again or no longer rings (tie continuations, long notes under
+  // moving ones). Past `last` (the run's or loop's end) it stops at runEnd, in beats.
+  const ends = new Map<number, number>();
+  for (const midi of steps[i].notes) {
+    let end = runEnd;
+    for (let j = i + 1; j <= last; j++) {
+      if (steps[j].notes.includes(midi) || !steps[j].ringing?.includes(midi)) {
+        end = steps[j].beat;
+        break;
+      }
+    }
+    ends.set(midi, end);
+  }
+  return ends;
+}
+
 export function heldTies(
   ties: number[][],
   from: number,
