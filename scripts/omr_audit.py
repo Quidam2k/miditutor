@@ -630,6 +630,29 @@ def write_trust(path, data) -> None:
     os.replace(temporary, path)
 
 
+def possible_missed_ties(score) -> int:
+    """Count notes that run to the bar line into the same pitch on the same staff, untied (#5085).
+
+    A silent safety net for the tie read: it goes into trust.json as a number, never
+    into lint flags or Review cards, because repeated notes across a bar line are
+    often meant to be struck again."""
+    count = 0
+    for measure, following in zip(score.measures, score.measures[1:]):
+        ends = [n["onset"] + n["duration"] for n in measure["notes"]
+                if n["onset"] is not None and n["duration"] is not None]
+        if not ends:
+            continue
+        length = max(ends)
+        firsts = {(n["staff"], n["pitch"]) for n in following["notes"]
+                  if n["onset"] == 0 and n["pitch"] is not None and not n["tied_into"]}
+        count += sum(1 for n in measure["notes"]
+                     if n["pitch"] is not None and n["onset"] is not None
+                     and n["duration"] is not None and n["onset"] + n["duration"] == length
+                     and n["duration"] >= length / 2 and not n["tied_on"]
+                     and (n["staff"], n["pitch"]) in firsts)
+    return count
+
+
 def trust_entries(library, annotate, report=None) -> dict:
     """Compute trust entries for library scores."""
     library = Path(library)
@@ -661,6 +684,12 @@ def trust_entries(library, annotate, report=None) -> dict:
             repairs.get(path.name),
             compare.get(slug),
         )
+        try:
+            missed = possible_missed_ties(Score(path))
+        except (OSError, ValueError, SyntaxError):  # ET.ParseError is a SyntaxError
+            missed = 0
+        if missed:
+            entries[path.name]["possible_missed_ties"] = missed
     return entries
 
 

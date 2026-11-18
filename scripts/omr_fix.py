@@ -23,10 +23,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from annotate_scan import (
     Score, DOCTYPE_RE, _child, _children, _document_text, _name,
     _note_pitch, _pitch_label, _read_pitch, _subelement, _tag, _text,
+    NOTE_ORDER, NOTE_RANKS, _tie_end,
 )
 
 ATTRIBUTE_ORDER = "footnote level divisions key time staves part-symbol instruments clef staff-details transpose directive measure-style"
-NOTE_ORDER = "grace cue chord pitch rest unpitched duration tie instrument footnote level voice type dot accidental time-modification stem notehead notehead-text staff beam notations lyric play listen"
 ACCIDENTALS = {1: "sharp", -1: "flat", 2: "double-sharp", -2: "flat-flat"}
 VALUES = [("whole", Fraction(4)), ("half", Fraction(2)), ("quarter", Fraction(1)),
           ("eighth", Fraction(1, 2)), ("16th", Fraction(1, 4)),
@@ -205,7 +205,6 @@ def _fill(measure, staves, divisions):
 
 
 CARRIED = ("tie", "notations", "lyric")
-NOTE_RANKS = {tag: index for index, tag in enumerate(NOTE_ORDER.split())}
 
 
 def _pitched(measure):
@@ -334,21 +333,6 @@ def _same_pitch(measure, edit):
     return [note for note in _children(measure, "note")
             if _child(note, "grace") is None and _note_pitch(note) == pitch
             and _positive(_text(note, "staff", "1"), "staff") == staff]
-
-
-def _tie_end(note, kind):
-    """One <tie> and one <tied> of this type on the note, in schema order; a repeat is a no-op."""
-    if not any(t.get("type") == kind for t in _children(note, "tie")):
-        tie = ET.Element(_tag(note, "tie"), {"type": kind})
-        index = next((i for i, c in enumerate(note) if NOTE_RANKS.get(_name(c), len(NOTE_RANKS)) > NOTE_RANKS["tie"]), len(note))
-        note.insert(index, tie)
-    notations = _child(note, "notations")
-    if notations is None:
-        notations = ET.Element(_tag(note, "notations"))
-        index = next((i for i, c in enumerate(note) if NOTE_RANKS.get(_name(c), len(NOTE_RANKS)) > NOTE_RANKS["notations"]), len(note))
-        note.insert(index, notations)
-    if not any(t.get("type") == kind for t in _children(notations, "tied")):
-        notations.insert(0, ET.Element(_tag(notations, "tied"), {"type": kind}))
 
 
 def _add_tie(measure, target, edit):

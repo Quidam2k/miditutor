@@ -1,4 +1,4 @@
-"""Add fingering, chord symbols and expression marks, read from page images, to an OMR MusicXML score (#9506).
+"""Add fingering, chord symbols, expression marks and ties, read from page images, to an OMR MusicXML score (#9506).
 
 Usage: annotate_scan.py SCORE READS.json [...] --out OUT [--report R.json]
        annotate_scan.py --listing SCORE [--first M] [--last N]
@@ -48,6 +48,9 @@ PITCH_RE = re.compile(r"([A-G])(##|bb|#|b)?(-?\d+)")
 CHORD_RE = re.compile(r"([A-G])([#b]?)([^/]*)(?:/([A-G])([#b]?))?")
 ALTERED_RE = re.compile(r"([b#])(5|9|11|13)$")
 ALTERS = {"": 0, "#": 1, "##": 2, "b": -1, "bb": -2}
+# MusicXML schema order of a <note>'s children; shared with omr_fix.py.
+NOTE_ORDER = "grace cue chord pitch rest unpitched duration tie instrument footnote level voice type dot accidental time-modification stem notehead notehead-text staff beam notations lyric play listen"
+NOTE_RANKS = {tag: index for index, tag in enumerate(NOTE_ORDER.split())}
 DOCTYPE_RE = re.compile(
     r"""<!DOCTYPE\b(?:[^\[>"']|"[^"]*"|'[^']*'|\[[\s\S]*?\])*>"""
 )
@@ -281,6 +284,11 @@ class Score:
                                 tie.get("type") == "stop"
                                 for tie in _children(element, "tie")
                             ),
+                            "tied_on": any(
+                                tie.get("type") == "start"
+                                for tie in _children(element, "tie")
+                            ),
+                            "duration": _duration(element, divisions),
                         }
                     )
 
@@ -400,6 +408,78 @@ def _add_fingering(note, text):
         technical = _subelement(notations, "technical")
     _subelement(technical, "fingering", text)
     return True
+
+
+def _tie_end(note, kind):
+    """One <tie> and one <tied> of this type on the note, in schema order; a repeat is a no-op."""
+    if not any(t.get("type") == kind for t in _children(note, "tie")):
+        tie = ET.Element(_tag(note, "tie"), {"type": kind})
+        index = next((i for i, c in enumerate(note) if NOTE_RANKS.get(_name(c), len(NOTE_RANKS)) > NOTE_RANKS["tie"]), len(note))
+        note.insert(index, tie)
+    notations = _child(note, "notations")
+    if notations is None:
+        notations = ET.Element(_tag(note, "notations"))
+        index = next((i for i, c in enumerate(note) if NOTE_RANKS.get(_name(c), len(NOTE_RANKS)) > NOTE_RANKS["notations"]), len(note))
+        note.insert(index, notations)
+    if not any(t.get("type") == kind for t in _children(notations, "tied")):
+        notations.insert(0, ET.Element(_tag(notations, "tied"), {"type": kind}))
+
+
+def _place_tie(score, item):
+    """Tie a read's note to the next sounding note of its pitch (#5085).
+
+    Only a real tie gets through: the same pitch on the same staff, the very next
+    onset of that pitch, starting exactly where the first note ends (this bar or the
+    next). Anything else is returned as a reason and lands in the report, never in
+    the score, so a misread curve means a missing tie, never a wrong one.
+    Returns None when the tie was placed, else a reason string."""
+    pitch = _read_pitch(item.get("pitch"))
+    staff, nth = item.get("staff"), item.get("nth", 1)
+    if pitch is None or type(staff) is not int or type(nth) is not int or nth < 1:
+        return "bad-item"
+    measures = score.by_number.get(str(item.get("measure")), [])
+    if len(measures) != 1:
+        return "no-measure"
+    index = score.measures.index(measures[0])
+
+    def lane(measure):
+        return [r for r in measure["notes"] if r["staff"] == staff and r["pitch"] == pitch]
+
+    starts = lane(measures[0])
+    if nth > len(starts):
+        return "no-note"
+    start = starts[nth - 1]
+    if start["onset"] is None or start["duration"] is None:
+        return "no-onset"
+    end = start["onset"] + start["duration"]
+    later = [r for r in starts if r["onset"] is not None and r["onset"] > start["onset"]]
+    if later:
+        stop = min(later, key=lambda r: r["onset"])
+        if stop["onset"] != end:
+            return "not-adjacent"
+        target = measures[0]
+    else:
+        if index + 1 >= len(score.measures):
+            return "no-partner"
+        target = score.measures[index + 1]
+        # The first note has to reach the bar line: nothing else in its bar ends later.
+        length = max((r["onset"] + r["duration"] for r in measures[0]["notes"]
+                      if r["onset"] is not None and r["duration"] is not None), default=None)
+        nexts = [r for r in lane(target) if r["onset"] is not None]
+        if not nexts or end != length:
+            return "not-adjacent"
+        stop = min(nexts, key=lambda r: r["onset"])
+        if stop["onset"] != 0:
+            return "not-adjacent"
+    to = item.get("to_measure", item.get("measure"))
+    if str(to) != str(target["number"]):
+        return "wrong-partner"
+    if start["tied_on"] and stop["tied_into"]:
+        return "already-tied"
+    _tie_end(start["element"], "start")
+    _tie_end(stop["element"], "stop")
+    start["tied_on"] = stop["tied_into"] = True
+    return None
 
 
 def _make_harmony(symbol, context):
@@ -565,11 +645,12 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
     score = Score(score_path)
     report = {
         "score": str(score_path),
-        "placed": {"fingerings": 0, "chords": 0, "expressions": 0},
+        "placed": {"fingerings": 0, "chords": 0, "expressions": 0, "ties": 0},
         "unmatched": [],
     }
-    totals = {"fingerings": 0, "chords": 0, "expressions": 0}
+    totals = {"fingerings": 0, "chords": 0, "expressions": 0, "ties": 0}
     direction_number = 1
+    ties = []
 
     def reject(page, item, kind, reason):
         report["unmatched"].append(
@@ -596,12 +677,18 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
         page = reads.get("page")
         for plural, kind in (
             ("fingerings", "fingering"), ("chords", "chord"),
-            ("expressions", "expression"),
+            ("expressions", "expression"), ("ties", "tie"),
         ):
             for item in reads.get(plural, []):
                 totals[plural] += 1
                 if not _confident(item, minimum):
                     reject(page, item, kind, "low-confidence")
+                    continue
+
+                if kind == "tie":
+                    # Ties go in last: a new tie marks notes tied_into, which
+                    # fingering's nth counting skips.
+                    ties.append((page, item))
                     continue
 
                 measures = score.by_number.get(str(item.get("measure")), [])
@@ -745,6 +832,13 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
                     elif _add_harmony(*matches[0], harmony):
                         report["placed"][plural] += 1
 
+    for page, item in ties:
+        reason = _place_tie(score, item)
+        if reason is None:
+            report["placed"]["ties"] += 1
+        elif reason != "already-tied":
+            reject(page, item, "tie", reason)
+
     score.write(output_path)
     if report_path is not None:
         Path(report_path).write_text(
@@ -753,7 +847,7 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
         )
     print(
         ("{}: fingerings placed {}/{}, chords placed {}/{}, "
-         "expressions placed {}/{}, unmatched {}").format(
+         "expressions placed {}/{}, ties placed {}/{}, unmatched {}").format(
             output_path,
             report["placed"]["fingerings"],
             totals["fingerings"],
@@ -761,6 +855,8 @@ def annotate(score_path, reads_paths, output_path, report_path=None,
             totals["chords"],
             report["placed"]["expressions"],
             totals["expressions"],
+            report["placed"]["ties"],
+            totals["ties"],
             len(report["unmatched"]),
         )
     )
