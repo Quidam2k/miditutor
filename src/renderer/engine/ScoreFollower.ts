@@ -91,6 +91,10 @@ export class ScoreFollower {
   // #9993: the chord he just finished. He replays a whole chord after a miss, so a
   // note of it landing just after the advance is not wrong, until he plays on.
   private prevStruck = new Set<number>();
+  // #6370: ...but only as part of that burst: each excused note within CHORD_WINDOW_MS of
+  // the one before (the finish first). Later, re-striking the last note is a wrong note
+  // (Sorcerer's bar 30: C5 again where Bb4 is written was silently ignored).
+  private prevStruckMs = -Infinity;
   // #5568: written notes still sounding at the step he just finished (a tied chord he
   // strikes a moment after the melody note that finished the step). Not wrong, and not
   // a graze, at the next step, until he plays on.
@@ -220,7 +224,7 @@ export class ScoreFollower {
     }
 
     if (!expected.includes(midi)) {
-      if (this.harmless(midi)) return { kind: 'ignored' };
+      if (this.harmless(midi, timeMs)) return { kind: 'ignored' };
       // A miss resets the step: piecemeal credit from before it no longer counts.
       this.missed = true;
       this.restartAttempt();
@@ -267,15 +271,19 @@ export class ScoreFollower {
     if (this.finished || this.satisfiedNotes.has(midi)) return null;
     const inWindow = this.grazeMs > 0 && timeMs - this.lastFinishMs < this.grazeMs;
     if (inWindow && this.prevStruck.has(midi)) return 'bounce';
-    if (!this.steps[this.currentIndex].notes.includes(midi) && this.harmless(midi)) return null;
+    if (!this.steps[this.currentIndex].notes.includes(midi) && this.harmless(midi, timeMs)) return null;
     if (inWindow) return 'graze';
     if (this.minVelocity > 0 && velocity < this.minVelocity) return 'soft';
     return null;
   }
 
   /** Not asked for here, but no mistake: carried, just struck, or still ringing. */
-  private harmless(midi: number): boolean {
-    return this.prevCarried.has(midi) || this.prevStruck.has(midi) || this.prevRinging.has(midi) ||
+  private harmless(midi: number, timeMs: number): boolean {
+    if (this.prevStruck.has(midi) && timeMs - this.prevStruckMs <= CHORD_WINDOW_MS) {
+      this.prevStruckMs = timeMs;
+      return true;
+    }
+    return this.prevCarried.has(midi) || this.prevRinging.has(midi) ||
       !!this.steps[this.currentIndex].ringing?.includes(midi);
   }
 
@@ -356,6 +364,7 @@ export class ScoreFollower {
     this.completeStep(done, timeMs);
     this.prevCarried.clear();
     for (const note of this.steps[done].notes) this.prevStruck.add(note);
+    this.prevStruckMs = timeMs;
     this.prevRinging = new Set(this.steps[done].ringing ?? []);
     // Never carry across a lap wrap: the note just struck would cover its own step.
     if (this.moveOn(done)) return true;
