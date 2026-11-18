@@ -1,5 +1,6 @@
 """#10258 #10259 end-to-end check on a hidden Electron app, on a COPY of the score: a finger edit
-(wheel or click) leaves the score where it is, and the wheel off a note moves one note per notch.
+(wheel or click) leaves the score where it is, and the wheel off a note moves one note per notch
+(with "Wheel moves my place" on; off, the default, it only looks: #6369, checked by look_checks).
 
     MIDITUTOR_HIDDEN=1 MIDITUTOR_WINDOW_SIZE=1600x900 MIDITUTOR_PORT=47812 MIDITUTOR_VITE_PORT=5183 \
       MIDITUTOR_PIECES_DIR=<copy> npx electron-forge start -- --remote-debugging-port=9346 --user-data-dir=<scratch>
@@ -436,8 +437,85 @@ def loop_checks(page) -> None:
     page.wait_for_timeout(300)
 
 
+def look_checks(page) -> None:
+    """#6369: in Strip the plain wheel only looks; his place stays until he plays or presses Esc."""
+    left = "() => document.querySelector('[data-testid=score-panel]').scrollLeft"
+    tid(page, "wheel-steps").uncheck()
+    type_bar(page, "bar-now", 20)
+    page.wait_for_timeout(300)
+    off_note(page)
+    at, x0 = where(), page.evaluate(left)
+
+    def look(notches: int) -> None:
+        for _ in range(notches):
+            page.mouse.wheel(0, 100)
+            page.wait_for_timeout(250)
+
+    look(3)
+    check(where() == at, "looking: three notches leave his place", (where(), at))
+    check(page.evaluate(left) > x0 + 50, "looking: the music slid forward", (x0, page.evaluate(left)))
+    check(tid(page, "looking").is_visible(), "looking: a tag says how to go back")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(400)
+    check(tid(page, "looking").count() == 0, "Esc: the tag goes")
+    check(abs(page.evaluate(left) - x0) < 30, "Esc: the strip is back at his place", (x0, page.evaluate(left)))
+    look(3)
+    strike([21])  # A0: a wrong note, so his place doesn't move on its own
+    page.wait_for_timeout(500)
+    check(where() == at, "a played note: his place is where he left it", (where(), at))
+    check(abs(page.evaluate(left) - x0) < 30, "a played note: the strip comes back", (x0, page.evaluate(left)))
+    check(tid(page, "looking").count() == 0, "a played note: the tag goes")
+    # In the page: a hidden window's Shift+mouse.wheel doesn't reliably arrive with Shift held.
+    page.evaluate(
+        """async () => {
+          const panel = document.querySelector('[data-testid=score-panel]').getBoundingClientRect();
+          const x = panel.left + 30, y = panel.top + 10;
+          document.elementFromPoint(x, y).dispatchEvent(new WheelEvent('wheel',
+            { deltaY: 100, shiftKey: true, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+          await new Promise((r) => setTimeout(r, 300));
+        }"""
+    )
+    check(where() != at, "Shift+wheel still moves his place a note", (where(), at))
+
+
+def box_hold_checks(page) -> None:
+    """#6369: a slow spin over the last-bar box: the boxes stay put and the loop lands once, after."""
+    scroll_tops = "() => [...document.querySelectorAll('*')].filter((e) => e.scrollTop > 0).map((e) => e.scrollTop)"
+    page.get_by_test_id("loop-bars").click()
+    page.wait_for_timeout(200)
+    type_bar(page, "loop-first", 22)
+    type_bar(page, "loop-last", 25)
+    page.wait_for_timeout(400)
+    tops = page.evaluate(scroll_tops)
+    seen = page.evaluate(
+        """async () => {
+          const el = document.querySelector('[data-testid=loop-last]');
+          const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+          const rects = [];
+          for (let i = 0; i < 5; i++) {
+            el.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true }));  // up = a later bar
+            await pause(400);
+            const r = el.getBoundingClientRect();
+            rects.push([Math.round(r.x), Math.round(r.y)]);
+          }
+          return { rects, value: el.value };
+        }"""
+    )
+    check(seen["value"] == "30", "a slow spin steps the box 25 -> 30", seen["value"])
+    check(screen()["loop"]["lastBar"] == 25, "it has not landed while he is still spinning", screen()["loop"])
+    page.wait_for_timeout(1300)
+    check(screen()["loop"]["lastBar"] == 30, "it lands once he stops", screen()["loop"])
+    rect = page.get_by_test_id("loop-last").bounding_box()
+    check(len({tuple(r) for r in seen["rects"]}) == 1 and seen["rects"][0] == [round(rect["x"]), round(rect["y"])],
+          "the last-bar box never moved under the pointer", (seen["rects"], rect))
+    check(page.evaluate(scroll_tops) == tops, "nothing scrolled under the box")
+    page.get_by_test_id("clear-loop").click()
+    page.wait_for_timeout(300)
+
+
 def box_checks(page) -> None:
     """#10254: the wheel with a bar box in play."""
+    tid(page, "wheel-steps").check()  # its score-wheel checks are the note-a-notch wheel
     scroll_tops = "() => { const s = [...document.querySelectorAll('*')].filter((e) => e.scrollTop > 0); return s.map((e) => e.scrollTop); }"
     box = page.get_by_test_id("bar-now")
 
@@ -464,18 +542,18 @@ def box_checks(page) -> None:
         }"""
     )
     check(seen == "22" and screen()["measure"] == 20, "over the box, a spin steps the number and waits", (seen, screen()["measure"]))
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(1200)
     check(screen()["measure"] == 22, "it lands once he stops", screen()["measure"])
     check(page.evaluate(scroll_tops) == tops, "nothing scrolled under the box")
     page.mouse.wheel(0, 100)
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(1200)
     check(screen()["measure"] == 21, "wheel down is a lower bar", screen()["measure"])
 
     # Bar numbers aren't invented at the ends.
     type_bar(page, "bar-now", 1)
     over("bar-now")
     page.mouse.wheel(0, 100)
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(1200)
     check(box.input_value() == "1" and screen()["measure"] == 1, "stops at bar 1", box.input_value())
 
     # A half-typed number is his: a pause doesn't land it or overwrite it, even after a wheel.
@@ -546,17 +624,18 @@ def box_checks(page) -> None:
     type_bar(page, "loop-last", 25)
     over("loop-last")
     page.mouse.wheel(0, 100)
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(1200)
     check(screen()["loop"]["lastBar"] == 24, "the wheel moves the loop's last bar", screen()["loop"])
     over("loop-first")
     page.mouse.wheel(0, -100)
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(1200)
     check(screen()["loop"]["firstBar"] == 23, "and its first bar", screen()["loop"])
     page.get_by_test_id("clear-loop").click()
     page.wait_for_timeout(300)
 
     # Reverse: only the off-note move in Strip.
     type_bar(page, "bar-now", 20)
+    tid(page, "wheel-steps").check()  # the note-a-notch wheel, which Reverse turns round
     tid(page, "reverse-wheel").check()
     off_note(page)
     was = where()
@@ -568,7 +647,7 @@ def box_checks(page) -> None:
     check(where() == was and back != was and back[0] <= was[0], "reversed: down goes back, up comes forward", (was, back, where()))
     over("bar-now")
     page.mouse.wheel(0, -100)
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(1200)
     check(screen()["measure"] == was[0] + 1, "reversed: the bar box still goes up on up", screen()["measure"])
     page.reload()
     page.wait_for_timeout(1500)
@@ -576,6 +655,7 @@ def box_checks(page) -> None:
     tid(page, "reverse-wheel").wait_for(timeout=30000)
     check(tid(page, "reverse-wheel").is_checked(), "the setting survives a reload")
     tid(page, "reverse-wheel").uncheck()
+    tid(page, "wheel-steps").uncheck()
     page.wait_for_function("() => document.querySelectorAll('.vf-notehead').length > 50", timeout=60000)
     page.wait_for_timeout(2500)
 
@@ -608,10 +688,13 @@ def main() -> int:
         page.wait_for_function("() => document.querySelectorAll('.vf-notehead').length > 50", timeout=60000)
         page.wait_for_timeout(2500)
         if "box" not in sys.argv[2:]:
+            tid(page, "wheel-steps").check()  # these walk the old note-a-notch wheel (#10259)
             edit_checks(page, score, original)
             reload_keeps_edit(page, score, original)
             wheel_checks(page)
             loop_checks(page)
+        look_checks(page)
+        box_hold_checks(page)
         # Last: it reloads the page, which drops the scrollTo patch above.
         box_checks(page)
         times = renders(page)

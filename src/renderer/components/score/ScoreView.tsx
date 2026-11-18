@@ -665,6 +665,12 @@ export function ScoreView() {
   const setShowKeyboard = useSettingsStore((s) => s.setShowKeyboard);
   const trainingWheels = useSettingsStore((s) => s.trainingWheels);
   const reverseWheel = useSettingsStore((s) => s.reverseWheel);
+  const wheelSteps = useSettingsStore((s) => s.wheelSteps);
+  const setWheelSteps = useSettingsStore((s) => s.setWheelSteps);
+  // #6369: the strip's wheel slid the music away from his place; the next note brings it back.
+  const [looking, setLooking] = useState(false);
+  const lookingRef = useRef(false);
+  lookingRef.current = looking;
   // #5630: off, the wheel over the score never edits a finger; over a key it still does.
   const scoreWheelFingers = useSettingsStore((s) => s.scoreWheelFingers);
   const keyWheelFingers = useSettingsStore((s) => s.keyWheelFingers);
@@ -708,6 +714,8 @@ export function ScoreView() {
   const [picking, setPicking] = useState<'off' | 'start' | 'end'>('off');
   const [pickStart, setPickStart] = useState<number | null>(null);
   const [loopBars, setLoopBars] = useState<{ first: number; last: number } | null>(null);
+  // #6369: the range a spin over the range boxes is showing, shaded before it lands.
+  const [previewBars, setPreviewBars] = useState<{ first: number; last: number } | null>(null);
   const [lap, setLap] = useState(1);
   const [lapBpm, setLapBpm] = useState<number | null>(null);
   // Build backwards (#10133): the loop runs chunk.start..chunk.last and grows a bar at a time.
@@ -1223,6 +1231,24 @@ export function ScoreView() {
     panel.scrollTo({ left: Math.max(0, left), behavior }); // at the start the clef, key and 'Piano' stay on screen
   }, []);
 
+  // #6369: bring the cursor into sight by scrolling only the box that holds the score, and only when
+  // it is out of sight (or under the sticky toolbar). scrollIntoView moved every scroller up the tree,
+  // so the range boxes jumped under his pointer each time a range landed.
+  const revealCursor = useCallback(() => {
+    const el = osmdRef.current?.cursor.cursorElement;
+    let box: HTMLElement | null = el?.parentElement ?? null;
+    while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) {
+      box = box.parentElement;
+    }
+    if (!el || !box) return;
+    const c = el.getBoundingClientRect();
+    const b = box.getBoundingClientRect();
+    const toolbar = box.querySelector('[data-score-toolbar]')?.getBoundingClientRect();
+    const top = Math.max(b.top, toolbar ? toolbar.bottom : b.top);
+    if (c.top >= top && c.bottom <= b.bottom) return;
+    box.scrollTop += c.top + c.height / 2 - (top + b.bottom) / 2;
+  }, []);
+
   // Move the visible cursor to step index i (relative moves; OSMD has no seek).
   const moveCursorTo = useCallback((i: number) => {
     const osmd = osmdRef.current;
@@ -1315,7 +1341,8 @@ export function ScoreView() {
     moveCursorTo(f.index);
     // The step walk at load leaves the view scrolled to the end; bring bar 1 back.
     if (stripRef.current) centerCursor('auto');
-    else osmd.cursor.cursorElement?.scrollIntoView?.({ block: 'center' });
+    else revealCursor();
+    setLooking(false);
     setFeedback({ kind: 'idle' });
     setReached(null);
     // #5657c: Restart while blocking goes back to the first hand position.
@@ -1333,7 +1360,7 @@ export function ScoreView() {
     exprNewPassRef.current = false;
     setExprFindings([]);
     syncUi();
-  }, [moveCursorTo, centerCursor, syncUi, trackChord]);
+  }, [moveCursorTo, centerCursor, revealCursor, syncUi, trackChord]);
 
   // #6122: Restart pressed by hand starts a rep (restart() itself also runs internally).
   const restartByHand = useCallback(() => {
@@ -1905,7 +1932,7 @@ export function ScoreView() {
     const osmd = osmdRef.current;
     const container = containerRef.current;
     const layer = layerRef.current;
-    const range = loopBars ?? (pickStart !== null ? { first: pickStart, last: pickStart } : null);
+    const range = previewBars ?? loopBars ?? (pickStart !== null ? { first: pickStart, last: pickStart } : null);
     if (!osmd || !container || !layer || !range || status !== 'ready') {
       setBands([]);
       return;
@@ -1927,7 +1954,7 @@ export function ScoreView() {
       console.warn('[loop] could not shade bars', err);
       setBands([]);
     }
-  }, [loopBars, pickStart, status, layoutTick]);
+  }, [previewBars, loopBars, pickStart, status, layoutTick]);
 
   // A loop asked for through the tutor API (POST /loop, DELETE /loop). Used up once it applies:
   // left in the store, it came back on every piece that finished loading (#10262).
@@ -2081,10 +2108,25 @@ export function ScoreView() {
     .sort((a, b) => b.at - a.at)
     .map((d) => allPieces.find((p) => p.id === d.pieceId) ?? allPieces.find((p) => p.label === d.pieceLabel))[0];
 
-  // Esc clears the loop (or cancels picking).
+  // #6369: done looking. The next note he plays (right or wrong) slides the strip back to his place.
+  const endLook = useCallback(() => {
+    if (!lookingRef.current) return false;
+    setLooking(false);
+    centerCursor('smooth');
+    return true;
+  }, [centerCursor]);
+  useEffect(
+    () => useMidiStore.subscribe((state, prev) => {
+      if (state.lastNoteOn && state.lastNoteOn !== prev.lastNoteOn) endLook();
+    }),
+    [endLook],
+  );
+
+  // Esc clears the loop (or cancels picking). Looking away, it only brings him back (#6369).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
+      if (endLook()) return;
       if (picking !== 'off') {
         setPicking('off');
         setPickStart(null);
@@ -2092,7 +2134,7 @@ export function ScoreView() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [picking, loopBars, applyLoop]);
+  }, [picking, loopBars, applyLoop, endLook]);
 
   // Keep the latest hand for loading without reloading OSMD on a hand switch.
   useEffect(() => {
@@ -3084,8 +3126,18 @@ export function ScoreView() {
       // and Shift+wheel goes past them to tag notes outside it. #5560: so does a notch after a
       // pause at the edge, for one hand on a trackball.
       if (watching) return;
+      // #6369: the plain wheel only looks: the music slides a bar a notch and his place stays.
+      // The next note he plays, or Esc, brings it back. Shift+wheel (or "Wheel moves my place")
+      // steps the place a note a notch, as before.
+      if (!wheelSteps && !ev.shiftKey) {
+        slideStripBar(way);
+        setLooking(true);
+        return;
+      }
+      setLooking(false);
       const from = cursorIndexRef.current;
-      const range = !ev.shiftKey && loopBars ? stepRangeOf(f.steps, loopBars.first, loopBars.last) : null;
+      // With looking on the plain wheel, Shift is the stepping, so it keeps the loop's edges (#5560 pause).
+      const range = (!wheelSteps || !ev.shiftKey) && loopBars ? stepRangeOf(f.steps, loopBars.first, loopBars.last) : null;
       let step = stepForWheel(f.steps, from, way, range || null);
       const past = range && step === null ? stepForWheel(f.steps, from, way, null) : null;
       if (past !== null) {
@@ -3699,6 +3751,12 @@ export function ScoreView() {
             Reverse wheel
           </label>
         )}
+        {strip && (
+          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Off: the wheel slides the music to look around and your place stays (Shift+wheel moves it). On: the wheel moves your place a note per notch.">
+            <input type="checkbox" data-testid="wheel-steps" checked={wheelSteps} onChange={(e) => setWheelSteps(e.target.checked)} />
+            Wheel moves my place
+          </label>
+        )}
       </>
     ),
     handZones: (
@@ -3751,7 +3809,13 @@ export function ScoreView() {
       <div
         onClickCapture={noteUse}
         onChangeCapture={(e) => { if ((e.target as HTMLInputElement).type !== 'checkbox') noteUse(e); }}
+        data-score-toolbar
         className="sticky top-0 z-20 -mx-2 flex flex-col gap-2 rounded-b-md bg-gray-950/95 px-2 py-2 backdrop-blur">
+        {looking && (
+          <span data-testid="looking" className="pointer-events-none absolute right-2 top-full mt-1 rounded bg-sky-700 px-2 py-0.5 text-xs text-white">
+            Looking — play or Esc to go back
+          </span>
+        )}
       <div className="flex flex-wrap items-center gap-2">
         <select
           value={pieceId}
@@ -3998,7 +4062,9 @@ export function ScoreView() {
               <span className="font-mono font-semibold text-indigo-300">{blockHints ? pressTogether(blockPos, noteName) : '…'}</span>
             </span>
           ) : (
-            <span className="text-gray-400" data-testid="next-notes">
+            // #6369: a fixed width, so the range boxes after it never slide or wrap as the notes change.
+            <span className="inline-block w-56 truncate align-bottom text-gray-400" data-testid="next-notes"
+              title={playHint ? `${namesOf(remaining)} (${playHint})` : undefined}>
               Play:{' '}
               <span className="font-mono font-semibold text-indigo-300">
                 {finished ? '—' : hintsOff && !hints ? '…' : remaining.length ? namesOf(remaining) : '—'}
@@ -4007,7 +4073,7 @@ export function ScoreView() {
             </span>
           )}
           <span className="text-gray-400">
-            Wrong notes: <span className="font-mono text-gray-200">{wrongCount}</span>
+            Wrong notes: <span className="inline-block w-[3ch] font-mono text-gray-200">{wrongCount}</span>
           </span>
           {(overall || picking !== 'off') && (
             <span className="flex flex-wrap items-center gap-1 text-yellow-300" data-testid="loop-status">
@@ -4018,6 +4084,7 @@ export function ScoreView() {
                 from={measure}
                 last={lastBar}
                 onCommit={typedFirst}
+                onPreview={(bar) => setPreviewBars(bar === null || picking !== 'off' || !overall ? null : { first: Math.min(bar, overall.last), last: Math.max(bar, overall.last) })}
                 disabled={watching || keeping}
                 focus={picking === 'start'}
                 title="First bar of the range"
@@ -4029,6 +4096,10 @@ export function ScoreView() {
                 from={pickStart ?? measure}
                 last={lastBar}
                 onCommit={typedLast}
+                onPreview={(bar) => {
+                  const first = picking === 'off' ? overall?.first : pickStart;
+                  setPreviewBars(bar === null || first == null ? null : { first: Math.min(first, bar), last: Math.max(first, bar) });
+                }}
                 disabled={watching || keeping}
                 focus={picking === 'end'}
                 title="Last bar of the range"

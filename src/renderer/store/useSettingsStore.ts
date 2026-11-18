@@ -56,6 +56,8 @@ interface SettingsState {
   parkedDrills: Record<string, SessionSnapshot>;
   /** #10254: the wheel off a note in Strip moves the other way. */
   reverseWheel: boolean;
+  /** #6369: off (default) = the strip's wheel only looks; on = it moves his place a note per notch. */
+  wheelSteps: boolean;
   /** #6105: opt-in, off by default: after a 20 s pause in playing, one on-screen line to check wrists and hand position. */
   wristReminder: boolean;
   /** #5516: a key this many ms after the strike that finished a step is a graze (0 = off). */
@@ -107,6 +109,7 @@ interface SettingsState {
   /** Set any of the plain number/boolean preferences above. */
   setPrefs: (prefs: Partial<Pick<SettingsState, PrefKey>>) => void;
   setReverseWheel: (on: boolean) => void;
+  setWheelSteps: (on: boolean) => void;
   toggleSimplePiece: (title: string) => void;
   markSightRead: (id: string, title: string) => void;
   setFreshKey: (key: string) => void;
@@ -173,6 +176,7 @@ export const useSettingsStore = create<SettingsState>()(
       freshSeen: [],
       parkedDrills: {},
       reverseWheel: false,
+      wheelSteps: false,
       wristReminder: false,
       grazeMs: GRAZE_MS,
       minVelocity: 0,
@@ -200,6 +204,7 @@ export const useSettingsStore = create<SettingsState>()(
       blockTipSeen: false,
       setPrefs: (prefs) => set(prefs),
       setReverseWheel: (on) => set({ reverseWheel: on }),
+      setWheelSteps: (on) => set({ wheelSteps: on }),
 
       toggleSimplePiece: (title) =>
         set((s) => ({

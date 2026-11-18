@@ -5,7 +5,11 @@ import { parseBar, stepBar, wheelNotch } from './noteEdit';
 // isn't a bar goes back to what it was, and so does one the caller turns down.
 // #10254: the wheel over it steps the number, and lands once he stops. Only the wheel starts that
 // wait: a number he's part way through typing stays until he says so.
-export function BarInput({ value, onCommit, testId, disabled, focus, title, from, last }: {
+// #6369: a spin only changes the number (and the caller's preview); it lands when the pointer
+// leaves the box or after WHEEL_LAND_MS still, so a slow spin is one change, not one per pause.
+export const WHEEL_LAND_MS = 1000;
+
+export function BarInput({ value, onCommit, testId, disabled, focus, title, from, last, onPreview }: {
   value: number | null;
   onCommit: (bar: number) => void;
   testId: string;
@@ -16,6 +20,8 @@ export function BarInput({ value, onCommit, testId, disabled, focus, title, from
   from?: number | null;
   /** The wheel stops here. */
   last?: number;
+  /** The bar a spin is showing before it lands; null once it lands or drops. */
+  onPreview?: (bar: number | null) => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const ref = useRef<HTMLInputElement>(null);
@@ -24,11 +30,16 @@ export function BarInput({ value, onCommit, testId, disabled, focus, title, from
   const freshRef = useRef(false);
   const wheelRunRef = useRef({ at: 0, delta: 0, dir: 0 });
   const wheelTimerRef = useRef(0);
+  const spinningRef = useRef(false);
   useEffect(() => {
     if (focus) ref.current?.select();
   }, [focus]);
   const commit = () => {
     window.clearTimeout(wheelTimerRef.current);
+    if (spinningRef.current) {
+      spinningRef.current = false;
+      onPreview?.(null);
+    }
     const bar = draft === null || dropRef.current ? null : parseBar(draft);
     dropRef.current = false;
     setDraft(null);
@@ -44,8 +55,10 @@ export function BarInput({ value, onCommit, testId, disabled, focus, title, from
     const next = stepBar(shown ?? value ?? from ?? null, notch, last);
     if (next === null) return;
     setDraft(String(next));
+    spinningRef.current = true;
+    onPreview?.(next);
     window.clearTimeout(wheelTimerRef.current);
-    wheelTimerRef.current = window.setTimeout(() => latest.current.commit(), 300);
+    wheelTimerRef.current = window.setTimeout(() => latest.current.commit(), WHEEL_LAND_MS);
   };
   const latest = useRef({ commit, onWheel });
   latest.current = { commit, onWheel };
@@ -75,6 +88,7 @@ export function BarInput({ value, onCommit, testId, disabled, focus, title, from
       onMouseDown={(e) => { freshRef.current = document.activeElement !== e.currentTarget; }}
       onMouseUp={(e) => { if (freshRef.current) e.preventDefault(); }}
       onBlur={commit}
+      onMouseLeave={() => { if (spinningRef.current) commit(); }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur();
         if (e.key === 'Escape') {
