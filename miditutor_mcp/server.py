@@ -210,6 +210,37 @@ def tutor_clear() -> dict:
     return _tutor(tutor_client.clear_task)
 
 
+@mcp.tool()
+def tutor_history(days: int = 7, piece: str | None = None, limit: int = 20, pull: bool = True) -> dict:
+    """Todd's practice history from the tutor's day logs, kept on Solace (#5853), so it
+    answers with the app closed, the keyboard unplugged or the Mac asleep.
+    For when HE asks about his practice, or for planning; never a reason to comment on
+    his playing unasked, above all while the tutor is on (Todd msg 60689).
+    Newest sessions first (a session ends after 10 quiet minutes): start/end, minutes,
+    notes, right/wrong/accuracy, wrong_bars (worst bars), pieces (bars, laps, clean and
+    spoiled laps, loops), velocity, pace, hints = stretches with the help on screen
+    (keys/names/mini: always|wheels|on-pause|none; known=False = logged before the app
+    recorded it, never guessed), help_off_bars, bare_runs ("5 min, no hints"), devices.
+    `days` totals per day; `mirror` = last pull. pull=True first copies anything new
+    from the Mac (read-only, a few seconds; unreachable is fine)."""
+    import sys
+    scripts = str(Path(__file__).resolve().parent.parent / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import tutor_history as th
+
+    root = th.history_root()
+    if pull:
+        host = th.get_host()
+        got = th.pull(root, host, connect_timeout=3, total_timeout=15) if host else {}
+        if got:
+            th.summarize_days(root, sorted(got))
+    out = th.history(root, days=days, piece=piece)
+    out["sessions_total"] = len(out["sessions"])
+    out["sessions"] = out["sessions"][:max(1, limit)]
+    return out
+
+
 _MUSICXML_SUFFIXES = {".musicxml", ".xml", ".mxl"}
 _MIDI_SUFFIXES = {".mid", ".midi"}
 _PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
