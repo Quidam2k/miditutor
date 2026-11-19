@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useSettingsStore, type PrefKey } from '../../store/useSettingsStore';
 import { LessonNotes } from './LessonNotes';
 
-type Toggle = Exclude<PrefKey, 'grazeMs' | 'minVelocity' | 'trainingWheels' | 'eyesUp' | 'eyesUpMs' | 'missVolume' | 'missKind'>; // #6047, #5799
+type Toggle = Exclude<PrefKey, 'grazeMs' | 'minVelocity' | 'trainingWheels' | 'eyesUp' | 'eyesUpMs' | 'missVolume' | 'missKind' | 'spotClean'>; // #6047, #5799
 
 function Check({ k, label, title }: { k: Toggle; label: string; title: string }) {
   const on = useSettingsStore((s) => s[k]);
@@ -100,6 +100,15 @@ export function PracticeSettings({ btn }: { btn: string }) {
             k="keepStepUp"
             label="Speed up 4 after a good lap"
             title="After a Keep going lap with 9 in 10 notes right and few wrong ones, the next lap goes 4 clicks faster (JP: go up in 4s), never past the piece's target tempo"
+          />
+          <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Trouble spots</div>
+          <Num
+            label="Clean times to clear a spot"
+            title="A trouble spot comes off your list after this many clean loops of the spot alone AND this many passes through a bigger range where the spot was clean"
+            value={s.spotClean}
+            max={50}
+            onChange={(n) => s.setPrefs({ spotClean: Math.max(1, n) })}
+            testId="spot-clean"
           />
           <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Clean laps</div>
           <Check k="celebrateChime" label="Chime" title="A soft ding from the computer when you finish a lap with no wrong notes" />

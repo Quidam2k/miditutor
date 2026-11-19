@@ -1,15 +1,18 @@
 export interface DayLog { date: string; entries: unknown[] }
-export interface BarStat { bar: number; strikes: number; misses: number; rate: number }
+export interface BarStat { bar: number; strikes: number; misses: number; rate: number; hesitations: number }
 export interface FingerStat { hand: 'L' | 'R' | '?'; finger: string; misses: number }
 export interface DayStat { date: string; strikes: number; misses: number; rate: number; laps: number; cleanLaps: number }
 export interface PieceRollup {
   piece: string; strikes: number; misses: number; rate: number; laps: number; cleanLaps: number;
   worstBars: BarStat[]; fingers: FingerStat[]; days: DayStat[]; fingerData: boolean;
+  /** #6460: bars he misses or hesitates on, most first (trouble spots come from these). */
+  spotBars: BarStat[];
 }
 export interface Rollup { from: string | null; to: string | null; pieces: PieceRollup[] }
 
 type Accumulator = PieceRollup & {
   barMap: Map<number, BarStat>;
+  gaps: { bar: number; gap: number }[];
   fingerMap: Map<string, FingerStat>;
   dayMap: Map<string, DayStat>;
 };
@@ -22,6 +25,19 @@ function record(value: unknown): Record<string, unknown> | null {
 function compare(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
+/** #6460: a step that took over twice his usual gap (median, per piece) is a hesitation. */
+const HESITATE_FACTOR = 2;
+const MIN_GAPS = 8;
+const MAX_GAP_MS = 10_000; // longer than this he stopped, not hesitated
+const MAX_SPOT_BARS = 30;
+const MOVED_ON = new Set(['advance', 'complete', 'loop']);
+
+function median(values: number[]): number {
+  const sorted = values.slice().sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
 function rate(misses: number, strikes: number): number {
   return strikes ? Math.round(misses / strikes * 1000) / 1000 : 0;
 }
@@ -36,9 +52,11 @@ export function rollup(days: DayLog[], opts?: { topBars?: number; minStrikes?: n
 
   for (const day of ordered) {
     let spoiled = false;
+    let prev: { piece: string; step: number; at: number } | null = null;
     for (const value of Array.isArray(day.entries) ? day.entries : []) {
       const entry = record(value);
       if (!entry) continue;
+      if (entry.kind === 'piece' || entry.kind === 'lap' || entry.kind === 'loop') prev = null;
       if (entry.kind === 'piece') {
         if (typeof entry.piece === 'string' && entry.piece.trim()) {
           current = entry.piece;
@@ -58,8 +76,8 @@ export function rollup(days: DayLog[], opts?: { topBars?: number; minStrikes?: n
       if (!piece) {
         piece = {
           piece: current, strikes: 0, misses: 0, rate: 0, laps: 0, cleanLaps: 0,
-          worstBars: [], fingers: [], days: [], fingerData: false,
-          barMap: new Map(), fingerMap: new Map(), dayMap: new Map(),
+          worstBars: [], fingers: [], days: [], fingerData: false, spotBars: [],
+          barMap: new Map(), fingerMap: new Map(), dayMap: new Map(), gaps: [],
         };
         pieces.set(current, piece);
       }
@@ -86,10 +104,17 @@ export function rollup(days: DayLog[], opts?: { topBars?: number; minStrikes?: n
       stat.misses += miss;
       if (typeof entry.bar === 'number' && Number.isInteger(entry.bar) && entry.bar > 0) {
         const bar = piece.barMap.get(entry.bar) ??
-          { bar: entry.bar, strikes: 0, misses: 0, rate: 0 };
+          { bar: entry.bar, strikes: 0, misses: 0, rate: 0, hesitations: 0 };
         bar.strikes++;
         bar.misses += miss;
         piece.barMap.set(entry.bar, bar);
+        // #6460: the gap from the last correct step of this piece, today, in this lap.
+        if (MOVED_ON.has(entry.result as string) && typeof entry.timestamp === 'number' &&
+          Number.isFinite(entry.timestamp) && typeof entry.step === 'number' && Number.isInteger(entry.step)) {
+          const gap = prev && prev.piece === current && prev.step !== entry.step ? entry.timestamp - prev.at : 0;
+          if (gap > 0 && gap <= MAX_GAP_MS) piece.gaps.push({ bar: entry.bar, gap });
+          prev = { piece: current, step: entry.step, at: entry.timestamp };
+        }
       }
       if (!miss || !Array.isArray(entry.fingers)) continue;
       piece.fingerData = true;
@@ -124,7 +149,14 @@ export function rollup(days: DayLog[], opts?: { topBars?: number; minStrikes?: n
     from: ordered[0]?.date ?? null,
     to: ordered[ordered.length - 1]?.date ?? null,
     pieces: Array.from(pieces.values(), value => {
-      const { barMap, fingerMap, dayMap, ...piece } = value;
+      const { barMap, fingerMap, dayMap, gaps, ...piece } = value;
+      if (gaps.length >= MIN_GAPS) {
+        const usual = median(gaps.map(g => g.gap));
+        for (const g of gaps) {
+          const bar = barMap.get(g.bar);
+          if (bar && g.gap > HESITATE_FACTOR * usual) bar.hesitations++;
+        }
+      }
       return {
         ...piece,
         rate: rate(piece.misses, piece.strikes),
@@ -133,6 +165,11 @@ export function rollup(days: DayLog[], opts?: { topBars?: number; minStrikes?: n
         })).filter(bar => bar.misses > 0 && bar.strikes >= minStrikes)
           .sort((a, b) => b.misses - a.misses || b.rate - a.rate || a.bar - b.bar)
           .slice(0, topBars),
+        spotBars: Array.from(barMap.values(), bar => ({
+          ...bar, rate: rate(bar.misses, bar.strikes),
+        })).filter(bar => bar.misses + bar.hesitations > 0 && bar.strikes >= minStrikes)
+          .sort((a, b) => b.misses + b.hesitations - (a.misses + a.hesitations) || b.misses - a.misses || a.bar - b.bar)
+          .slice(0, MAX_SPOT_BARS),
         fingers: Array.from(fingerMap.values()).sort((a, b) =>
           b.misses - a.misses || compare(a.hand, b.hand) || compare(a.finger, b.finger)),
         days: Array.from(dayMap.values(), day => ({

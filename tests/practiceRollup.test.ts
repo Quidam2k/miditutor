@@ -54,7 +54,7 @@ describe('rollup', () => {
     }]).pieces[0];
     expect(result).toMatchObject({ strikes: 6, misses: 2, rate: 0.333 });
     expect(result.days[0]).toMatchObject({ strikes: 6, misses: 2, rate: 0.333 });
-    expect(result.worstBars).toEqual([{ bar: 1, strikes: 6, misses: 2, rate: 0.333 }]);
+    expect(result.worstBars).toEqual([{ bar: 1, strikes: 6, misses: 2, rate: 0.333, hesitations: 0 }]);
   });
 
   it('orders worst bars by misses, rate, then bar, and applies both options', () => {
@@ -71,10 +71,10 @@ describe('rollup', () => {
       ],
     }];
     expect(rollup(days).pieces[0].worstBars).toEqual([
-      { bar: 5, strikes: 4, misses: 3, rate: 0.75 },
-      { bar: 2, strikes: 3, misses: 2, rate: 0.667 },
-      { bar: 3, strikes: 3, misses: 2, rate: 0.667 },
-      { bar: 1, strikes: 4, misses: 2, rate: 0.5 },
+      { bar: 5, strikes: 4, misses: 3, rate: 0.75, hesitations: 0 },
+      { bar: 2, strikes: 3, misses: 2, rate: 0.667, hesitations: 0 },
+      { bar: 3, strikes: 3, misses: 2, rate: 0.667, hesitations: 0 },
+      { bar: 1, strikes: 4, misses: 2, rate: 0.5, hesitations: 0 },
     ]);
     expect(rollup(days, { minStrikes: 2, topBars: 2 }).pieces[0].worstBars
       .map(bar => bar.bar)).toEqual([5, 4]);
@@ -211,5 +211,26 @@ describe('rollup', () => {
     const before = JSON.stringify(days);
     rollup(days);
     expect(JSON.stringify(days)).toBe(before);
+  });
+
+  it('#6460 counts a step over twice his usual gap as a hesitation in its bar', () => {
+    // Steps 0..10 in bars 1-3, 500 ms apart, except step 6 (bar 2) after 1600 ms and step 9 after 12 s (a stop).
+    const gaps = [0, 500, 500, 500, 500, 500, 1600, 500, 500, 12000, 500];
+    let t = 0;
+    const entries: unknown[] = [piece('A')];
+    gaps.forEach((gap, step) => {
+      t += gap;
+      entries.push({ kind: 'follow', timestamp: t, result: 'advance', step, bar: 1 + Math.floor(step / 4), note: 60 });
+    });
+    entries.push({ kind: 'follow', timestamp: t + 100, result: 'wrong', step: 10, bar: 3, note: 61 });
+    const a = rollup([{ date: '2026-01-01', entries }], { minStrikes: 1 }).pieces[0];
+    expect(a.spotBars.map(b => [b.bar, b.misses, b.hesitations])).toEqual([[3, 1, 0], [2, 0, 1]]);
+    expect(a.worstBars.map(b => b.bar)).toEqual([3]);
+  });
+
+  it('#6460 needs 8 gaps before it calls anything a hesitation', () => {
+    const entries: unknown[] = [piece('A'), ...[0, 500, 5000].map((t, step) => (
+      { kind: 'follow', timestamp: t, result: 'advance', step, bar: 1, note: 60 }))];
+    expect(rollup([{ date: '2026-01-01', entries }], { minStrikes: 1 }).pieces[0].spotBars).toEqual([]);
   });
 });

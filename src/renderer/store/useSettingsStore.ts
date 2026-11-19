@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { EYES_UP_START_MS, EyesUpMode } from '../engine/EyesUp';
 import { GRAZE_MS } from '../engine/ScoreFollower';
 import { starsOf, toggleSpan } from '../engine/OutwardChunk';
+import { removeSpot, SPOT_KEEP_DAYS, type Dismissed, type Spot } from '../engine/TroubleSpots';
 import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
 import { ExerciseType } from '../types/exercise';
@@ -37,6 +38,11 @@ interface SettingsState {
   pieceLoops: Record<string, { first: number; last: number }>;
   /** #6371: bar ranges he starred on each piece, by displayed title (at most MAX_STARS). */
   pieceStars: Record<string, { first: number; last: number }[]>;
+  /** #6460: trouble spots per piece (title), and spots he removed (so auto-add leaves them be). */
+  troubleSpots: Record<string, Spot[]>;
+  spotDismissed: Record<string, Dismissed[]>;
+  /** #6460: clean loops alone AND clean passes in context it takes to clear a spot (Todd: 5). */
+  spotClean: number;
   /** #5259: the piece list shows only favorites (and the piece on screen). */
   favoritesOnly: boolean;
   /** #5260 note trainer: which clef(s) it draws from; #10262: accidentals on = the Keys toggle. */
@@ -135,6 +141,8 @@ interface SettingsState {
   setLastView: (view: string) => void;
   setPieceLoop: (title: string, bars: { first: number; last: number }) => void;
   toggleStar: (title: string, bars: { first: number; last: number }) => void;
+  setSpots: (title: string, spots: Spot[]) => void;
+  dismissSpot: (title: string, span: { first: number; last: number }, keep?: boolean) => void;
   setKeepBpm: (title: string, bpm: number) => void;
   setFavoritesOnly: (on: boolean) => void;
   toggleFavoritePiece: (title: string) => void;
@@ -143,7 +151,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'missKind' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'missKind' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder' | 'spotClean';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -169,6 +177,9 @@ export const useSettingsStore = create<SettingsState>()(
       lastView: 'practice',
       pieceLoops: {},
       pieceStars: {},
+      troubleSpots: {},
+      spotDismissed: {},
+      spotClean: 5,
       favoritesOnly: false,
       trainerClef: 'treble',
       trainerAccidentals: true,
@@ -247,6 +258,16 @@ export const useSettingsStore = create<SettingsState>()(
       setPieceLoop: (title, bars) => set((s) => ({ pieceLoops: { ...s.pieceLoops, [title]: bars } })),
       toggleStar: (title, bars) =>
         set((s) => ({ pieceStars: { ...s.pieceStars, [title]: toggleSpan(starsOf(s.pieceStars, title), bars) } })),
+      setSpots: (title, spots) => set((s) => ({ troubleSpots: { ...s.troubleSpots, [title]: spots } })),
+      // keep: a ticked-off spot stays on show; only the misses before now stop it coming straight back.
+      dismissSpot: (title, span, keep = false) =>
+        set((s) => ({
+          troubleSpots: keep ? s.troubleSpots : { ...s.troubleSpots, [title]: removeSpot(own(s.troubleSpots, title), span) },
+          spotDismissed: {
+            ...s.spotDismissed,
+            [title]: [...own(s.spotDismissed, title).filter((d) => Date.now() - d.at < SPOT_KEEP_DAYS * 86_400_000), { ...span, at: Date.now() }],
+          },
+        })),
       setKeepBpm: (title, bpm) => set((s) => ({ keepBpms: { ...s.keepBpms, [title]: bpm } })),
       setFavoritesOnly: (on) => set({ favoritesOnly: on }),
       toggleFavoritePiece: (title) =>
@@ -277,3 +298,8 @@ export const useSettingsStore = create<SettingsState>()(
     },
   ),
 );
+
+/** A per-piece list by title (an own key only: a piece called "constructor" has none). */
+export function own<T>(all: Record<string, T[]>, title: string): T[] {
+  return Object.hasOwn(all, title) ? all[title] : [];
+}

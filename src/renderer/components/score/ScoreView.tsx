@@ -29,6 +29,9 @@ import { BinderPreview, type BinderPreviewData } from './BinderPreview';
 import { fingersLowToHigh, nextFinger, passLoopEdge, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, grewLabel, lapDone, loopEnd, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { outerFor, outwardGrewLabel, outwardLabel, outwardLapDone, outwardRangeEdited, starsInOrder, starsOf, startOutward } from '../../engine/OutwardChunk';
+import { addSpot, autoSpots, countPass, MAX_SPOT_BARS, prune, spotAround, spotLabel, type Spot } from '../../engine/TroubleSpots';
+import { localDay, own } from '../../store/useSettingsStore';
+import type { Rollup } from '../../../shared/practiceRollup';
 import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
 import { BLOCK_WRONG_NOTE, blockHowTo, blockInput, blockLabel, current as blockPosition, pressTogether, groupPositions, showKeys, startBlocking, type BlockState, type BlockStep } from '../../engine/Blocking';
 import { BarInput } from './BarInput';
@@ -743,6 +746,16 @@ export function ScoreView() {
   // The whole range he chose; with Build backwards the loop itself is only the end of it.
   const overall = chunk ? { first: chunk.first, last: chunk.last } : loopBars;
   const lapWrongRef = useRef(0);
+  // #6460 trouble spots: bars with a miss in this lap; a scroll skip voids the lap for spots.
+  const lapWrongBarsRef = useRef(new Set<number>());
+  const lapSkippedRef = useRef(false);
+  const missLogRef = useRef(new Map<string, number[]>());
+  const lapsSinceSpotCheckRef = useRef(0);
+  const spotPassRef = useRef<() => void>(() => {});
+  const checkSpotsRef = useRef<(range: { first: number; last: number }) => void>(() => {});
+  const [spotTip, setSpotTip] = useState('');
+  const spotTipTimerRef = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(spotTipTimerRef.current), []);
   // #5945: opened at each loop wrap; notes played on past the loop's end are overruns.
   const overrunRef = useRef<Overrun | null>(null);
   // #5799: every wrong key thuds (keys within MISS_FLOOR_MS of the last thud share it).
@@ -754,8 +767,16 @@ export function ScoreView() {
     return playMissSound(useSettingsStore.getState().missVolume, useSettingsStore.getState().missKind);
   }, []);
   // #5566: a wrong note or a stray spoils the lap.
-  const spoilLap = useCallback(() => {
+  const spoilLap = useCallback((bar?: number) => {
     const first = lapWrongRef.current++ === 0;
+    // #6460: which bars this lap's misses hit, and when (a removed spot comes back if it gets bad again).
+    if (bar !== undefined) {
+      lapWrongBarsRef.current.add(bar);
+      const key = `${pieceLabelRef.current}#${bar}`;
+      const log = missLogRef.current.get(key) ?? [];
+      log.push(Date.now());
+      missLogRef.current.set(key, log);
+    }
     const sound = useSettingsStore.getState().missSound;
     const played = thudMiss();
     // #11561: say what the audio context was doing, so "didn't hear it" can be told apart from "never played".
@@ -767,6 +788,8 @@ export function ScoreView() {
   const missKind = useSettingsStore((s) => s.missKind);
   const backwardTargets = useSettingsStore((s) => s.backwardTargets);
   const pieceStars = useSettingsStore((s) => s.pieceStars);
+  const allSpots = useSettingsStore((s) => s.troubleSpots);
+  const spotClean = useSettingsStore((s) => s.spotClean);
   const setBackwardTargets = useSettingsStore((s) => s.setBackwardTargets);
   const [bands, setBands] = useState<Band[]>([]);
   const [layoutTick, setLayoutTick] = useState(0);
@@ -919,6 +942,7 @@ export function ScoreView() {
     setMixing(false);
   };
   const pieceName = piece.group ? `${piece.label} (${piece.group.label})` : piece.label;
+  const pieceSpots: Spot[] = own(allSpots, piece.label); // #6460
   const freshNow = freshRef.current?.label === piece.label ? freshRef.current : null;
   // #11354: hints start off on a new piece (fresh tune, sight-read pick), and stay off in a bare run.
   const hintsOffNew = useSettingsStore((s) => s.hintsOffNew);
@@ -1108,6 +1132,9 @@ export function ScoreView() {
       chordMoves: chords
         ? { changes: chords.changes, kept: chords.kept, same: chords.same, shifts: chords.shifts, rings: chords.rings.length }
         : null,
+      spots: pieceSpots.map((sp) => ({
+        first: sp.first, last: sp.last, alone: sp.alone, inContext: sp.inContext, ticked: sp.ticked ?? null, auto: sp.auto === true,
+      })),
       pickingLoop: picking === 'off' ? null : picking,
       playedMarks: marks.length,
       wrongMarks: marks.filter((m) => m.wrong).length,
@@ -1117,7 +1144,7 @@ export function ScoreView() {
       // #5652 C: Read ahead on, and how many note groups are blanked at the cursor now.
       readAhead: readAhead ? { blanked } : null,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked]);
+  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1359,6 +1386,8 @@ export function ScoreView() {
     window.clearTimeout(hesitateTimerRef.current);
     setHesitating(false);
     lapWrongRef.current = 0;
+    lapWrongBarsRef.current = new Set();
+    lapSkippedRef.current = false;
     exprRef.current?.reset();
     exprNewPassRef.current = false;
     setExprFindings([]);
@@ -1555,6 +1584,8 @@ export function ScoreView() {
         setLoopBars({ first, last });
         // Build backwards moving its own loop isn't him choosing a range (#5259).
         if (!keepChunk) useSettingsStore.getState().setPieceLoop(pieceLabelRef.current, { first, last });
+        // #6460: a range he chose: bars inside it he keeps missing join his trouble spots.
+        if (!keepChunk) checkSpotsRef.current({ first, last });
         reportEvent('loop', { firstBar: first, lastBar: last });
       } else {
         f.clearRange();
@@ -1605,6 +1636,76 @@ export function ScoreView() {
     applyLoop({ first: c.start, last: loopEnd(c) }, true);
     useSettingsStore.getState().setPieceLoop(pieceLabelRef.current, { first: c.first, last: c.last });
     chunkEvent(c, { on: true });
+  };
+  // #6460 trouble spots. The 3 s line under the toolbar for added / ticked-off spots.
+  const showSpotTip = (text: string) => {
+    setSpotTip((prev) => (prev ? `${prev} · ${text}` : text)); // a tick-off and an add in one lap both show
+    window.clearTimeout(spotTipTimerRef.current);
+    spotTipTimerRef.current = window.setTimeout(() => setSpotTip(''), 3000);
+  };
+  const spanText = (sp: { first: number; last: number }) => (sp.first === sp.last ? `bar ${sp.first}` : `bars ${sp.first}–${sp.last}`);
+  const putSpot = (span: { first: number; last: number }) => {
+    const st = useSettingsStore.getState();
+    const title = pieceLabelRef.current;
+    st.setSpots(title, addSpot(prune(own(st.troubleSpots, title), localDay()), span, localDay()));
+    showSpotTip(`Added: ${spanText(span)}`);
+    reportEvent('spot', { added: [span], manual: true });
+  };
+  const addSpotAt = (bar: number) => {
+    const whole = wholePiece();
+    if (whole) putSpot(spotAround(bar, whole));
+  };
+  // One lap or whole-piece pass ended: count it for each spot (alone / in context), tick off finished ones.
+  spotPassRef.current = () => {
+    const f = followerRef.current;
+    const wrongBars = lapWrongBarsRef.current;
+    const skipped = lapSkippedRef.current;
+    lapWrongBarsRef.current = new Set();
+    lapSkippedRef.current = false;
+    if (!f || skipped || !f.steps.length) return;
+    const r = f.range;
+    const lapBars = r ? { first: f.steps[r.first].measure, last: f.steps[r.last].measure } : wholePiece();
+    if (!lapBars) return;
+    const st = useSettingsStore.getState();
+    const title = pieceLabelRef.current;
+    const before = own(st.troubleSpots, title);
+    if (before.length) {
+      const { spots, ticked } = countPass(before, lapBars, wrongBars, st.spotClean, localDay());
+      st.setSpots(title, spots);
+      reportEvent('spot', {
+        pass: lapBars, wrongBars: [...wrongBars],
+        ...(ticked.length ? { ticked: ticked.map((t) => ({ first: t.first, last: t.last })) } : {}),
+      });
+      if (ticked.length) {
+        for (const t of ticked) st.dismissSpot(title, t, true);
+        const names = ticked.map((t) => spanText(t)).join(', ');
+        showSpotTip(`${names.charAt(0).toUpperCase()}${names.slice(1)} off your list!`);
+        void playChime();
+      }
+    }
+    if (++lapsSinceSpotCheckRef.current >= 5) checkSpotsRef.current(lapBars);
+  };
+  // Bars in this range his log says he keeps missing or hesitating on (last 7 days) join the list.
+  checkSpotsRef.current = (range) => {
+    lapsSinceSpotCheckRef.current = 0;
+    const call = (window as unknown as { tutorBridge?: { practiceRollup?: (days: number) => Promise<Rollup | null> } }).tutorBridge?.practiceRollup;
+    const whole = wholePiece();
+    if (!call || !whole) return;
+    const title = pieceLabelRef.current;
+    const name = pieceName;
+    void call(7).then((roll) => {
+      if (pieceLabelRef.current !== title) return;
+      const bars = roll?.pieces.find((p) => p.piece === name)?.spotBars ?? [];
+      const st = useSettingsStore.getState();
+      const recent = (bar: number, since: number) => (missLogRef.current.get(`${title}#${bar}`) ?? []).filter((t) => t >= since).length;
+      const { spots, added } = autoSpots(
+        prune(own(st.troubleSpots, title), localDay()), own(st.spotDismissed, title), bars, range, whole, Date.now(), localDay(), recent,
+      );
+      if (!added.length) return;
+      st.setSpots(title, spots);
+      showSpotTip(`Added: ${added.map(spanText).join(', ')}`);
+      reportEvent('spot', { added, auto: true });
+    }, (err: unknown) => console.warn('[spots] rollup failed:', err));
   };
   const toggleOutward = () => {
     if (chunk) {
@@ -1885,6 +1986,7 @@ export function ScoreView() {
   // Returns true when the note that wrapped it shouldn't be judged (grew or stopped).
   const chunkLap = useCallback(() => {
     emitRep('end'); // #6122: a rep (one lap) is done
+    spotPassRef.current();
     const wrong = lapWrongRef.current;
     lapWrongRef.current = 0;
     const c = chunkRef.current;
@@ -2440,6 +2542,7 @@ export function ScoreView() {
         if (settled.kind === 'loop' && chunkLap()) return;
       } else if (settled?.kind === 'complete') {
         emitRep('end'); // #6122: the whole piece, once
+        spotPassRef.current();
         paintHeldTies(settled.from, f.steps.length - 1);
       }
       const idx = f.index;
@@ -2570,6 +2673,7 @@ export function ScoreView() {
         }
         case 'complete': {
           emitRep('end'); // #6122
+          spotPassRef.current();
           paintHeldTies(result.from, f.steps.length - 1);
           const fresh = freshRef.current;
           const begun = lapStartRef.current;
@@ -2588,7 +2692,7 @@ export function ScoreView() {
         }
         case 'wrong': {
           setWrongCount((c) => c + 1);
-          spoilLap();
+          spoilLap(step?.measure);
           setFeedback({
             kind: 'wrong',
             played: result.played,
@@ -2603,7 +2707,7 @@ export function ScoreView() {
         }
         case 'stray':
           // #5516: no credit and the step stands; the lap just isn't clean any more.
-          spoilLap();
+          spoilLap(step?.measure);
           flashWrong();
           break;
         case 'ignored':
@@ -3185,8 +3289,9 @@ export function ScoreView() {
       if (past === null) edgeRef.current.from = -1;
       if (step === null) return;
       setEdgeTip(null);
-      // Notes skipped by scrolling mustn't earn a clean lap in Build backwards.
+      // Notes skipped by scrolling mustn't earn a clean lap in Build backwards, or count for a spot.
       if (chunk) lapWrongRef.current++;
+      lapSkippedRef.current = true;
       manualMove(step - cursorIndexRef.current);
       return;
     }
@@ -3296,6 +3401,9 @@ export function ScoreView() {
   const finished = feedback.kind === 'complete';
   const lastBar = followerRef.current?.steps.at(-1)?.measure;
   const firstPieceBar = followerRef.current?.steps[0]?.measure;
+  // #6460: his trouble spots on this piece, open ones first.
+  const spotList = prune(pieceSpots, localDay()).sort((a, b) => Number(!!a.ticked) - Number(!!b.ticked) || a.first - b.first);
+  const openSpots = spotList.filter((sp) => !sp.ticked).length;
   // #6371: his starred ranges on this piece, shortest first.
   const starred = starsInOrder(starsOf(pieceStars, piece.label));
   const overallStarred = !!overall && starred.some((sp) => sp.first === overall.first && sp.last === overall.last);
@@ -4037,7 +4145,7 @@ export function ScoreView() {
               <button data-stay onClick={corral.showEverything} data-testid="show-everything" className={btn}>Show everything</button>
             )}
           </Popover>
-          <PracticeReport btn={btn} piece={pieceName} onLoopBar={(bar) => applyLoop({ first: bar, last: bar })} onBlockBar={(bar) => {
+          <PracticeReport btn={btn} piece={pieceName} onLoopBar={(bar) => applyLoop({ first: bar, last: bar })} onAddSpot={addSpotAt} onBlockBar={(bar) => {
             applyLoop({ first: bar, last: bar });
             startBlock({ first: bar, last: bar });
           }} disabled={watching || keeping || status !== 'ready'} />
@@ -4194,6 +4302,45 @@ export function ScoreView() {
                   ))}
                 </Popover>
               )}
+              {picking === 'off' && (
+                <Popover label={`Spots ${openSpots}`} testId="spots" btn={`${btn} px-1.5 py-0.5`}>
+                  {overall && overall.last - overall.first < MAX_SPOT_BARS && (
+                    <button onClick={() => putSpot(overall)} disabled={watching || keeping} className={btn} data-testid="spot-add">
+                      + Add {spanText(overall)}
+                    </button>
+                  )}
+                  {spotList.length === 0 && (
+                    <span className="text-xs text-gray-400">No trouble spots yet. Bars you keep missing in the range you are on get added here.</span>
+                  )}
+                  {spotList.map((sp) =>
+                    sp.ticked ? (
+                      <span key={`${sp.first}-${sp.last}`} className="text-gray-500" data-testid={`spot-${sp.first}-${sp.last}`}>
+                        {spotLabel(sp, spotClean)}
+                      </span>
+                    ) : (
+                      <span key={`${sp.first}-${sp.last}`} className="flex items-center gap-2" data-testid={`spot-${sp.first}-${sp.last}`}>
+                        <span className="flex-1 font-mono text-gray-200">{spotLabel(sp, spotClean)}</span>
+                        <button onClick={() => editRange(sp)} disabled={watching || keeping} className={btn} data-testid={`spot-loop-${sp.first}-${sp.last}`}>
+                          Loop
+                        </button>
+                        <button
+                          data-stay
+                          onClick={() => {
+                            useSettingsStore.getState().dismissSpot(pieceLabelRef.current, sp);
+                            reportEvent('spot', { removed: { first: sp.first, last: sp.last } });
+                          }}
+                          className="px-1 text-gray-400 hover:text-red-300"
+                          title="Take this spot off the list"
+                          aria-label={`Remove spot ${sp.first}–${sp.last}`}
+                          data-testid={`spot-x-${sp.first}-${sp.last}`}
+                        >
+                          ✕
+                        </button>
+                      </span>
+                    ),
+                  )}
+                </Popover>
+              )}
               {picking === 'off' && loopBars && (
                 <>
                   {chunk && <span data-testid="loop-now">· now looping {loopBars.first}–{loopBars.last}</span>}
@@ -4290,6 +4437,11 @@ export function ScoreView() {
             Go again
           </button>
         </div>
+      )}
+      {spotTip && (
+        <p className="text-sm font-medium text-emerald-300" data-testid="spot-tip">
+          {spotTip}
+        </p>
       )}
       {grewTip && !reached && (
         <p className="text-sm font-medium text-yellow-200" data-testid="grew-tip">

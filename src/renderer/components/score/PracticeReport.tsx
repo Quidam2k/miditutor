@@ -8,8 +8,9 @@ const getBridge = () =>
 const pct = (rate: number) => `${Math.round(rate * 100)}%`;
 const HAND = { L: 'Left', R: 'Right', '?': '' } as const;
 
-export function PracticeReport({ btn, piece, onLoopBar, onBlockBar, disabled }: {
-  btn: string; piece: string; onLoopBar: (bar: number) => void; onBlockBar?: (bar: number) => void; disabled?: boolean;
+export function PracticeReport({ btn, piece, onLoopBar, onBlockBar, onAddSpot, disabled }: {
+  btn: string; piece: string; onLoopBar: (bar: number) => void; onBlockBar?: (bar: number) => void;
+  onAddSpot?: (bar: number) => void; disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<PieceRollup | null | 'none'>(null);
@@ -31,6 +32,9 @@ export function PracticeReport({ btn, piece, onLoopBar, onBlockBar, disabled }: 
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   };
 
+  // #6460: bars he misses or hesitates on (an older main sends only worstBars).
+  const bars = data && data !== 'none' ? (data.spotBars ?? data.worstBars) : [];
+
   return (
     <div className="relative">
       <button onClick={toggle} className={btn} data-testid="practice-report" title="Which bars and fingers you miss most, last 7 days">
@@ -51,9 +55,9 @@ export function PracticeReport({ btn, piece, onLoopBar, onBlockBar, disabled }: 
                 {data.laps > 0 && `, ${data.cleanLaps} of ${data.laps} laps clean`}.
               </p>
               <div>
-                <div className="mb-1 text-xs uppercase tracking-wide text-gray-500">Bars you miss most</div>
-                {data.worstBars.length === 0 && <p>None stand out.</p>}
-                {data.worstBars.map((b) => (
+                <div className="mb-1 text-xs uppercase tracking-wide text-gray-500">Bars you miss or hesitate on</div>
+                {bars.length === 0 && <p>None stand out.</p>}
+                {bars.map((b) => (
                   <div key={b.bar} className="flex items-center gap-1">
                     <button
                       onClick={() => onLoopBar(b.bar)}
@@ -63,7 +67,9 @@ export function PracticeReport({ btn, piece, onLoopBar, onBlockBar, disabled }: 
                       data-testid="report-bar"
                     >
                       <span>Bar {b.bar}</span>
-                      <span className="text-gray-400">{b.misses} of {b.strikes} ({pct(b.rate)})</span>
+                      <span className="text-gray-400">
+                        {b.misses} of {b.strikes} ({pct(b.rate)}){b.hesitations ? ` · ${b.hesitations} hesitation${b.hesitations === 1 ? '' : 's'}` : ''}
+                      </span>
                     </button>
                     {/* #5657c: a bar he keeps missing is the one to block. */}
                     {onBlockBar && (
@@ -75,6 +81,18 @@ export function PracticeReport({ btn, piece, onLoopBar, onBlockBar, disabled }: 
                         data-testid="report-block-bar"
                       >
                         Block
+                      </button>
+                    )}
+                    {/* #6460: put this bar (and one each side) on his trouble-spot list. */}
+                    {onAddSpot && (
+                      <button
+                        onClick={() => onAddSpot(b.bar)}
+                        disabled={disabled}
+                        className="rounded px-1 text-xs text-emerald-300 hover:bg-gray-800 disabled:opacity-40"
+                        title="Add this bar and the bars either side to your trouble spots"
+                        data-testid="report-add-spot"
+                      >
+                        + List
                       </button>
                     )}
                   </div>
