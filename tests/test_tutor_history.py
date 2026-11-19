@@ -135,3 +135,145 @@ def test_pull_never_shrinks_a_mirror(tmp_path, monkeypatch):
     monkeypatch.setattr(th, "_ssh", lambda *a, **k: b"5 2026-11-01.jsonl\n")
     assert th.pull(str(tmp_path), "mac") == {}
     assert "remote shrank" in (tmp_path / "pull.log").read_text(encoding="utf-8")
+
+
+# ---- #5517 teacher summary
+
+def fol(t, step, bar, expected, result="advance", played=None):
+    return [ev("noteon", t, note=played or 60, velocity=60, source="hardware"),
+            ev("follow", t + 1, result=result, step=step, bar=bar, note=played, expected=expected)]
+
+
+def test_midi_names():
+    assert [th._midi(n) for n in ("C4", "Bb3", "C#5", "Db3", 61, "x", None)] == [60, 58, 73, 49, 61, None, None]
+
+
+def test_wrong_how_restrike_near_other():
+    lines = [ev("piece", T0 - 10, piece="Tune")]
+    lines += fol(T0, 0, 1, ["C4"]) + fol(T0 + 500, 1, 1, ["E4"])
+    lines += fol(T0 + 900, 1, 1, ["E4"], "wrong", played=60)   # C4 again: the note before
+    lines += fol(T0 + 1200, 1, 1, ["E4"], "wrong", played=65)  # F4: next door to E4
+    lines += fol(T0 + 1500, 1, 1, ["E4"], "wrong", played=72)  # C5: other
+    p = th.summarize_day(lines)["sessions"][0]["pieces"][0]
+    assert p["wrong_bars"] == [[1, 3]]
+    assert p["wrong_how"] == [[1, 1, 1, 1]]
+
+
+def test_slow_bars_need_eight_gaps_and_skip_breaks():
+    lines = [ev("piece", T0 - 10, piece="Tune")]
+    t = T0
+    for step in range(12):
+        gap = {5: 3000, 9: 60_000}.get(step, 500)  # step 5 hesitates; step 9 is a break
+        t += gap
+        lines += fol(t, step, 1 + step // 4, ["C4"])
+    p = th.summarize_day(lines)["sessions"][0]["pieces"][0]
+    assert p["slow_bars"] == [[2, 1]]
+    assert th._slow_bars([(500, 1)] * 7) == []
+
+
+def _write_lib(tmp_path, match="exact"):
+    (tmp_path / "review").mkdir()
+    (tmp_path / "tune.musicxml").write_text(
+        "<score-partwise><work><work-title>Tune</work-title></work></score-partwise>")
+    layout = {"match": match, "score": "tune.musicxml", "systems": [
+        {"page": "01.png", "measures": [1, 4]},
+        {"page": "01.png", "measures": [5, 8]},
+        {"page": "02.png", "measures": [9, 12]}]}
+    (tmp_path / "review" / "tune.layout.json").write_text(json.dumps(layout))
+
+
+def test_last_lesson_date(tmp_path):
+    assert th.last_lesson_date(str(tmp_path)) is None
+    (tmp_path / "lesson-notebook.jsonl").write_text(
+        '{"date": "2024-04-01"}\nnot json\n{"date": "2024-05-01"}\n[1]\n{"date": "soon"}\n')
+    assert th.last_lesson_date(str(tmp_path)) == "2024-05-01"
+
+
+def test_bar_places_by_title_and_slug(tmp_path):
+    _write_lib(tmp_path)
+    bp = th.bar_places(str(tmp_path))
+    assert bp["tune"][10] == (2, 1, 2)
+    assert bp["tune"][6] == (1, 2, 2)
+    assert th._title_key("Tune (from KA)") == "tune"
+
+
+def test_bar_places_skips_inexact(tmp_path):
+    _write_lib(tmp_path, match="approx")
+    assert th.bar_places(str(tmp_path)) == {}
+
+
+def test_ordinal():
+    got = [th.ordinal(n) for n in (1, 2, 3, 4, 11, 12, 13, 21, 22, 101, 111)]
+    assert got == ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "101st", "111th"]
+
+
+def _sess(day, acc, bars, loops=(), how=(), slow=(), span=(1, 12)):
+    return {"day": day, "start": day + "T10:00:00", "minutes": 20.0, "notes": 100, "accuracy": acc,
+            "pieces": [{"piece": "Tune", "notes": 100, "laps": 5, "clean_laps": 2, "bars": list(span),
+                        "loops": list(loops), "wrong_bars": bars, "wrong_how": list(how),
+                        "slow_bars": list(slow)},
+                       {"piece": None, "notes": 1, "laps": 0, "clean_laps": 0, "loops": [], "wrong_bars": []}]}
+
+
+def _fake_history(monkeypatch, sessions):
+    monkeypatch.setattr(th, "history", lambda root, days=7, piece=None: {"sessions": sessions})
+
+
+def test_teacher_trend(tmp_path, monkeypatch):
+    _write_lib(tmp_path)
+    (tmp_path / "lesson-notebook.jsonl").write_text('{"date": "2024-05-01"}\n')
+    on_lesson_day = _sess("2024-05-01", 0.1, [[3, 99]])
+    s = [_sess("2024-05-02", 0.6, [[10, 3], [5, 2]], [{"firstBar": 1, "lastBar": 8, "laps": 4}],
+               [[10, 1, 2, 0], [5, 0, 0, 2]], [[7, 2]]),
+         _sess("2024-05-03", 0.7, [[10, 2]], [{"firstBar": 7, "lastBar": 7, "laps": 2}], [[10, 0, 0, 2]], [[7, 2]]),
+         _sess("2024-05-04", 0.75, [[5, 2]]),
+         _sess("2024-05-04", 0.8, [[11, 1]])]
+    _fake_history(monkeypatch, [on_lesson_day] + s)
+    out = th.teacher("x", library=str(tmp_path), today=date(2024, 5, 10))
+    assert out.startswith("# Practice May 2 – May 10 (since the May 1 lesson)\n")
+    assert "Based on 4 sessions on 3 days, 80 minutes in all." in out
+    assert "snapshot" not in out
+    assert "Right notes: 60% in the first session, 80% in the latest." in out
+    assert "Looped (app bar numbers): bars 1–8 (4 times), bar 7 (2 times)." in out
+    assert "page 2, line 1, 2nd bar: 5 wrong notes (1 replayed the note before, 2 hit a key next door, 2 other wrong notes)" in out
+    assert "page 1, line 2, 1st bar: 4 wrong notes (2 other wrong notes)" in out
+    assert "Slowed down most at: page 1, line 2, 3rd bar." in out
+    assert "No misses on May 4 where he missed before: page 2, line 1, 2nd bar." in out
+    assert "99" not in out
+
+
+def test_teacher_thin_week_is_a_snapshot(tmp_path, monkeypatch):
+    _fake_history(monkeypatch, [_sess("2024-05-08", 0.5, [[20, 4]]), _sess("2024-05-09", 0.9, [])])
+    out = th.teacher("x", library=str(tmp_path), since="2024-05-08", today=date(2024, 5, 10))
+    assert out.startswith("# Practice May 8 – May 10\n")
+    assert "Based on 2 sessions on 2 days" in out
+    assert "snapshot, not a trend" in out
+    assert "Right notes" not in out and "No misses on" not in out
+    assert "bar 20 as the app counts (no page map for this piece yet): 4 wrong notes" in out
+
+
+def test_teacher_empty(tmp_path, monkeypatch):
+    _fake_history(monkeypatch, [])
+    out = th.teacher("x", library=str(tmp_path), today=date(2024, 5, 10))
+    assert out.startswith("# Practice May 4 – May 10\n")
+    assert "No practice logged in these days." in out
+
+
+def test_teacher_lesson_today_and_bad_dates(tmp_path, monkeypatch):
+    _fake_history(monkeypatch, [])
+    (tmp_path / "lesson-notebook.jsonl").write_text('{"date": "2024-05-10"}\n{"date": "2024-13-01"}\n')
+    out = th.teacher("x", library=str(tmp_path), today=date(2024, 5, 10))
+    assert out == "# Practice (since the May 10 lesson)\n\nNo practice logged since that lesson yet.\n"
+    assert th.valid_day("2024-02-30") is None and th.valid_day("2024-02-29") == date(2024, 2, 29)
+
+
+def test_cli_rejects_impossible_since():
+    import pytest
+    with pytest.raises(SystemExit):
+        th.main(["teacher", "--since", "2024-02-30", "--no-pull"])
+
+
+def test_bar_places_keeps_file_name_map_when_score_unreadable(tmp_path):
+    _write_lib(tmp_path)
+    (tmp_path / "tune.musicxml").write_text("<not xml")
+    assert th.bar_places(str(tmp_path))["tune"][10] == (2, 1, 2)

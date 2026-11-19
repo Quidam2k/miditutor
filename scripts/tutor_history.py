@@ -25,6 +25,7 @@ Run:
   python tutor_history.py pull
   python tutor_history.py summarize [--all | --day YYYY-MM-DD]
   python tutor_history.py show [--days N] [--piece P]
+  python tutor_history.py teacher [--since YYYY-MM-DD] [--no-pull]
 """
 
 import argparse
@@ -261,11 +262,41 @@ def _merge_bars(bars):
     return out
 
 
+_NAME_RE = re.compile(r"^([A-Ga-g])([#b]*)(-?\d+)$")
+_PC = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+
+
+def _midi(name):
+    """'Bb3' -> 58, 'C#5' -> 73, a MIDI int stays itself; None if unreadable."""
+    if isinstance(name, int) and not isinstance(name, bool):
+        return name
+    m = _NAME_RE.match(name) if isinstance(name, str) else None
+    if not m:
+        return None
+    acc = m.group(2).count("#") - m.group(2).count("b")
+    return 12 * (int(m.group(3)) + 1) + _PC[m.group(1).upper()] + acc
+
+
+def _slow_bars(gaps):
+    """Bars where a step took over twice his usual time for this piece (the app's
+    hesitation rule: >= 8 gaps, gaps over 10 s are breaks, not hesitations)."""
+    usable = [g for g, _ in gaps if g <= 10_000]
+    if len(usable) < 8:
+        return []
+    limit = 2 * statistics.median(usable)
+    slow = Counter(bar for g, bar in gaps if limit < g <= 10_000)
+    return [[b, c] for b, c in sorted(slow.items(), key=lambda kv: (-kv[1], kv[0]))[:10]]
+
+
 def _finish_piece(p):
+    top = sorted(p["wrong_bars"].items(), key=lambda kv: (-kv[1], kv[0]))[:10]
     return {"piece": p["piece"], "notes": p["notes"], "bars": p["bars"],
             "wrong": p["wrong"], "laps": p["laps"], "clean_laps": p["clean_laps"],
             "spoiled_laps": p["spoiled_laps"], "loops": p["loops"],
-            "wrong_bars": [[b, c] for b, c in sorted(p["wrong_bars"].items(), key=lambda kv: (-kv[1], kv[0]))[:10]]}
+            "wrong_bars": [[b, c] for b, c in top],
+            # per missed bar: [bar, re-struck the note before, a key next door, any other key]
+            "wrong_how": [[b, *(p["how"][b][k] for k in ("restrike", "near", "other"))] for b, _ in top],
+            "slow_bars": _slow_bars(p["gaps"])}
 
 
 def _finish_stretch(st):
@@ -366,7 +397,8 @@ class _Day:
             pieces[self.piece] = {
                 "piece": self.piece, "notes": 0, "bars": None, "wrong": 0, "laps": 0,
                 "clean_laps": 0, "spoiled_laps": 0, "loops": [], "n": None,
-                "wrong_bars": Counter()}
+                "wrong_bars": Counter(), "how": {}, "exp": {}, "gaps": [],
+                "last_right": None}
         return pieces[self.piece]
 
     def _stretch(self):
@@ -437,11 +469,28 @@ class _Day:
         pe = self._piece_entry()
         st = self._stretch()
         bar = _int(ev.get("bar"))
+        step = _int(ev.get("step"))
+        if step is not None and isinstance(ev.get("expected"), list):
+            pe["exp"][step] = {m for m in map(_midi, ev["expected"]) if m is not None}
+        if key in RIGHT and step is not None and bar is not None and ts is not None:
+            last = pe["last_right"]
+            if last is not None and step == last[0] + 1:
+                pe["gaps"].append((ts - last[1], bar))
+            pe["last_right"] = (step, ts)
         if key == "wrong":
             pe["wrong"] += 1
             if bar is not None:
                 s["wrong_bars"][bar] += 1
                 pe["wrong_bars"][bar] += 1
+                note, here = _midi(ev.get("note")), pe["exp"].get(step, set())
+                before = pe["exp"].get(step - 1, set()) if step is not None else set()
+                how = pe["how"].setdefault(bar, Counter())
+                if note is not None and note in before and note not in here:
+                    how["restrike"] += 1
+                elif note is not None and here and min(abs(note - e) for e in here) <= 2:
+                    how["near"] += 1
+                else:
+                    how["other"] += 1
         if bar is not None:
             _widen(pe, bar)
             _widen(st, bar)
@@ -632,6 +681,214 @@ def history(root, days=7, piece=None):
     }
 
 
+# ------------------------------------------------------ teacher summary (#5517)
+# A plain-words roll-up since his last lesson for Todd to read and forward to JP
+# himself. Nothing here sends anything anywhere.
+
+LIBRARY = localcfg.get("library", "MIDITUTOR_LIBRARY", os.path.expanduser("~/piano/library"))
+TREND_SESSIONS, TREND_DAYS = 4, 3  # fewer than this is a snapshot, not a trend
+
+
+def valid_day(text):
+    """A real calendar day 'YYYY-MM-DD' (not just its shape), else None."""
+    if not isinstance(text, str) or not DAY_RE.match(text):
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def last_lesson_date(library):
+    best = None
+    try:
+        with open(os.path.join(library, "lesson-notebook.jsonl"), encoding="utf-8") as f:
+            for line in f:
+                try:
+                    d = json.loads(line).get("date")
+                except (ValueError, AttributeError):
+                    continue
+                if valid_day(d) and (best is None or d > best):
+                    best = d
+    except OSError:
+        pass
+    return best
+
+
+def _title_key(name):
+    """'Love Dance (from KA)' and 'love dance' match; so do a slug and its title."""
+    name = re.sub(r"\s*\([^)]*\)\s*$", "", name or "")
+    return re.sub(r"[^a-z0-9]+", "", name.lower())
+
+
+def bar_places(library):
+    """{title key: {bar: (page, line on page, nth bar in line)}} from exact Review layouts."""
+    import xml.etree.ElementTree as ET
+    out = {}
+    rdir = os.path.join(library, "review")
+    for n in sorted(_listdir(rdir)):
+        if not n.endswith(".layout.json"):
+            continue
+        try:
+            with open(os.path.join(rdir, n), encoding="utf-8") as f:
+                lay = json.load(f)
+            if lay.get("match") != "exact":
+                continue
+            per_page, places = {}, {}
+            for sy in lay["systems"]:
+                page = int(re.sub(r"\D", "", str(sy["page"])))
+                per_page[page] = per_page.get(page, 0) + 1
+                a, b = sy["measures"]
+                for bar in range(a, b + 1):
+                    places[bar] = (page, per_page[page], bar - a + 1)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+        keys = {_title_key(n[:-len(".layout.json")])}
+        try:  # the title is a bonus key; an unreadable score still leaves the file-name map
+            root = ET.parse(os.path.join(library, lay["score"])).getroot()
+            for tag in ("work/work-title", "movement-title"):
+                el = root.find(tag)
+                if el is not None and el.text and el.text.strip():
+                    keys.add(_title_key(el.text.strip()))
+        except (OSError, KeyError, TypeError, ET.ParseError):
+            pass
+        for k in keys:
+            out.setdefault(k, {}).update(places)
+    return out
+
+
+def ordinal(n):
+    if 10 <= n % 100 <= 20:
+        return f"{n}th"
+    return f"{n}" + {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+
+
+def _md(d):
+    return f"{d.strftime('%b')} {d.day}"
+
+
+def _where(bar, places):
+    if bar in places:
+        pg, ln, nth = places[bar]
+        return f"page {pg}, line {ln}, {ordinal(nth)} bar"
+    return f"bar {bar} as the app counts (no page map for this piece yet)"
+
+
+def _how_words(restrike, near, other):
+    parts = []
+    if restrike:
+        parts.append(f"{restrike} replayed the note before")
+    if near:
+        parts.append(f"{near} hit a key next door")
+    if other:
+        parts.append(f"{other} other wrong notes")
+    return ", ".join(parts)
+
+
+def _plural(n, word):
+    return f"{n} {word}" + ("" if n == 1 else "s")
+
+
+def _teacher_pieces(sessions):
+    pieces = {}
+    for x in sessions:
+        for p in x.get("pieces", []):
+            if not p.get("piece") or not p.get("notes"):
+                continue
+            d = pieces.setdefault(p["piece"], {"notes": 0, "laps": 0, "clean": 0, "loops": Counter(),
+                                               "wrong": Counter(), "how": {}, "slow": Counter(),
+                                               "by_day": {}})
+            d["notes"] += p["notes"]
+            d["laps"] += p.get("laps", 0)
+            d["clean"] += p.get("clean_laps", 0)
+            for lp in p.get("loops", []):
+                d["loops"][(lp["firstBar"], lp["lastBar"])] += lp["laps"]
+            for bar, n in p.get("wrong_bars", []):
+                d["wrong"][bar] += n
+            for bar, *kinds in p.get("wrong_how", []):
+                d["how"][bar] = [a + b for a, b in zip(d["how"].get(bar, [0, 0, 0]), kinds)]
+            for bar, n in p.get("slow_bars", []):
+                d["slow"][bar] += n
+            day = d["by_day"].setdefault(x["day"], {"wrong": Counter(), "bars": None})
+            day["wrong"].update({b: n for b, n in p.get("wrong_bars", [])})
+            if p.get("bars"):
+                lo, hi = p["bars"]
+                old = day["bars"]
+                day["bars"] = [min(lo, old[0]), max(hi, old[1])] if old else [lo, hi]
+    return pieces
+
+
+def teacher_since(library, since=None, today=None):
+    """(first day, lesson day or None): `since`, else the day after his last lesson,
+    else the last 7 days."""
+    today = today or date.today()
+    if since:
+        return since, None
+    lesson = last_lesson_date(library)
+    if lesson:
+        return (date.fromisoformat(lesson) + timedelta(days=1)).isoformat(), lesson
+    return (today - timedelta(days=6)).isoformat(), None
+
+
+def teacher(root, library=LIBRARY, since=None, today=None):
+    today = today or date.today()
+    since, lesson = teacher_since(library, since, today)
+    since_d = date.fromisoformat(since)
+    after = f" (since the {_md(date.fromisoformat(lesson))} lesson)" if lesson else ""
+    if since_d > today:
+        return f"# Practice{after}\n\nNo practice logged since that lesson yet.\n"
+    h = history(root, days=max(1, (today - since_d).days + 1))
+    sessions = sorted((x for x in h["sessions"] if since <= x["day"] <= today.isoformat()),
+                      key=lambda x: (x["day"], x.get("start") or ""))
+    lines = [f"# Practice {_md(since_d)} – {_md(today)}{after}", ""]
+    if not sessions:
+        return "\n".join(lines + ["No practice logged in these days."]) + "\n"
+    days = sorted({x["day"] for x in sessions})
+    minutes = round(sum(x.get("minutes") or 0 for x in sessions))
+    lines.append(f"Based on {_plural(len(sessions), 'session')} on {_plural(len(days), 'day')}, "
+                 f"{minutes} minutes in all.")
+    trend = len(sessions) >= TREND_SESSIONS and len(days) >= TREND_DAYS
+    if not trend:
+        lines.append("That is only a little playing, so read this as a snapshot, not a trend.")
+    acc = [x["accuracy"] for x in sessions if x.get("accuracy") is not None]
+    if trend and len(acc) >= 2:
+        lines.append(f"Right notes: {round(acc[0] * 100)}% in the first session, "
+                     f"{round(acc[-1] * 100)}% in the latest.")
+    places = bar_places(library)
+    for title, d in sorted(_teacher_pieces(sessions).items(), key=lambda kv: -kv[1]["notes"]):
+        tbl = places.get(_title_key(title), {})
+        lines += ["", f"## {title}", ""]
+        if not (d["laps"] or d["loops"] or d["wrong"]):
+            lines.append(f"- Played {_plural(d['notes'], 'note')}, no wrong notes logged.")
+        if d["laps"]:
+            lines.append(f"- {d['laps']} times through a loop, {d['clean']} of them with no wrong note.")
+        if d["loops"]:
+            parts = [(f"bar {a}" if a == b else f"bars {a}–{b}") + f" ({n} times)"
+                     for (a, b), n in d["loops"].most_common(4)]
+            lines.append("- Looped (app bar numbers): " + ", ".join(parts) + ".")
+        if d["wrong"]:
+            lines.append("- Missed most:")
+            for bar, n in d["wrong"].most_common(4):
+                how = _how_words(*d["how"].get(bar, [0, 0, 0]))
+                lines.append(f"  - {_where(bar, tbl)}: {_plural(n, 'wrong note')}" + (f" ({how})" if how else ""))
+        slow = [b for b, n in d["slow"].most_common(3) if n >= 3]
+        if slow:
+            lines.append("- Slowed down most at: " + "; ".join(_where(b, tbl) for b in slow) + ".")
+        ordered = sorted(d["by_day"])
+        if trend and len(ordered) >= 2:
+            latest = d["by_day"][ordered[-1]]
+            span = latest["bars"]
+            earlier = Counter()
+            for day in ordered[:-1]:
+                earlier.update(d["by_day"][day]["wrong"])
+            better = [b for b, n in earlier.most_common() if n >= 3 and not latest["wrong"].get(b)
+                      and span and span[0] <= b <= span[1]][:3]
+            if better:
+                lines.append(f"- No misses on {_md(date.fromisoformat(ordered[-1]))} where he missed before: "
+                             + "; ".join(_where(b, tbl) for b in better) + ".")
+    return "\n".join(lines) + "\n"
+
+
 # ----------------------------------------------------------------------- CLI
 
 def _dump(obj, **kw):
@@ -673,6 +930,26 @@ def cmd_show(args):
     return 0
 
 
+def teacher_report(root, since=None, do_pull=True, connect_timeout=8, total_timeout=60):
+    """Pull (optional), re-summarize the days the summary covers (so days summed up
+    before #5517 get their how/slow data too), then write it."""
+    if do_pull:
+        try:
+            host = get_host()
+            if host:
+                pull(root, host, connect_timeout, total_timeout)
+        except Exception as e:
+            _log(root, f"teacher pull failed: {e!r}")
+    first, _ = teacher_since(LIBRARY, since)
+    summarize_days(root, [d for d in _mirrored_days(root) if d >= first])
+    return teacher(root, since=since)
+
+
+def cmd_teacher(args):
+    print(teacher_report(history_root(), since=args.since, do_pull=not args.no_pull))
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(description="MidiTutor practice history (#5853)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -684,6 +961,9 @@ def build_parser():
     sh = sub.add_parser("show", help="print recent history as JSON")
     sh.add_argument("--days", type=int, default=7)
     sh.add_argument("--piece", default=None)
+    te = sub.add_parser("teacher", help="plain-words practice summary since the last lesson (#5517)")
+    te.add_argument("--since", default=None, help="first day, YYYY-MM-DD (default: day after the last lesson)")
+    te.add_argument("--no-pull", action="store_true", help="use the mirror as it is")
     return ap
 
 
@@ -696,6 +976,10 @@ def main(argv=None):
         if args.day and not DAY_RE.match(args.day):
             ap.error("--day must look like YYYY-MM-DD")
         return cmd_summarize(args)
+    if args.cmd == "teacher":
+        if args.since and not valid_day(args.since):
+            ap.error("--since must be a real day, YYYY-MM-DD")
+        return cmd_teacher(args)
     return cmd_show(args)
 
 

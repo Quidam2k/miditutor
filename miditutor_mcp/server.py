@@ -211,7 +211,8 @@ def tutor_clear() -> dict:
 
 
 @mcp.tool()
-def tutor_history(days: int = 7, piece: str | None = None, limit: int = 20, pull: bool = True) -> dict:
+def tutor_history(days: int = 7, piece: str | None = None, limit: int = 20, pull: bool = True,
+                  teacher: bool = False, since: str | None = None) -> dict:
     """Todd's practice history from the tutor's day logs, kept on Solace (#5853), so it
     answers with the app closed, the keyboard unplugged or the Mac asleep.
     For when HE asks about his practice, or for planning; never a reason to comment on
@@ -222,7 +223,12 @@ def tutor_history(days: int = 7, piece: str | None = None, limit: int = 20, pull
     (keys/names/mini: always|wheels|on-pause|none; known=False = logged before the app
     recorded it, never guessed), help_off_bars, bare_runs ("5 min, no hints"), devices.
     `days` totals per day; `mirror` = last pull. pull=True first copies anything new
-    from the Mac (read-only, a few seconds; unreachable is fine)."""
+    from the Mac (read-only, a few seconds; unreachable is fine).
+    teacher=True (#5517): instead returns {"teacher_md"}: a plain-words summary since the day
+    after his last lesson (or `since`, YYYY-MM-DD): days, sessions, minutes, per piece the
+    loops, the bars he missed most and how, slow bars, page/line/bar-in-line where a Review
+    layout exists. Show it to Todd when HE asks; he forwards it to JP himself. Never send it
+    to JP or anyone else from an agent."""
     import sys
     scripts = str(Path(__file__).resolve().parent.parent / "scripts")
     if scripts not in sys.path:
@@ -230,6 +236,11 @@ def tutor_history(days: int = 7, piece: str | None = None, limit: int = 20, pull
     import tutor_history as th
 
     root = th.history_root()
+    if teacher:
+        if since and not th.valid_day(since):
+            return {"error": "since must be a real day, YYYY-MM-DD"}
+        return {"teacher_md": th.teacher_report(root, since=since, do_pull=pull, connect_timeout=3, total_timeout=15),
+                "note": "For Todd to read and forward himself; agents never send this to JP."}
     if pull:
         host = th.get_host()
         got = th.pull(root, host, connect_timeout=3, total_timeout=15) if host else {}
