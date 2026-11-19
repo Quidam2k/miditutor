@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { EYES_UP_START_MS, EyesUpMode } from '../engine/EyesUp';
 import { GRAZE_MS } from '../engine/ScoreFollower';
+import { starsOf, toggleSpan } from '../engine/OutwardChunk';
 import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
 import { ExerciseType } from '../types/exercise';
@@ -34,6 +35,8 @@ interface SettingsState {
   lastView: string;
   /** #5259: the last overall loop he set on each piece, by displayed title. */
   pieceLoops: Record<string, { first: number; last: number }>;
+  /** #6371: bar ranges he starred on each piece, by displayed title (at most MAX_STARS). */
+  pieceStars: Record<string, { first: number; last: number }[]>;
   /** #5259: the piece list shows only favorites (and the piece on screen). */
   favoritesOnly: boolean;
   /** #5260 note trainer: which clef(s) it draws from; #10262: accidentals on = the Keys toggle. */
@@ -131,6 +134,7 @@ interface SettingsState {
   setLastPiece: (piece: { id: string; label: string }) => void;
   setLastView: (view: string) => void;
   setPieceLoop: (title: string, bars: { first: number; last: number }) => void;
+  toggleStar: (title: string, bars: { first: number; last: number }) => void;
   setKeepBpm: (title: string, bpm: number) => void;
   setFavoritesOnly: (on: boolean) => void;
   toggleFavoritePiece: (title: string) => void;
@@ -164,6 +168,7 @@ export const useSettingsStore = create<SettingsState>()(
       lastPiece: null,
       lastView: 'practice',
       pieceLoops: {},
+      pieceStars: {},
       favoritesOnly: false,
       trainerClef: 'treble',
       trainerAccidentals: true,
@@ -240,6 +245,8 @@ export const useSettingsStore = create<SettingsState>()(
       setLastPiece: (piece) => set({ lastPiece: piece }),
       setLastView: (view) => set({ lastView: view }),
       setPieceLoop: (title, bars) => set((s) => ({ pieceLoops: { ...s.pieceLoops, [title]: bars } })),
+      toggleStar: (title, bars) =>
+        set((s) => ({ pieceStars: { ...s.pieceStars, [title]: toggleSpan(starsOf(s.pieceStars, title), bars) } })),
       setKeepBpm: (title, bpm) => set((s) => ({ keepBpms: { ...s.keepBpms, [title]: bpm } })),
       setFavoritesOnly: (on) => set({ favoritesOnly: on }),
       toggleFavoritePiece: (title) =>

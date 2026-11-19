@@ -33,7 +33,11 @@ function parseChunk(v: unknown): ChunkState | null {
   const c = v as Partial<ChunkState> | null;
   if (!c || !isBar(c.first) || !isBar(c.last) || !isBar(c.start) || !isCount(c.clean) || !isBar(c.need)) return null;
   if (c.first > c.start || c.start > c.last) return null;
-  return { first: c.first, last: c.last, start: c.start, clean: c.clean, need: c.need, done: c.done === true };
+  const base = { first: c.first, last: c.last, start: c.start, clean: c.clean, need: c.need, done: c.done === true };
+  if (c.out !== true) return base;
+  // #6371 Build outward: start..end inside first..last.
+  if (!isBar(c.end) || c.end < c.start || c.end > c.last) return null;
+  return { ...base, out: true, end: c.end, grown: isCount(c.grown) ? c.grown : 0 };
 }
 
 /** The snapshot to restore, or null: nothing saved, too old, or not something we wrote. */
@@ -48,8 +52,8 @@ export function restorable(raw: unknown, force: boolean, now: number): SessionSn
     pieceId: s.pieceId,
     pieceLabel: typeof s.pieceLabel === 'string' ? s.pieceLabel : '',
     loop,
-    // A chunk is only good on the loop it runs: start..last.
-    chunk: chunk && loop && chunk.start === loop.first && chunk.last === loop.last ? chunk : null,
+    // A chunk is only good on the loop it runs: start..last (start..end building outward).
+    chunk: chunk && loop && chunk.start === loop.first && (chunk.end ?? chunk.last) === loop.last ? chunk : null,
     lap: isBar(s.lap) ? s.lap : 1,
     wrongCount: isCount(s.wrongCount) ? s.wrongCount : 0,
     lapWrong: isCount(s.lapWrong) ? s.lapWrong : 0,

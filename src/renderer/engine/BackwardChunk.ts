@@ -11,6 +11,16 @@ export interface ChunkState {
   clean: number; // clean laps on this chunk
   need: number; // clean laps it takes to grow
   done: boolean; // the chunk covers the whole section and has its clean laps
+  // #6371 Build outward (engine/OutwardChunk.ts) shares this state: first..last is the span it
+  // grows toward, start..end the bars it loops now.
+  out?: true;
+  end?: number;
+  grown?: number; // times the outward loop has grown
+}
+
+/** The loop's last bar: Build backwards always loops to the section's end. */
+export function loopEnd(s: ChunkState): number {
+  return s.end ?? s.last;
 }
 
 /** "3,5" -> [3, 5]. Empty or invalid input gives the default. */

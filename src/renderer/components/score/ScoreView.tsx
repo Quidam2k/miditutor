@@ -27,7 +27,8 @@ import { orderChordFingers } from './chordFingers';
 import { renderBinderHtml } from './binderRender';
 import { BinderPreview, type BinderPreviewData } from './BinderPreview';
 import { fingersLowToHigh, nextFinger, passLoopEdge, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
-import { chunkLabel, grewLabel, lapDone, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
+import { chunkLabel, grewLabel, lapDone, loopEnd, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
+import { outerFor, outwardGrewLabel, outwardLabel, outwardLapDone, outwardRangeEdited, starsInOrder, starsOf, startOutward } from '../../engine/OutwardChunk';
 import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
 import { BLOCK_WRONG_NOTE, blockHowTo, blockInput, blockLabel, current as blockPosition, pressTogether, groupPositions, showKeys, startBlocking, type BlockState, type BlockStep } from '../../engine/Blocking';
 import { BarInput } from './BarInput';
@@ -765,6 +766,7 @@ export function ScoreView() {
   const missVolume = useSettingsStore((s) => s.missVolume);
   const missKind = useSettingsStore((s) => s.missKind);
   const backwardTargets = useSettingsStore((s) => s.backwardTargets);
+  const pieceStars = useSettingsStore((s) => s.pieceStars);
   const setBackwardTargets = useSettingsStore((s) => s.setBackwardTargets);
   const [bands, setBands] = useState<Band[]>([]);
   const [layoutTick, setLayoutTick] = useState(0);
@@ -1086,7 +1088,8 @@ export function ScoreView() {
       paceBpm: pace,
       loop: loopBars ? { firstBar: loopBars.first, lastBar: loopBars.last, lap, lastLapBpm: lapBpm } : null,
       backwards: chunk
-        ? { firstBar: chunk.first, lastBar: chunk.last, startBar: chunk.start, clean: chunk.clean, need: chunk.need, done: chunk.done, reached: reached !== null }
+        ? { firstBar: chunk.first, lastBar: chunk.last, startBar: chunk.start, endBar: loopEnd(chunk), outward: chunk.out === true,
+            clean: chunk.clean, need: chunk.need, done: chunk.done, reached: reached !== null }
         : null,
       // #5657c: blocking on his loop, one hand position at a time.
       block: block
@@ -1568,7 +1571,8 @@ export function ScoreView() {
 
   const chunkEvent = (c: ChunkState, extra: Record<string, unknown> = {}) =>
     reportEvent('chunk', {
-      firstBar: c.first, lastBar: c.last, startBar: c.start, clean: c.clean, need: c.need, done: c.done, ...extra,
+      firstBar: c.first, lastBar: c.last, startBar: c.start, endBar: loopEnd(c), ...(c.out ? { outward: true } : {}),
+      clean: c.clean, need: c.need, done: c.done, ...extra,
     });
 
   // Build backwards on his loop: start on its last bar. Off again: back to the whole loop.
@@ -1584,6 +1588,29 @@ export function ScoreView() {
       chunkEvent(chunk, { on: false });
       applyLoop({ first: chunk.first, last: chunk.last });
     } else if (loopBars) startBackwards(loopBars);
+  };
+  // #6371 Build outward: his loop is the core; it grows a bar each side toward the smallest
+  // starred span around it (else the whole piece).
+  const wholePiece = () => {
+    const steps = followerRef.current?.steps;
+    return steps?.length ? { first: steps[0].measure, last: steps[steps.length - 1].measure } : null;
+  };
+  const beginOutward = (core: { first: number; last: number }) => {
+    const whole = wholePiece();
+    if (!whole) return;
+    const stars = starsOf(useSettingsStore.getState().pieceStars, pieceLabelRef.current);
+    const c = startOutward(core, outerFor(core, stars, whole), parseTargets(useSettingsStore.getState().backwardTargets));
+    setBlock(null); // the tutor API can start it while Block is on; the toolbar can't
+    setChunk(c);
+    applyLoop({ first: c.start, last: loopEnd(c) }, true);
+    useSettingsStore.getState().setPieceLoop(pieceLabelRef.current, { first: c.first, last: c.last });
+    chunkEvent(c, { on: true });
+  };
+  const toggleOutward = () => {
+    if (chunk) {
+      chunkEvent(chunk, { on: false });
+      applyLoop({ first: chunk.first, last: chunk.last });
+    } else if (loopBars) beginOutward(loopBars);
   };
 
   // #5657c: the loop's notes grouped into hand positions; `at` resumes after a fingering reload.
@@ -1786,10 +1813,11 @@ export function ScoreView() {
       applyLoop(next);
       return;
     }
-    const edited = rangeEdited(c, next.first, next.last, parseTargets(useSettingsStore.getState().backwardTargets));
+    const targets = parseTargets(useSettingsStore.getState().backwardTargets);
+    const edited = c.out ? outwardRangeEdited(c, next.first, next.last, targets) : rangeEdited(c, next.first, next.last, targets);
     setChunk(edited);
     useSettingsStore.getState().setPieceLoop(pieceLabelRef.current, next);
-    if (edited.start !== c.start || edited.last !== c.last) applyLoop({ first: edited.start, last: edited.last }, true);
+    if (edited.start !== c.start || loopEnd(edited) !== loopEnd(c)) applyLoop({ first: edited.start, last: loopEnd(edited) }, true);
     // #5382: an earlier first bar un-finishes it; a parked follower has to loop again.
     else if (reached && !edited.done) restart();
     chunkEvent(edited, { edited: true });
@@ -1865,13 +1893,14 @@ export function ScoreView() {
       if (wrong === 0) celebrateLap(lapRange);
       return false;
     }
-    const { state, grew, reached: hit } = lapDone(c, wrong, parseTargets(useSettingsStore.getState().backwardTargets));
+    const targets = parseTargets(useSettingsStore.getState().backwardTargets);
+    const { state, grew, reached: hit } = c.out ? outwardLapDone(c, wrong, targets) : lapDone(c, wrong, targets);
     chunkRef.current = state;
     setChunk(state);
     chunkEvent(state, { grew, wrongInLap: wrong, ...(hit ? { reached: true } : {}) });
     if (grew) {
-      applyLoop({ first: state.start, last: state.last }, true);
-      setGrewTip(grewLabel(state));
+      applyLoop({ first: state.start, last: loopEnd(state) }, true);
+      setGrewTip(state.out ? outwardGrewLabel(state) : grewLabel(state));
       window.clearTimeout(grewTipTimerRef.current);
       grewTipTimerRef.current = window.setTimeout(() => setGrewTip(''), 3000);
     }
@@ -1964,6 +1993,7 @@ export function ScoreView() {
     useTutorStore.getState().clearLoopRequest();
     if ('clear' in loopRequest) applyLoop(null);
     else if (loopRequest.backwards) startBackwards({ first: loopRequest.firstBar, last: loopRequest.lastBar });
+    else if (loopRequest.outward) beginOutward({ first: loopRequest.firstBar, last: loopRequest.lastBar });
     else applyLoop({ first: loopRequest.firstBar, last: loopRequest.lastBar });
   }, [loopRequest?.seq, ready]);
 
@@ -3265,6 +3295,10 @@ export function ScoreView() {
     : undefined;
   const finished = feedback.kind === 'complete';
   const lastBar = followerRef.current?.steps.at(-1)?.measure;
+  const firstPieceBar = followerRef.current?.steps[0]?.measure;
+  // #6371: his starred ranges on this piece, shortest first.
+  const starred = starsInOrder(starsOf(pieceStars, piece.label));
+  const overallStarred = !!overall && starred.some((sp) => sp.first === overall.first && sp.last === overall.last);
   const keyLabels = fingersOf(stepNotesRef.current[cursorStep]);
   for (const n of stepNotesRef.current[cursorStep] ?? []) if (staffOf(n) === 1) leftKeys.add(toMidi(n));
   for (const n of blockPos?.fingers ?? []) if (n.hand === 'L') leftKeys.add(n.midi);
@@ -3388,12 +3422,23 @@ export function ScoreView() {
           {loopBars && (
             <button
               onClick={toggleBackwards}
-              disabled={watching || !!block || (!chunk && loopBars.first === loopBars.last)}
-              className={`${btn} ${chunk ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+              disabled={watching || !!block || !!chunk?.out || (!chunk && loopBars.first === loopBars.last)}
+              className={`${btn} ${chunk && !chunk.out ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
               title="Loop the last bar; after enough clean laps, add the bar before it, until the whole loop"
               data-testid="build-backwards"
             >
-              {chunk ? 'Backwards: on' : 'Build backwards'}
+              {chunk && !chunk.out ? 'Backwards: on' : 'Build backwards'}
+            </button>
+          )}
+          {loopBars && (
+            <button
+              onClick={toggleOutward}
+              disabled={watching || !!block || (!!chunk && !chunk.out) || (!chunk && loopBars.first === firstPieceBar && loopBars.last === lastBar)}
+              className={`${btn} ${chunk?.out ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+              title="Loop just this spot; after enough clean laps, add a bar on each side, until it fills the smallest starred range around it (or the whole piece)"
+              data-testid="build-outward"
+            >
+              {chunk?.out ? 'Outward: on' : 'Build outward'}
             </button>
           )}
           {chunk && (
@@ -4104,6 +4149,51 @@ export function ScoreView() {
                 focus={picking === 'end'}
                 title="Last bar of the range"
               />
+              {picking === 'off' && overall && (
+                <button
+                  onClick={() => {
+                    useSettingsStore.getState().toggleStar(pieceLabelRef.current, overall);
+                    reportEvent('star', { firstBar: overall.first, lastBar: overall.last, on: !overallStarred });
+                  }}
+                  disabled={watching || keeping}
+                  aria-pressed={overallStarred}
+                  className={`px-1 text-lg leading-none ${overallStarred ? 'text-yellow-300' : 'text-gray-500 hover:text-yellow-200'}`}
+                  title={overallStarred ? 'Unstar this range' : 'Star this range, to pick it again from Starred'}
+                  aria-label={overallStarred ? 'Unstar this range' : 'Star this range'}
+                  data-testid="star-range"
+                >
+                  {overallStarred ? '★' : '☆'}
+                </button>
+              )}
+              {picking === 'off' && starred.length > 0 && (
+                <Popover label="Starred" testId="starred" btn={`${btn} px-1.5 py-0.5`}>
+                  {starred.map((sp) => (
+                    <span key={`${sp.first}-${sp.last}`} className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          editRange(sp);
+                          reportEvent('star-pick', { firstBar: sp.first, lastBar: sp.last });
+                        }}
+                        disabled={watching || keeping}
+                        className={`${btn} flex-1 text-left font-mono`}
+                        data-testid={`starred-${sp.first}-${sp.last}`}
+                      >
+                        {sp.first === sp.last ? `Bar ${sp.first}` : `Bars ${sp.first}–${sp.last}`}
+                      </button>
+                      <button
+                        data-stay
+                        onClick={() => useSettingsStore.getState().toggleStar(pieceLabelRef.current, sp)}
+                        className="px-1 text-gray-400 hover:text-red-300"
+                        title="Remove this star"
+                        aria-label={`Remove star ${sp.first}–${sp.last}`}
+                        data-testid={`unstar-${sp.first}-${sp.last}`}
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </Popover>
+              )}
               {picking === 'off' && loopBars && (
                 <>
                   {chunk && <span data-testid="loop-now">· now looping {loopBars.first}–{loopBars.last}</span>}
@@ -4115,7 +4205,7 @@ export function ScoreView() {
           )}
           {chunk && (
             <span className="font-semibold text-yellow-300" data-testid="backwards-status">
-              {chunkLabel(chunk)}
+              {chunk.out ? outwardLabel(chunk) : chunkLabel(chunk)}
             </span>
           )}
           {keyGateNow && (

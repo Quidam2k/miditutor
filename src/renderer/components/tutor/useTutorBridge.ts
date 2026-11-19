@@ -128,7 +128,7 @@ export function useTutorBridge(onShowScore: () => void) {
           useTutorStore.getState().setTask(null);
           break;
         case 'loop':
-          useTutorStore.getState().requestLoop({ firstBar: cmd.firstBar, lastBar: cmd.lastBar, backwards: cmd.backwards === true });
+          useTutorStore.getState().requestLoop({ firstBar: cmd.firstBar, lastBar: cmd.lastBar, backwards: cmd.backwards === true, outward: cmd.outward === true });
           onShowScore();
           break;
         case 'clear-loop':

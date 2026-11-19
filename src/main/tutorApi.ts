@@ -35,7 +35,7 @@ export type RendererCommand =
   | { type: 'piece'; title: string; musicxml: string; photo?: string }
   | { type: 'inject'; kind: 'noteon' | 'noteoff'; note: number; velocity: number }
   | { type: 'inject-pedal'; down: boolean }
-  | { type: 'loop'; firstBar: number; lastBar: number; backwards?: boolean }
+  | { type: 'loop'; firstBar: number; lastBar: number; backwards?: boolean; outward?: boolean }
   | { type: 'clear-loop' }
   | { type: 'recording'; status: RecordingStatus }
   | { type: 'render-take'; id: string; events: TakeEvent[]; durationMs: number }
@@ -402,14 +402,15 @@ export class TutorApi {
       // Where he keeps missing: worst bars and fingers per piece, over the last `days` (default 7).
       send(this.practiceRollup(this.number(url, 'days', 7, 90, 1)));
     } else if (route === 'POST /loop') {
-      const { firstBar, lastBar, backwards } = await this.body(req);
+      const { firstBar, lastBar, backwards, outward } = await this.body(req);
       if (!Number.isSafeInteger(firstBar) || !Number.isSafeInteger(lastBar) ||
           (firstBar as number) < 1 || (lastBar as number) < 1) {
         throw new HttpError(400, 'Expected firstBar and lastBar (1-based bar numbers)');
       }
       // backwards (#10133): Build backwards on that loop, starting on its last bar.
+      // outward (#6371): Build outward from that loop toward the smallest starred span around it.
       this.opts.sendToRenderer({ type: 'loop', firstBar: firstBar as number, lastBar: lastBar as number,
-        ...(backwards === true ? { backwards: true } : {}) });
+        ...(backwards === true ? { backwards: true } : {}), ...(outward === true ? { outward: true } : {}) });
       send({ ok: true });
     } else if (route === 'DELETE /loop') {
       this.opts.sendToRenderer({ type: 'clear-loop' });
