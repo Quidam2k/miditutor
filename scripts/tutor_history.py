@@ -264,7 +264,8 @@ def _merge_bars(bars):
 def _finish_piece(p):
     return {"piece": p["piece"], "notes": p["notes"], "bars": p["bars"],
             "wrong": p["wrong"], "laps": p["laps"], "clean_laps": p["clean_laps"],
-            "spoiled_laps": p["spoiled_laps"], "loops": p["loops"]}
+            "spoiled_laps": p["spoiled_laps"], "loops": p["loops"],
+            "wrong_bars": [[b, c] for b, c in sorted(p["wrong_bars"].items(), key=lambda kv: (-kv[1], kv[0]))[:10]]}
 
 
 def _finish_stretch(st):
@@ -364,7 +365,8 @@ class _Day:
         if self.piece not in pieces:
             pieces[self.piece] = {
                 "piece": self.piece, "notes": 0, "bars": None, "wrong": 0, "laps": 0,
-                "clean_laps": 0, "spoiled_laps": 0, "loops": [], "n": None}
+                "clean_laps": 0, "spoiled_laps": 0, "loops": [], "n": None,
+                "wrong_bars": Counter()}
         return pieces[self.piece]
 
     def _stretch(self):
@@ -439,6 +441,7 @@ class _Day:
             pe["wrong"] += 1
             if bar is not None:
                 s["wrong_bars"][bar] += 1
+                pe["wrong_bars"][bar] += 1
         if bar is not None:
             _widen(pe, bar)
             _widen(st, bar)
