@@ -86,7 +86,12 @@ def main():
     for n in (60, 62, 64, 65):
         tap(n)
         time.sleep(0.1)
-    check("lap 1 wrapped", bool(wait_for(lambda: events_since(seq, "lap"), 5)))
+    laps = wait_for(lambda: events_since(seq, "lap"), 5)
+    check("lap 1 wrapped", bool(laps))
+    # #5853: each lap names its loop's bars and the help that was on screen.
+    lap_ev = laps[-1] if laps else {}
+    check("lap event carries the loop's bars", lap_ev.get("firstBar") == 1 and lap_ev.get("lastBar") == 1)
+    check("lap event carries the hints state", (lap_ev.get("hints") or {}).get("keys") in ("always", "wheels", "on-pause", "none"))
     tap(67)  # G: the piece carrying on past the loop's end
     over = wait_for(lambda: events_since(seq, "overrun"), 5)
     check("overrun event (thud path ran)", bool(over))

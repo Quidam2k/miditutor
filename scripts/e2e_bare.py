@@ -80,6 +80,10 @@ def main():
     def event_of(kind):
         return next((event for event in events() if event.get("kind") == kind), None)
 
+    def last_hints():  # #5853: the newest hints-state event
+        found = [event for event in events() if event.get("kind") == "hints"]
+        return found[-1] if found else None
+
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(os.environ["MIDITUTOR_CDP"])
         page = next(
@@ -118,6 +122,8 @@ def main():
         check(page.get_by_test_id("key-first").count() == 0, "key-first gate cleared")
         next_notes = page.get_by_test_id("next-notes")
         check("…" in next_notes.inner_text(), "new-piece hints are hidden")
+        h = wait_for(last_hints, 5, "missing hints event")
+        check(h.get("quietNew") is True and h.get("names") == "on-pause", "hints event: new piece, hints held back")
 
         settings = page.get_by_test_id("practice-settings")
         settings.click()
@@ -128,6 +134,8 @@ def main():
             screen()["remaining"][0] in next_notes.inner_text(),
             "turning the setting off restores hints",
         )
+        h = last_hints() or {}
+        check(h.get("hintsOffNew") is False and h.get("names") == "always", "hints event follows the setting")
         hints_off.check()
         time.sleep(0.3)
         check("…" in next_notes.inner_text(), "turning the setting on hides hints")
@@ -144,6 +152,9 @@ def main():
         )
         started = wait_for(lambda: event_of("bare-start"), 5, "missing bare-start event")
         check(started.get("label") == label, "bare-start event has the piece label")
+        h = wait_for(lambda: (last_hints() or {}).get("bare") and last_hints(), 5, "no hints event for the bare run")
+        check(h.get("keys") == "none" and h.get("names") == "none" and h.get("piece") == label,
+              "hints event: bare run shows nothing, with the piece")
 
         miss_bar = screen()["measure"]
         notes = [midi_of(name) for name in screen()["remaining"]]
@@ -181,6 +192,11 @@ def main():
             "stopped result shows cleared bars and one miss",
         )
         check(tid(page, "bare-start").is_visible(), "start button returns")
+        h = wait_for(lambda: (last_hints() or {}).get("bare") is False and last_hints(), 5, "no hints event after the bare run")
+        check(h.get("names") == "on-pause", "hints event: bare run over")
+        # #5853: the day log on disk carries the hints events, not only the in-memory feed.
+        logged = tc.request("GET", "/log?tail=5000")["entries"]
+        check(sum(1 for e in logged if e.get("kind") == "hints") >= 3, "hints events are in the day log")
 
 
 if __name__ == "__main__":

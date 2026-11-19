@@ -51,6 +51,7 @@ import type { MixChoice } from '../../../shared/mix';
 import type { PieceGroupRef } from '../../../shared/versions';
 import { reportEvent, reportScreen } from '../tutor/useTutorBridge';
 import { startBare, bareNote, bareMiss, closeBar, BARE_MS, type BareRun } from '../../engine/TrainingWheels';
+import { hintsSnapshot, sameHints, type HintsSnapshot } from '../../engine/HintsState';
 import { TaskPanel } from '../tutor/TaskPanel';
 import { Band, PlayedOverlay, PlayedMark } from './PlayedOverlay';
 import { ZoneOverlay, type ZoneBand, type ZoneMark } from './ZoneOverlay';
@@ -2746,7 +2747,11 @@ export function ScoreView() {
           paintHeldTies((range?.first ?? result.to) - 1, result.to);
           setLap(result.lap);
           setFeedback({ kind: 'idle' });
-          reportEvent('lap', { lap: result.lap });
+          reportEvent('lap', {
+            lap: result.lap, // #5853: the loop's bars and the help on screen, for the practice history
+            firstBar: range ? f.steps[range.first]?.measure : null, lastBar: range ? f.steps[range.last]?.measure : null,
+            hints: hintsLogRef.current?.state ?? null,
+          });
           chunkLap();
           break;
         }
@@ -3443,6 +3448,16 @@ export function ScoreView() {
   // #5624: the notes to play now, as written, on a scrap of staff above the keyboard;
   // one small staff over each hand's keys (#11091), with the notes as written (#11092).
   const miniStaff = useSettingsStore((s) => s.miniStaff);
+  // #5853: log which help is on screen whenever it changes (and on each piece), so the practice
+  // history can tell a stretch played with the keyboard lights and hints off.
+  const hintState = hintsSnapshot({ showKeyboard, trainingWheels, miniStaff, hintsOffNew, quietNew, bare: !!bareNow, readAhead, keeping });
+  const hintsLogRef = useRef<{ piece: string; state: HintsSnapshot } | null>(null);
+  useEffect(() => {
+    const last = hintsLogRef.current;
+    if (status !== 'ready' || (last?.piece === piece.label && sameHints(last.state, hintState))) return;
+    hintsLogRef.current = { piece: piece.label, state: hintState };
+    reportEvent('hints', { piece: piece.label, bar: followerRef.current?.steps[cursorStep]?.measure ?? null, ...hintState });
+  });
   const mini = useMemo(() => {
     const osmd = osmdRef.current;
     const notes = (stepNotesRef.current[cursorStep] ?? []).filter((n) => !n.IsGraceNote);
