@@ -29,7 +29,7 @@ import { BinderPreview, type BinderPreviewData } from './BinderPreview';
 import { fingersLowToHigh, nextFinger, passLoopEdge, prevPlayable, stepForWheel, stepOfBar, wheelNotch } from './noteEdit';
 import { chunkLabel, grewLabel, lapDone, loopEnd, parseTargets, rangeEdited, reachedLabel, startChunk, type ChunkState } from '../../engine/BackwardChunk';
 import { outerFor, outwardGrewLabel, outwardLabel, outwardLapDone, outwardRangeEdited, starsInOrder, starsOf, startOutward } from '../../engine/OutwardChunk';
-import { addSpot, autoSpots, countPass, MAX_SPOT_BARS, prune, spotAround, spotLabel, type Spot } from '../../engine/TroubleSpots';
+import { addSpot, AUTO_MAX_PER_CHECK, AUTO_OPEN_CAP, autoSpots, countPass, MAX_SPOT_BARS, prune, spotAround, spotLabel, type Spot } from '../../engine/TroubleSpots';
 import { localDay, own } from '../../store/useSettingsStore';
 import type { Rollup } from '../../../shared/practiceRollup';
 import { KeyGate, gateAsk, gateShown, keyGate, keyGateInput } from '../../engine/KeyFirst';
@@ -1726,7 +1726,8 @@ export function ScoreView() {
         void playChime();
       }
     }
-    if (++lapsSinceSpotCheckRef.current >= 5) checkSpotsRef.current(lapBars);
+    // A whole-piece pass checks the whole piece every time (#6513); a loop, every 5 laps of it.
+    if (!r || ++lapsSinceSpotCheckRef.current >= 5) checkSpotsRef.current(lapBars);
   };
   // Bars in this range his log says he keeps missing or hesitating on (last 7 days) join the list.
   checkSpotsRef.current = (range) => {
@@ -1741,8 +1742,13 @@ export function ScoreView() {
       const bars = roll?.pieces.find((p) => p.piece === name)?.spotBars ?? [];
       const st = useSettingsStore.getState();
       const recent = (bar: number, since: number) => (missLogRef.current.get(`${title}#${bar}`) ?? []).filter((t) => t >= since).length;
+      const current = prune(own(st.troubleSpots, title), localDay());
+      // A whole-piece check (#6513) tops the open list up to AUTO_OPEN_CAP; a loop he set adds as before.
+      const isWhole = range.first <= whole.first && range.last >= whole.last;
+      const open = current.filter((s) => !s.ticked).length;
       const { spots, added } = autoSpots(
-        prune(own(st.troubleSpots, title), localDay()), own(st.spotDismissed, title), bars, range, whole, Date.now(), localDay(), recent,
+        current, own(st.spotDismissed, title), bars, range, whole, Date.now(), localDay(), recent,
+        isWhole ? Math.min(AUTO_MAX_PER_CHECK, AUTO_OPEN_CAP - open) : AUTO_MAX_PER_CHECK,
       );
       if (!added.length) return;
       st.setSpots(title, spots);
@@ -2492,6 +2498,10 @@ export function ScoreView() {
           if (restored) centerCursor('auto');
           syncUi();
           if (blockAt !== null && range && resumeLoop) startBlockRef.current(resumeLoop, blockAt);
+        }
+        // #6513: a piece just opened (not a fingering reload): bars anywhere in it he keeps missing join his spots.
+        if ((resume === null || restored) && steps.length) {
+          checkSpotsRef.current({ first: steps[0].measure, last: steps[steps.length - 1].measure });
         }
         drawnPieceRef.current = piece.id;
         setStatus('ready');

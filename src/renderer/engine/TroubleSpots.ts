@@ -19,6 +19,8 @@ export interface Dismissed extends Span {
 export const SPOT_KEEP_DAYS = 7;
 export const AUTO_MIN = 3;
 export const AUTO_MAX_PER_CHECK = 3;
+// #6513: a whole-piece check only tops his open list up to this many, so 20 bad bars don't bury him.
+export const AUTO_OPEN_CAP = 6;
 export const MAX_SPOT_BARS = 5;
 
 const DAY_MS = 86_400_000;
@@ -103,11 +105,13 @@ export function autoSpots(
   now: number,
   today: string,
   recentMisses: (bar: number, since: number) => number,
+  max = AUTO_MAX_PER_CHECK,
 ): { spots: Spot[]; added: Span[] } {
   const dismissedCutoff = now - SPOT_KEEP_DAYS * DAY_MS;
   const tickedCutoff = keepFrom(today);
   const added: Span[] = [];
   let updated = spots;
+  if (max <= 0) return { spots, added };
 
   for (const { bar, misses, hesitations } of bars) {
     if (bar < range.first || bar > range.last) continue;
@@ -131,7 +135,7 @@ export function autoSpots(
     if (next === updated) continue;
     updated = next;
     added.push(span);
-    if (added.length === AUTO_MAX_PER_CHECK) break;
+    if (added.length >= max) break;
   }
   return { spots: updated, added };
 }

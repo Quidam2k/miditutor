@@ -94,6 +94,17 @@ describe('trouble spots', () => {
     expect(autoSpots([], old, bars, WHOLE, WHOLE, now, TODAY, () => 0).added).toEqual([{ first: 29, last: 31 }]);
   });
 
+  it('hesitations alone add a spot, anywhere in the piece (#6513)', () => {
+    const bars = [{ bar: 5, misses: 0, hesitations: 3 }, { bar: 38, misses: 0, hesitations: 2 }];
+    expect(autoSpots([], [], bars, WHOLE, WHOLE, Date.now(), TODAY, () => 0).added).toEqual([{ first: 4, last: 6 }]);
+  });
+
+  it('a whole-piece check adds no more than it is allowed (#6513 open cap)', () => {
+    const bars = [5, 15, 25, 35].map(bar => ({ bar, misses: 4, hesitations: 0 }));
+    expect(autoSpots([], [], bars, WHOLE, WHOLE, Date.now(), TODAY, () => 0, 1).added).toHaveLength(1);
+    expect(autoSpots([], [], bars, WHOLE, WHOLE, Date.now(), TODAY, () => 0, 0).added).toEqual([]);
+  });
+
   it('labels', () => {
     const sp = { first: 29, last: 31, alone: 7, inContext: 2, added: TODAY };
     expect(spotLabel(sp, 5)).toBe('Bars 29–31 · alone 5/5 · in context 2/5');
