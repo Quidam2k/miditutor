@@ -7,7 +7,9 @@ not "Easy", not "My mix" and not mixable:false is compared bar by bar with the E
 highest sounding pitch class at every onset (any staff), the Harder one shifted into the Easy
 key. Bars are matched by DTW with an LCS cost (the arrangement embellishes), then cut into
 sections at 4-bar boundaries of the Easy file. Writes group["align"][harderFile] =
-{semis, bars, sections}. A Harder file whose key changes inside is skipped. Needs the compute
+{semis, keys, bars, sections}. A Harder file that changes key is shifted region by region, each
+into the Easy key (#6483): semis is its opening region's shift, keys lists [harderBar, fifths] at
+the start and at every change. An Easy file that changes key is still refused. Needs the compute
 gate of omr_second_engine (RAM free, Todd idle); --own-solace is his per-occasion grant for idle.
 """
 import argparse
@@ -128,13 +130,20 @@ def sections_from_path(path, costs=None):
              "cost": round(sum(costs[i] for i in r) / len(r), 2)} for r in runs]
 
 
+def key_regions(bars):
+    """[[bar number, fifths]] at the first bar and at every bar whose key differs from the one before."""
+    return [[b["number"], b["fifths"]] for i, b in enumerate(bars) if i == 0 or b["fifths"] != bars[i - 1]["fifths"]]
+
+
 def align(easy_bars, harder_bars):
-    semis = semis_between(harder_bars[0]["fifths"], easy_bars[0]["fifths"])
-    shifted = [[(pc + semis) % 12 for pc in b["melody"]] for b in harder_bars]
+    easy_fifths = easy_bars[0]["fifths"]
+    semis = semis_between(harder_bars[0]["fifths"], easy_fifths)
+    shifted = [[(pc + semis_between(b["fifths"], easy_fifths)) % 12 for pc in b["melody"]] for b in harder_bars]
     path = dtw([b["melody"] for b in easy_bars], shifted)
     costs = [bar_cost(easy_bars[i]["melody"], shifted[j]) for i, j in path]
     bars = [[easy_bars[i]["number"], harder_bars[j]["number"]] for i, j in path]
-    return {"semis": semis, "bars": bars, "sections": sections_from_path(bars, costs)}
+    return {"semis": semis, "keys": key_regions(harder_bars), "bars": bars,
+            "sections": sections_from_path(bars, costs)}
 
 
 def write_json(path, data):
@@ -173,12 +182,8 @@ def main(argv=None):
     for v in group["versions"]:
         if v is easy or v.get("mixable") is False or v["label"] == "My mix":
             continue
-        bars = parse_bars(a.library / v["file"])
-        if key_changes(bars):
-            print(f"key changes inside {v['file']}; not mixable until repaired")
-            continue
-        found[v["file"]] = align(easy_bars, bars)
-        print(f"{v['file']}: semis {found[v['file']]['semis']:+d}")
+        found[v["file"]] = align(easy_bars, parse_bars(a.library / v["file"]))
+        print(f"{v['file']}: semis {found[v['file']]['semis']:+d}, keys {found[v['file']]['keys']}")
         for s in found[v["file"]]["sections"]:
             print(f"  easy {s['easy'][0]}-{s['easy'][1]}  harder {s['harder'][0]}-{s['harder'][1]}  cost {s['cost']}")
     if a.dry_run:

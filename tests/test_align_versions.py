@@ -162,12 +162,34 @@ def test_dry_run_prints_and_writes_nothing(tmp_path, monkeypatch, capsys):
     assert vpath.read_text(encoding="utf-8") == before
 
 
-def test_key_change_inside_harder_is_skipped(tmp_path, monkeypatch, capsys):
+def test_key_change_inside_harder_is_aligned_per_region(tmp_path, monkeypatch):
     vpath = make_library(tmp_path, harder_key_at={5: 3})
     open_gate(monkeypatch)
     assert av.main(["t", "--library", str(tmp_path), "--own-solace"]) == 0
-    assert "key changes inside harder.musicxml; not mixable until repaired" in capsys.readouterr().out
-    assert "align" not in json.loads(vpath.read_text(encoding="utf-8"))["t"]
+    group = json.loads(vpath.read_text(encoding="utf-8"))["t"]
+    assert "align" in group
+    # make_library's harder score opens in D major (2 fifths); the fixed melodies do not
+    # transpose onto each other in bars 5-8, so only the key regions are asserted
+    al = group["align"]["harder.musicxml"]
+    assert al["keys"] == [[1, 2], [5, 3]]
+    assert al["semis"] == -2
+    assert len(al["bars"]) >= 8
+
+
+def test_key_regions():
+    bars = [{"number": 1, "fifths": -5}, {"number": 2, "fifths": -5},
+            {"number": 3, "fifths": 0}, {"number": 4, "fifths": -5}]
+    assert av.key_regions(bars) == [[1, -5], [3, 0], [4, -5]]
+
+
+def test_align_shifts_each_region():
+    easy = [{"number": i, "fifths": 0, "melody": [0, 4, 7]} for i in range(1, 5)]
+    harder = [{"number": i, "fifths": -5 if i <= 2 else 0,
+               "melody": [1, 5, 8] if i <= 2 else [0, 4, 7]} for i in range(1, 5)]
+    out = av.align(easy, harder)
+    assert out["semis"] == -1
+    assert all(s["cost"] == 0 for s in out["sections"])
+    assert out["bars"] == [[i, i] for i in range(1, 5)]
 
 
 def test_mixable_false_and_my_mix_are_not_aligned(tmp_path, monkeypatch):
@@ -188,3 +210,13 @@ def test_gate_is_checked_without_own_solace(tmp_path, monkeypatch):
     assert av.main(["t", "--library", str(tmp_path)]) == 2
     with pytest.raises(SystemExit):
         av.main([])
+
+
+def test_key_change_inside_easy_is_still_refused(tmp_path, monkeypatch, capsys):
+    vpath = make_library(tmp_path)
+    easy = [(60, 64, 67)] * 8
+    write(tmp_path, "easy.musicxml", score(0, [midi_line(*b) for b in easy], key_at={5: 3}))
+    open_gate(monkeypatch)
+    assert av.main(["t", "--library", str(tmp_path), "--own-solace"]) == 0
+    assert "key changes inside easy.musicxml; not mixable until repaired" in capsys.readouterr().out
+    assert "align" not in json.loads(vpath.read_text(encoding="utf-8"))["t"]

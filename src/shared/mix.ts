@@ -127,6 +127,37 @@ function restateAttributes(
   return target;
 }
 
+/** Signed shift from one key's tonic to another's, -6..+5 (D major to C major is -2); align_versions.py semis_between. */
+function semisBetween(fromFifths: number, toFifths: number): number {
+  const tonicPc = (f: number) => (((f * 7) % 12) + 12) % 12;
+  const d = (tonicPc(toFifths) - tonicPc(fromFifths) + 12) % 12;
+  return d >= 6 ? d - 12 : d;
+}
+
+const keyFifths = (key: Element | undefined): number | undefined => {
+  const raw = text(key, 'fifths');
+  return raw ? (Number.isFinite(Number(raw)) ? Number(raw) : undefined) : undefined;
+};
+
+/**
+ * Per measure, the key (fifths) in force just before it and at its start. A key change after a
+ * bar's first note counts from the next bar, and per-staff keys go by the first one (neither
+ * occurs in the library; align_versions.parse_bars likewise keys a bar by any change in it).
+ */
+function harderKeys(measures: Element[], opening: number): { before: number; start: number }[] {
+  let fifths = opening;
+  const keyIn = (a: Element) => {
+    fifths = keyFifths(child(a, 'key')) ?? fifths;
+  };
+  return measures.map((m) => {
+    const before = fifths;
+    leadingAttributes(m).forEach(keyIn);
+    const start = fifths;
+    kids(m, 'attributes').filter((a) => !leadingAttributes(m).includes(a)).forEach(keyIn);
+    return { before, start };
+  });
+}
+
 /** Letter-and-octave shift for transposing the harder key's tonic letter onto the easy key's, signed like semis. */
 function letterShift(harderFifths: number, easyFifths: number, semis: number): number {
   const tonic = (f: number) => (((f * 4) % 7) + 7) % 7;
@@ -192,7 +223,9 @@ export function spliceMix(
   const easyFifths = Number(text(easyKey, 'fifths') ?? 0);
   const easyMode = text(easyKey, 'mode');
   const harderFifths = Number(text(harderDoc.getElementsByTagName('key')[0], 'fifths') ?? 0);
-  const shift = letterShift(harderFifths, easyFifths, semis);
+  // semis is for the Harder file's opening key; a later Harder key region (#6483) shifts by its own amount.
+  const harderKey = harderKeys(sources.harder, harderFifths);
+  const opening = semisBetween(harderFifths, easyFifths);
 
   const mixed: Element[] = [];
   let previous: MixChoice | undefined;
@@ -202,22 +235,39 @@ export function spliceMix(
     const picked = barsIn(measures, section[from], from === 'easy' ? 'Easy' : 'Harder');
     picked.forEach((original, n) => {
       const measure = doc.importNode(original, true) as Element;
+      const restates = n === 0 && previous !== from;
       if (from === 'harder') {
         for (const el of [...kids(measure, 'harmony'), ...kids(measure, 'print')]) remove(el);
-        for (const key of Array.from(measure.getElementsByTagName('key'))) {
-          const fifths = child(key, 'fifths');
-          if (fifths) setText(doc, fifths, String(easyFifths));
+        const { before, start: regionFifths } = harderKey[measures.indexOf(original)];
+        let running = before;
+        for (const attributes of kids(measure, 'attributes')) {
+          const keys = kids(attributes, 'key');
+          if (!keys.length) continue;
+          const was = running;
+          running = keyFifths(keys[0]) ?? running;
+          if (!restates && running !== was) {
+            // A Harder key change inside a run: the mix stays in the Easy key, so there is nothing to show.
+            keys.forEach(remove);
+            if (!elements(attributes).length) remove(attributes);
+            continue;
+          }
+          for (const key of keys) {
+            const fifths = child(key, 'fifths');
+            if (fifths) setText(doc, fifths, String(easyFifths));
+          }
         }
-        if (semis !== 0) {
+        const s = semis + semisBetween(regionFifths, easyFifths) - opening;
+        if (s !== 0) {
+          const shift = letterShift(regionFifths, easyFifths, s);
           for (const note of Array.from(measure.getElementsByTagName('note'))) {
             const pitch = child(note, 'pitch');
             if (!pitch) continue;
-            transposePitch(doc, pitch, semis, shift);
+            transposePitch(doc, pitch, s, shift);
             for (const accidental of kids(note, 'accidental')) remove(accidental);
           }
         }
       }
-      if (n === 0 && previous !== from) {
+      if (restates) {
         const effective = effectiveAttributes(measures, measures.indexOf(original));
         const inForce = effectiveAttributes(mixed, mixed.length);
         const attributes = restateAttributes(doc, measure, effective, keyElement(doc, easyFifths, easyMode), inForce);

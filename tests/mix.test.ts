@@ -160,3 +160,55 @@ describe('spliceMix on the real O scores', () => {
     expect(attr(ms[0], 'divisions')?.textContent).toBe('4');
   });
 });
+
+describe('spliceMix key regions (#6483)', () => {
+  const EASY2 = score('<work><work-title>Song (easy)</work-title></work>', [
+    measure(1, `<divisions>2</divisions>${key(0)}<staves>2</staves>${clef(1, 'G', 2)}${clef(2, 'F', 4)}`, n('A', 4) + n('C', 5)),
+    measure(2, '', n('A', 4) + n('C', 5)),
+    measure(3, '', n('A', 4) + n('C', 5)),
+    measure(4, '', n('A', 4) + n('C', 5)),
+  ].join(''));
+
+  const HARDER2 = score('<movement-title>Song (harder)</movement-title>', [
+    measure(1, `<divisions>2</divisions>${key(-5)}<staves>2</staves>${clef(1, 'G', 2)}${clef(2, 'F', 4)}`, n('B', 4, -1) + n('D', 5, -1)),
+    measure(2, '', n('B', 4, -1) + n('D', 5, -1)),
+    measure(3, key(0), n('A', 4) + n('C', 5)),
+    measure(4, '', n('A', 4) + n('C', 5)),
+  ].join(''));
+
+  it('shifts each region of a key-changing Harder into the Easy key', () => {
+    const doc = mix(EASY2, HARDER2, ALL, ['harder'], -1);
+    expect(measures(doc).map(pitches)).toEqual([['A4', 'C5'], ['A4', 'C5'], ['A4', 'C5'], ['A4', 'C5']]);
+  });
+
+  it('keeps exactly one key element, in the Easy key', () => {
+    const doc = mix(EASY2, HARDER2, ALL, ['harder'], -1);
+    const keys = Array.from(doc.getElementsByTagName('key'));
+    expect(keys).toHaveLength(1);
+    expect(keys[0].getElementsByTagName('fifths')[0].textContent).toBe('0');
+  });
+
+  it('transposes the first Harder bar of a run that starts in the second key region', () => {
+    const doc = mix(EASY2, HARDER2, HALVES, ['easy', 'harder'], -1);
+    const m3 = measures(doc)[2];
+    expect(pitches(m3)).toEqual(['A4', 'C5']);
+    const words = all(m3, 'words').map((w) => w.textContent);
+    expect(words).toContain('Harder: no fingering');
+  });
+
+  it('drops a key change written per staff, both staves together', () => {
+    const perStaff = HARDER2.replace('<attributes><key><fifths>0</fifths></key></attributes>',
+      '<attributes><key number="1"><fifths>0</fifths></key><key number="2"><fifths>0</fifths></key></attributes>');
+    expect(perStaff).not.toBe(HARDER2);
+    const doc = mix(EASY2, perStaff, ALL, ['harder'], -1);
+    expect(doc.getElementsByTagName('key')).toHaveLength(1);
+    expect(measures(doc)[2].getElementsByTagName('attributes')).toHaveLength(0);
+  });
+
+  it('shifts the opening region when Harder comes first', () => {
+    const doc = mix(EASY2, HARDER2, HALVES, ['harder', 'easy'], -1);
+    const ms = measures(doc);
+    expect(pitches(ms[0])).toEqual(['A4', 'C5']);
+    expect(pitches(ms[1])).toEqual(['A4', 'C5']);
+  });
+});
