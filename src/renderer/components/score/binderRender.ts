@@ -2,6 +2,7 @@ import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
 import { binderSides, EDGE_IN, FOLIO_IN, HOLE_IN, gapForFill, pageStartsFromIndexes } from '../../../shared/binderPrint';
 import { orderChordFingers } from './chordFingers';
 import { drawRangeByPosition } from './drawRange';
+import { dropChordRests } from '../../engine/chordRests';
 
 interface FingeringEntry {
   FingeringEntries?: { SVGNode?: unknown }[];
@@ -64,7 +65,7 @@ async function osmdPageStarts(div: HTMLDivElement, musicxml: string): Promise<nu
     drawFingerings: true,
     cursorsOptions: [],
   });
-  await osmd.load(musicxml);
+  await osmd.load(dropChordRests(musicxml));
   osmd.render();
   const firsts = (osmd.GraphicSheet?.MusicPages ?? []).map(
     (page) => page.MusicSystems?.[0]?.GraphicalMeasures?.[0]?.[0]?.parentSourceMeasure?.measureListIndex);
@@ -124,7 +125,7 @@ export async function renderBinderHtml(opts: {
           stretchLastSystemLine: k < ranges.length - 1,
           ...(range ? { drawFromMeasureNumber: range[0], drawUpToMeasureNumber: range[1] } : {}),
         });
-        await osmd.load(musicxml);
+        await osmd.load(dropChordRests(musicxml));
         orderChordFingers(osmd);
         drawRangeByPosition(osmd);
         if (gap !== undefined) osmd.EngravingRules.MinimumDistanceBetweenSystems = gap;

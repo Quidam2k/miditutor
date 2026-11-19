@@ -73,6 +73,7 @@ import {
   staffOffsetSteps,
   writtenName,
 } from '../../../shared/notation';
+import { dropChordRests } from '../../engine/chordRests';
 
 // Milestone 2: the score follows live MIDI. Each OSMD cursor position becomes a
 // ScoreStep (the notes that must be newly struck there); ScoreFollower decides
@@ -2442,7 +2443,7 @@ export function ScoreView() {
     const cursorObs = keepCursorHeight(container);
 
     osmd
-      .load(latestXmlRef.current)
+      .load(dropChordRests(latestXmlRef.current))
       .then(() => {
         if (disposed) return;
         osmd.render();

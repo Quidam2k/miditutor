@@ -20,6 +20,7 @@ import { addBeams } from '../../engine/autoBeam';
 import { drawRangeByPosition } from '../score/drawRange';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustMark } from '../../../shared/trust';
+import { dropChordRests } from '../../engine/chordRests';
 
 // Scan review (#9664): check an OMR'd score against the scan, one printed line at
 // a time. Lines are presumed right (#5729): a click on a bar flags it (click again
@@ -647,7 +648,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
       stretchLastSystemLine: true,
     });
     osmd
-      .load(addBeams(xmlRef.current))
+      .load(addBeams(dropChordRests(xmlRef.current)))
       .then(() => !disposed && setEngine(osmd))
       .catch((e) => !disposed && setScoreError(errText(e)));
     return () => {
@@ -1483,7 +1484,7 @@ function BarRender({ label, xml, measure }: { label: string; xml: string; measur
       drawUpToMeasureNumber: measure,
     });
     osmd
-      .load(xml)
+      .load(dropChordRests(xml))
       .then(() => {
         if (disposed) return;
         drawRangeByPosition(osmd);

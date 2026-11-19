@@ -9,6 +9,7 @@ import { useTutorBridge } from './components/tutor/useTutorBridge';
 import { RecordButton, PIANO_CREDIT } from './components/tutor/RecordButton';
 import { TutorButton } from './components/tutor/TutorButton';
 import { ReviewView } from './components/review/ReviewView';
+import { ScoreErrorBoundary } from './components/ScoreErrorBoundary';
 import { TopClock } from './components/TopClock';
 import { readStartupSnapshot } from './components/score/sessionSnapshot';
 import { PauseButton, PauseBanner } from './components/PauseButton';
@@ -130,8 +131,8 @@ export function App() {
         >
           {view === 'practice' && <ExerciseView key={practiceVisit} />}
           {view === 'monitor' && <MidiMonitor />}
-          {view === 'score' && <ScoreView />}
-          {view === 'review' && <ReviewView />}
+          {view === 'score' && <ScoreErrorBoundary key="score"><ScoreView /></ScoreErrorBoundary>}
+          {view === 'review' && <ScoreErrorBoundary key="review"><ReviewView /></ScoreErrorBoundary>}
         </div>
 
         {/* DEV-ONLY virtual keyboard: exercise the app without hardware/loopMIDI.
