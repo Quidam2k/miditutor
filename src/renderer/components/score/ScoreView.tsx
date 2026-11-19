@@ -401,6 +401,8 @@ function paintFingerings(osmd: OpenSheetMusicDisplay, container: HTMLElement) {
 
 // Screen height left for a page under the header, sticky toolbar and keyboard strip.
 const PAGE_RESERVE_PX = 320;
+// #6373: the "Pages 3-4 of 7" bar sits in this much room above each spread.
+const SPREAD_BAR_PX = 40;
 
 // Pages side by side (#5137): each page is half the panel wide and as tall as the screen
 // allows, not A4, so two pages fill a TV instead of two small portrait sheets.
@@ -408,7 +410,7 @@ const PAGE_RESERVE_PX = 320;
 function fitPages(osmd: OpenSheetMusicDisplay, container: HTMLElement) {
   const w = container.offsetWidth;
   if (!w) return; // hidden behind the photo view: keep the last page size
-  osmd.setCustomPageFormat(w, Math.max(400, window.innerHeight - PAGE_RESERVE_PX));
+  osmd.setCustomPageFormat(w, Math.max(400, window.innerHeight - PAGE_RESERVE_PX - SPREAD_BAR_PX));
   osmd.Zoom = Math.max(0.5, Math.min(1, w / 1100));
 }
 
@@ -799,6 +801,9 @@ export function ScoreView() {
   const strip = scoreLayout === 'strip';
   const stripRef = useRef(strip);
   stripRef.current = strip;
+  const layoutRef = useRef(scoreLayout);
+  layoutRef.current = scoreLayout;
+  const togglePages = useSettingsStore((s) => s.togglePages);
 
   // #10236 seamless relaunch: read what to put back before the first piece loads, since the
   // hand decides the steps. Taken once, by the first load of that same piece; a tutor push
@@ -1279,6 +1284,41 @@ export function ScoreView() {
     box.scrollTop += c.top + c.height / 2 - (top + b.bottom) / 2;
   }, []);
 
+  // #6373: Pages shows one spread (two pages) at a time. The other pages keep their place in the
+  // grid, only hidden, so every overlay drawn over them stays where it was; a turn scrolls the
+  // spread's row up under the toolbar. OSMD's own follow is off here: the spread follows instead.
+  const spreadRef = useRef(0);
+  const [spreadView, setSpreadView] = useState<{ at: number; pages: number; top: number; height: number } | null>(null);
+  const showSpread = useCallback((want: number, scroll: boolean) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const pages = [...container.children].filter((el): el is HTMLElement => /^osmdCanvasPage\d+$/.test(el.id));
+    if (pages.length === 0) return;
+    const at = Math.max(0, Math.min(Math.ceil(pages.length / 2) - 1, want));
+    spreadRef.current = at;
+    pages.forEach((p, k) => { p.style.visibility = Math.floor(k / 2) === at ? '' : 'hidden'; });
+    const first = pages[at * 2];
+    setSpreadView({ at, pages: pages.length, top: first.offsetTop, height: first.offsetHeight });
+    if (!scroll) return;
+    let box: HTMLElement | null = container.parentElement;
+    while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) {
+      box = box.parentElement;
+    }
+    if (!box) return;
+    const b = box.getBoundingClientRect();
+    const toolbar = box.querySelector('[data-score-toolbar]')?.getBoundingClientRect();
+    const top = Math.max(b.top, toolbar ? toolbar.bottom : b.top);
+    // Room above the pages for the "Pages 3-4 of 7" bar.
+    box.scrollTop += first.getBoundingClientRect().top - SPREAD_BAR_PX - top;
+  }, []);
+  const turnSpread = useCallback((way: number) => showSpread(spreadRef.current + way, true), [showSpread]);
+  // The spread the cursor is on: OSMD moves its cursor into that page's div.
+  const cursorSpread = useCallback(() => {
+    const id = osmdRef.current?.cursor.cursorElement?.parentElement?.id ?? '';
+    const page = Number(/^osmdCanvasPage(\d+)$/.exec(id)?.[1] ?? 0);
+    return page ? Math.floor((page - 1) / 2) : null;
+  }, []);
+
   // Move the visible cursor to step index i (relative moves; OSMD has no seek).
   const moveCursorTo = useCallback((i: number) => {
     const osmd = osmdRef.current;
@@ -1371,6 +1411,7 @@ export function ScoreView() {
     moveCursorTo(f.index);
     // The step walk at load leaves the view scrolled to the end; bring bar 1 back.
     if (stripRef.current) centerCursor('auto');
+    else if (layoutRef.current === 'pages') showSpread(cursorSpread() ?? 0, true);
     else revealCursor();
     setLooking(false);
     setFeedback({ kind: 'idle' });
@@ -1392,7 +1433,7 @@ export function ScoreView() {
     exprNewPassRef.current = false;
     setExprFindings([]);
     syncUi();
-  }, [moveCursorTo, centerCursor, revealCursor, syncUi, trackChord]);
+  }, [moveCursorTo, centerCursor, revealCursor, showSpread, cursorSpread, syncUi, trackChord]);
 
   // #6122: Restart pressed by hand starts a rep (restart() itself also runs internally).
   const restartByHand = useCallback(() => {
@@ -2268,6 +2309,41 @@ export function ScoreView() {
     return () => window.removeEventListener('keydown', onKey);
   }, [picking, loopBars, applyLoop, endLook]);
 
+  // #6373: P flips to Pages and back to the layout he came from (a trackball button can send P).
+  // In Pages, Page Up / Page Down and the mouse's back / forward buttons turn a spread.
+  // Never while he types: a P in a bar box or any text field is just a letter.
+  useEffect(() => {
+    const typing = (t: EventTarget | null) =>
+      t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat || typing(e.target) || typing(document.activeElement)) return;
+      if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        togglePages();
+      } else if (scoreLayout === 'pages' && (e.key === 'PageDown' || e.key === 'PageUp')) {
+        e.preventDefault();
+        turnSpread(e.key === 'PageDown' ? 1 : -1);
+      }
+    };
+    const onButton = (e: MouseEvent) => {
+      if (scoreLayout !== 'pages' || (e.button !== 3 && e.button !== 4)) return;
+      e.preventDefault();
+      turnSpread(e.button === 4 ? 1 : -1);
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mouseup', onButton);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mouseup', onButton);
+    };
+  }, [scoreLayout, togglePages, turnSpread]);
+  // Playing on past the spread turns it: he is never left on an old one.
+  useEffect(() => {
+    if (scoreLayout !== 'pages' || status !== 'ready') return;
+    const at = cursorSpread();
+    if (at !== null && at !== spreadRef.current) showSpread(at, true);
+  }, [cursorStep, scoreLayout, status, showSpread, cursorSpread]);
+
   // Keep the latest hand for loading without reloading OSMD on a hand switch.
   useEffect(() => {
     handRef.current = hand;
@@ -2323,13 +2399,15 @@ export function ScoreView() {
     }
     let disposed = false;
     setStatus('loading');
+    spreadRef.current = 0;
+    setSpreadView(null);
 
     const osmd = new OpenSheetMusicDisplay(container, {
       autoResize: true,
       autoBeam: true,
       backend: 'svg',
       drawTitle: !strip,
-      followCursor: !strip,
+      followCursor: scoreLayout === 'scroll', // #6373: Pages follows a spread at a time instead
       // Break lines where the printed page does (#5056), so the bar number at the start
       // of each line matches the boxed number on his page.
       newSystemFromXML: !strip,
@@ -2357,6 +2435,7 @@ export function ScoreView() {
       paintFingerings(osmd, container);
       liftStrip(osmd, layerRef.current, strip ? panelRef.current : null); // no panel: lift cleared
       centerCursor('auto'); // a re-layout moves the cursor along the strip
+      if (scoreLayout === 'pages') showSpread(spreadRef.current, true); // new page divs: hide again
     };
     osmdRef.current = osmd;
     const cursorObs = keepCursorHeight(container);
@@ -2442,7 +2521,7 @@ export function ScoreView() {
       exprRef.current = null;
     };
     // piece.id too: a re-pushed piece with identical XML must still start fresh.
-  }, [piece.id, drawnXml, scoreLayout, strip, everyBarNumbers, restart, buildFollower, centerCursor, startResolved]);
+  }, [piece.id, drawnXml, scoreLayout, strip, everyBarNumbers, restart, buildFollower, centerCursor, showSpread, startResolved]);
 
   // #9976: pedal lifts, with what was ringing only on the pedal just before.
   useEffect(
@@ -3241,6 +3320,13 @@ export function ScoreView() {
     }
     // Choosing a loop's bars edits no finger, even if a note was yellow as he started.
     const target = picking === 'off' ? wheelTarget : null;
+    // #6373: in Pages, a notch off the notes turns a spread.
+    if (!target && scoreLayout === 'pages') {
+      ev.preventDefault();
+      const n = wheelNotch(wheelAccRef.current, ev.deltaMode === 1 ? ev.deltaY * 40 : ev.deltaY, performance.now());
+      if (n !== 0) turnSpread(reverseWheel ? -n : n);
+      return;
+    }
     if (!target && !strip) return;
     ev.preventDefault();
     // macOS turns a Shift+wheel into a sideways scroll: the notch arrives as deltaX.
@@ -4498,10 +4584,40 @@ export function ScoreView() {
               display: 'grid',
               gridTemplateColumns: 'repeat(2, 100%)',
               columnGap: '1.5rem',
-              rowGap: '1.5rem',
+              rowGap: SPREAD_BAR_PX,
+              paddingTop: SPREAD_BAR_PX,
               alignItems: 'start',
             } : undefined}
           />
+          {scoreLayout === 'pages' && spreadView && !showPhoto && (() => {
+            const last = Math.ceil(spreadView.pages / 2) - 1;
+            const lo = spreadView.at * 2 + 1;
+            const hi = Math.min(spreadView.pages, lo + 1);
+            const edge = 'absolute z-10 flex w-7 items-center justify-center text-2xl text-gray-300 hover:bg-sky-100/60 hover:text-sky-700 disabled:invisible';
+            const turn = (way: number) => (e: React.MouseEvent) => {
+              e.stopPropagation();
+              turnSpread(way);
+            };
+            return (
+              <>
+                <div
+                  data-testid="page-spread"
+                  className="absolute left-1/2 z-10 flex -translate-x-1/2 items-center gap-2 rounded-md bg-gray-100 px-2 text-sm text-gray-700"
+                  style={{ top: spreadView.top - SPREAD_BAR_PX + 6 }}
+                >
+                  <button data-testid="page-prev" disabled={spreadView.at === 0} onClick={turn(-1)} className="px-1 disabled:opacity-30" title="Turn back (Page Up)">‹</button>
+                  <span title="P flips back; scroll, Page Up / Page Down or click a page's outer edge to turn">
+                    {lo === hi ? `Page ${lo}` : `Pages ${lo}-${hi}`} of {spreadView.pages}
+                  </span>
+                  <button data-testid="page-next" disabled={spreadView.at === last} onClick={turn(1)} className="px-1 disabled:opacity-30" title="Turn forward (Page Down)">›</button>
+                </div>
+                <button data-testid="page-edge-back" aria-label="Turn back" disabled={spreadView.at === 0} onClick={turn(-1)}
+                  className={`${edge} left-0`} style={{ top: spreadView.top, height: spreadView.height }}>‹</button>
+                <button data-testid="page-edge-forward" aria-label="Turn forward" disabled={spreadView.at === last} onClick={turn(1)}
+                  className={`${edge} right-0`} style={{ top: spreadView.top, height: spreadView.height }}>›</button>
+              </>
+            );
+          })()}
           {zones && <ZoneOverlay bands={zones.bands} marks={zones.marks} />}
           {blockBands && <ZoneOverlay bands={blockBands} marks={[]} prefix="block" tint="#facc15" />}
           {chords && <ChordOverlay rings={chords.rings} tags={chords.tags} />}

@@ -20,6 +20,8 @@ interface SettingsState {
   showNoteNames: boolean;
   showKeyboard: boolean;
   scoreLayout: ScoreLayout;
+  /** #6373: the layout P flips back to from Pages (the one he was on before Pages). */
+  layoutBeforePages: Exclude<ScoreLayout, 'pages'>;
   /** Score-tab pieces pinned to the top of the list, by displayed title (#9610). */
   favoritePieces: string[];
   /** Version group slug -> the file of the version he last switched to (#9627). */
@@ -136,6 +138,8 @@ interface SettingsState {
   setShowKeyboard: (show: boolean) => void;
   setShowNoteNames: (show: boolean) => void;
   setScoreLayout: (layout: ScoreLayout) => void;
+  /** #6373: P: Pages, or back to the layout he came from. */
+  togglePages: () => void;
   setBackwardTargets: (text: string) => void;
   setLastPiece: (piece: { id: string; label: string }) => void;
   setLastView: (view: string) => void;
@@ -168,6 +172,7 @@ export const useSettingsStore = create<SettingsState>()(
       audioEnabled: false,
       showNoteNames: false,
       scoreLayout: 'strip',
+      layoutBeforePages: 'strip',
       favoritePieces: [],
       pieceVersions: {},
       intervalGoal: { day: '', correct: 0 },
@@ -251,7 +256,14 @@ export const useSettingsStore = create<SettingsState>()(
       setExerciseType: (type) => set({ exerciseType: type }),
       setAudioEnabled: (enabled) => set({ audioEnabled: enabled }),
       setShowNoteNames: (show) => set({ showNoteNames: show }),
-      setScoreLayout: (layout) => set({ scoreLayout: layout }),
+      setScoreLayout: (layout) =>
+        set((s) => (layout === 'pages' && s.scoreLayout !== 'pages'
+          ? { scoreLayout: layout, layoutBeforePages: s.scoreLayout }
+          : { scoreLayout: layout })),
+      togglePages: () =>
+        set((s) => (s.scoreLayout === 'pages'
+          ? { scoreLayout: s.layoutBeforePages ?? 'strip' }
+          : { scoreLayout: 'pages', layoutBeforePages: s.scoreLayout })),
       setBackwardTargets: (text) => set({ backwardTargets: text }),
       setLastPiece: (piece) => set({ lastPiece: piece }),
       setLastView: (view) => set({ lastView: view }),
