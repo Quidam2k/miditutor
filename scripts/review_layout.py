@@ -41,6 +41,7 @@ MIN_SPACING, MAX_SPACING = 8, 60   # staff line spacing in px at 300 dpi
 BORDER_DARK = 0.5           # a column inked over this fraction of the page is the scan's edge
 EXTENT_GAP = 25             # a staff line's ink stretch bridges gaps up to this (not up to a label beside the staff)
 BARLINE_DARK = 0.95         # barline candidate: ink fraction through every staff
+LENIENT_BARLINE_DARK = 0.9  # ...on the last re-read (4): a line broken by a scan speck still counts (#6491)
 BARLINE_GAP = 18            # merge candidate columns no further apart than this
 EDGE_TOL = 12               # barline this close to a staff end is kept whatever its scores
 EDGE_SPACINGS = 4           # a line this many staff spaces from a staff end is the system edge
@@ -222,11 +223,11 @@ def _mean_cols(block, a, b):
     return float(block[:, a:b].mean()) if b > a and block.shape[0] else 0.0
 
 
-def barline_runs(dark, system, x_left, x_right):
+def barline_runs(dark, system, x_left, x_right, level=BARLINE_DARK):
     """Candidate barline runs for one system, each with its gapfill and isolation scores."""
     ok = None
     for st in system:
-        col = dark[st[0] - 1:st[-1] + 2].mean(axis=0) >= BARLINE_DARK
+        col = dark[st[0] - 1:st[-1] + 2].mean(axis=0) >= level
         ok = col if ok is None else ok & col
     found = []
     for x0, x1 in _runs(np.where(ok)[0], BARLINE_GAP):
@@ -275,11 +276,11 @@ def keep_barlines(runs, x_left, x_right, connected):
     return keep
 
 
-def _begin_repeat(dark, system, run):
+def _begin_repeat(dark, system, run, level=BARLINE_DARK):
     """A thick line then a thin one (a begin-repeat), not a thin-thick end or a single line."""
     ok = None
     for st in system:
-        col = dark[st[0] - 1:st[-1] + 2, run["x0"]:run["x1"] + 1].mean(axis=0) >= BARLINE_DARK
+        col = dark[st[0] - 1:st[-1] + 2, run["x0"]:run["x1"] + 1].mean(axis=0) >= level
         ok = col if ok is None else ok & col
     lines = _runs(np.where(ok)[0], 1)
     return len(lines) == 2 and lines[0][1] - lines[0][0] + 1 >= THICK_RATIO * (lines[1][1] - lines[1][0] + 1)
@@ -330,10 +331,13 @@ def analyze_page(path, per_system, reread=0):
     5 degrees, a low-res page scaled up, staves grouped into systems by the line that joins them.
     reread 2: also a page laid out by count whose staves join in bigger systems (a vocal line).
     reread 3: as 2, but staves are grouped by how close they sit and a staff left alone is dropped
-    (a teacher line under the student's systems, joining lines lost in the scan's dark edge)."""
+    (a teacher line under the student's systems, joining lines lost in the scan's dark edge).
+    reread 4: as 1, but a barline needs only LENIENT_BARLINE_DARK ink, for a thin line broken by a
+    scan speck (#6491); tried last, so a piece an earlier read maps exactly is untouched."""
     rgb = Image.open(path).convert("RGB")
+    level = LENIENT_BARLINE_DARK if reread == 4 else BARLINE_DARK
     *first, extra = _read_page(path, rgb, best_angle(rgb.convert("L")), per_system, DARK_LEVEL, False,
-                               repeats=reread > 0)
+                               repeats=reread > 0, barline_level=level)
     if reread == 0 or (first[0]["status"] == "ok" and not (extra and reread == 2)):
         return tuple(first)
     # Read again: the page failed, or it was laid out by count but its staves join in bigger
@@ -344,7 +348,8 @@ def analyze_page(path, per_system, reread=0):
         rgb = rgb.resize((SCAN_WIDTH, round(rgb.height * SCAN_WIDTH / rgb.width)), Image.BICUBIC)
         dark_level = LOW_RES_DARK
     *second, extra2 = _read_page(path, rgb, best_angle(rgb.convert("L"), WIDE_ANGLE_TENTHS, dark_level),
-                                 per_system, dark_level, True, reread == 3, repeats=True)
+                                 per_system, dark_level, True, reread == 3, repeats=True,
+                                 barline_level=level)
     if second[0]["status"] != "ok":
         return tuple(first)
     notes += ["deskew searched to 5 degrees",
@@ -357,7 +362,7 @@ def analyze_page(path, per_system, reread=0):
 
 
 def _read_page(path, rgb, angle, per_system, dark_level, grouped, by_gap=False, rescue=True,
-               repeats=False):
+               repeats=False, barline_level=BARLINE_DARK):
     if angle:
         rgb = rgb.rotate(angle, resample=Image.BILINEAR, fillcolor=(255, 255, 255))
     dark = np.asarray(rgb.convert("L")) < dark_level
@@ -387,7 +392,7 @@ def _read_page(path, rgb, angle, per_system, dark_level, grouped, by_gap=False, 
         systems = [g[-per_system:] for k, g in enumerate(groups) if len(g) >= per_system or k in stand_in]
         if rescue and stand_in:
             better = _rescue_bands(path, rgb, angle, per_system, dark_level, groups, stand_in, spacing,
-                                   sum(len(g) == per_system for g in systems))
+                                   sum(len(g) == per_system for g in systems), barline_level)
             if better:
                 return better
         if not any(len(g) == per_system for g in systems):
@@ -410,7 +415,8 @@ def _read_page(path, rgb, angle, per_system, dark_level, grouped, by_gap=False, 
             info["reason"] = f"staff {sum(len(g) for g in systems[:i]) + 1} has no extent"
             return info, [], rgb, extra
         raw.append({"staves": system, "x_left": extent[0], "x_right": extent[1],
-                    "runs": barline_runs(dark, system, extent[0], extent[1])})
+                    "runs": barline_runs(dark, system, extent[0], extent[1],
+                                             barline_level)})
     multi = [r["gapfill"] for s in raw if len(s["staves"]) > 1 for r in s["runs"]] if per_system > 1 else []
     connected = bool(multi) and float(np.median(multi)) >= CONNECTED_GAPFILL
     height = dark.shape[0]
@@ -425,7 +431,7 @@ def _read_page(path, rgb, angle, per_system, dark_level, grouped, by_gap=False, 
         left = [x for x in xs if x - s["x_left"] <= tol]
         # A begin-repeat just past the clef and key signature opens the first bar (#6490).
         opening = [x for r, x in zip(keep, xs) if repeats and tol < x - s["x_left"] <= REPEAT_SPACINGS * spacing
-                   and _begin_repeat(dark, s["staves"], r)][:1]
+                   and _begin_repeat(dark, s["staves"], r, barline_level)][:1]
         left += opening
         right = [x for x in xs if s["x_right"] - x <= tol]
         if left:
@@ -448,7 +454,8 @@ def _read_page(path, rgb, angle, per_system, dark_level, grouped, by_gap=False, 
     return info, raw, rgb, extra
 
 
-def _rescue_bands(path, rgb, angle, per_system, dark_level, groups, stand_in, spacing, full):
+def _rescue_bands(path, rgb, angle, per_system, dark_level, groups, stand_in, spacing, full,
+                  barline_level=BARLINE_DARK):
     """Second read (#6489): a lone staff with room below it may sit over staves curled off the
     page's angle (a bound book's last system). Deskew each such band on its own and read the page
     again; keep that read only if it lays out more full systems."""
@@ -464,7 +471,8 @@ def _rescue_bands(path, rgb, angle, per_system, dark_level, groups, stand_in, sp
             page.paste(band.rotate(tilt, resample=Image.BILINEAR, fillcolor=(255, 255, 255)), (0, top))
     if page.tobytes() == rgb.tobytes():
         return None
-    info, raw, image, extra = _read_page(path, page, 0, per_system, dark_level, True, rescue=False, repeats=True)
+    info, raw, image, extra = _read_page(path, page, 0, per_system, dark_level, True, rescue=False, repeats=True,
+                                         barline_level=barline_level)
     if info["status"] != "ok" or sum(len(s["staves"]) == per_system for s in raw) <= full:
         return None
     info["angle"] = angle
@@ -515,11 +523,12 @@ def layout_piece(library, slug, out_dir=None):
     if not pages:
         raise ValueError(f"no page scans in pages/{slug}")
     # The plain read first; a piece it can't map exactly is read again with failed pages re-read
-    # (1), then also vocal-line pages (2), then by staff gaps (3, #6488), and the best is kept (#6487). A later
+    # (1), then also vocal-line pages (2), then by staff gaps (3, #6488), then with fainter barlines
+    # (4, #6491), and the best is kept (#6487). A later
     # read wins only if it is exact or maps strictly more systems; a tie keeps the earlier read,
     # so a piece the plain read lays out is unchanged unless the re-read really maps more.
     best = None
-    for reread in (0, 1, 2, 3) if score["staves_per_system"] > 1 else (0, 1, 2):
+    for reread in (0, 1, 2, 3, 4) if score["staves_per_system"] > 1 else (0, 1, 2, 4):
         data, jobs = _build(library, slug, score, score_path, pages, reread)
         rank = (data["match"] == "exact", sum(1 for x in data["systems"] if x["measures"]))
         if best is None or rank > best[0]:
@@ -576,6 +585,11 @@ def _build(library, slug, score, score_path, pages, reread):
         # exact: every system mapped and every measure on one (not a front run that stops short)
         covered = sum(s["measures"][1] - s["measures"][0] + 1 for s in out_systems if s["measures"])
         match = "exact" if mapped == len(out_systems) and not errors and covered == total else "partial"
+        # A count that adds up is not enough: a line the score itself starts must start a system,
+        # or an extra bar on one line is hiding a missed one on another (#6491).
+        starts = {s["measures"][0] for s in out_systems if s["measures"]}
+        if match == "exact" and any(b not in starts for b in score["breaks"]):
+            match = "partial"
     data = {
         "version": VERSION, "slug": slug, "score": score_path.name,
         "score_sha256": _sha256(score_path),

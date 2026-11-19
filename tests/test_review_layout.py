@@ -312,3 +312,114 @@ def test_front_run_is_not_exact(tmp_path):
         assert data["match"] != "exact"
     else:
         pytest.skip("score already fixed")
+
+
+# ---- line breaks and fainter barlines (#6491) ---------------------------------
+
+
+# #6491: The lenient threshold keeps a barline with a gap in the second staff.
+def test_barline_runs_lenient_level_keeps_broken_line():
+    dark = np.zeros((500, 400), dtype=bool)
+    system = [list(range(100, 181, 20)), list(range(300, 381, 20))]
+    for staff in system:
+        dark[staff[0] - 2 : staff[-1] + 3, 200:203] = True
+    dark[330:338, 200:203] = False
+
+    second_staff = system[1]
+    ink_fraction = dark[second_staff[0] - 1 : second_staff[-1] + 2, 201].mean()
+    assert 0.9 < ink_fraction < 0.95
+
+    strict = review_layout.barline_runs(dark, system, 50, 350)
+    lenient = review_layout.barline_runs(
+        dark, system, 50, 350, level=review_layout.LENIENT_BARLINE_DARK
+    )
+    assert not any(run["x0"] <= 201 <= run["x1"] for run in strict)
+    assert any(run["x0"] <= 201 <= run["x1"] for run in lenient)
+
+
+# #6491: Only reread 4 uses the lenient barline threshold.
+def test_lenient_level_is_only_for_reread_4(monkeypatch, tmp_path):
+    levels = []
+
+    def fake_read_page(path, *args, barline_level, **kwargs):
+        levels.append(barline_level)
+        return {"file": path.name, "status": "ok", "warnings": []}, [], None, False
+
+    monkeypatch.setattr(review_layout, "_read_page", fake_read_page)
+    monkeypatch.setattr(review_layout, "best_angle", lambda *args: 0)
+    page = tmp_path / "01.png"
+    Image.new("RGB", (50, 50), "white").save(page)
+
+    for reread in range(5):
+        review_layout.analyze_page(page, per_system=2, reread=reread)
+
+    assert levels == [review_layout.BARLINE_DARK] * 4 + [review_layout.LENIENT_BARLINE_DARK]
+
+
+# #6491: Triangle Tango's mapped systems start at every score line break.
+@needs_library
+def test_triangle_tango_lines_start_where_the_score_does(tmp_path):
+    data = review_layout.layout_piece(LIBRARY, "triangle-tango-from-corteo", out_dir=tmp_path)
+
+    assert data["match"] == "exact"
+    assert data["scan"]["bars"] == 51
+    page_three = [system["measures"] for system in data["systems"] if system["page"] == "03.png"]
+    assert page_three == [[23, 25], [26, 28], [29, 31], [32, 34]]
+    starts = {system["measures"][0] for system in data["systems"]}
+    assert set(data["xml"]["breaks"]) <= starts
+
+
+# #6491: Quidam's fourth system on page two spans measures 21 through 24.
+@needs_library
+def test_quidam_page_2_line_4_has_four_bars(tmp_path):
+    data = review_layout.layout_piece(LIBRARY, "quidam-from-quidam", out_dir=tmp_path)
+
+    assert data["match"] == "exact"
+    assert data["scan"]["bars"] == 60
+    system = next((s for s in data["systems"] if s["measures"] == [21, 24]), None)
+    assert system is not None
+    assert system["page"] == "02.png"
+    assert system["bars"] == 4
+
+
+# #6491: A full bar count yields a partial match when a score break falls inside a system.
+@pytest.mark.parametrize(
+    ("bar_counts", "expected_match"), [((2, 4), "partial"), ((3, 3), "exact")]
+)
+def test_exact_count_with_break_off_line_start_is_partial(
+    monkeypatch, tmp_path, bar_counts, expected_match
+):
+    score_path = tmp_path / "score.musicxml"
+    score_path.write_bytes(b"<score-partwise/>")
+    score = {
+        "measures": [(i, str(i)) for i in range(1, 7)],
+        "breaks": [1, 4],
+        "staves_per_system": 2,
+    }
+
+    def fake_analyze_page(page, per_system, reread):
+        systems = []
+        for y0, bars in zip((0, 50), bar_counts):
+            systems.append({
+                "y0": y0,
+                "y1": y0 + 50,
+                "spacing": 4,
+                "staves": [list(range(y0 + offset, y0 + offset + 20, 4)) for offset in (4, 28)],
+                "x_left": 10,
+                "x_right": 90,
+                "barlines": [10 + 80 * i // bars for i in range(bars + 1)],
+                "bars": bars,
+            })
+        info = {"file": page.name, "status": "ok", "warnings": []}
+        return info, systems, Image.new("RGB", (100, 100), "white")
+
+    monkeypatch.setattr(review_layout, "analyze_page", fake_analyze_page)
+    monkeypatch.setattr(review_layout, "make_crop", lambda *args: None)
+
+    data, _ = review_layout._build(
+        tmp_path, "score", score, score_path, [tmp_path / "01.png"], reread=0
+    )
+
+    assert data["scan"]["bars"] == 6
+    assert [system["measures"][0] for system in data["systems"]] == [1, bar_counts[0] + 1]
+    assert data["match"] == expected_match
