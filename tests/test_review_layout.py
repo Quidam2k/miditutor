@@ -133,3 +133,90 @@ def test_suspects_are_the_current_scores_flags_per_line(monkeypatch):
     assert data["systems"][0]["suspects"] == [{"measure": 2, "staff": 1, "check": "bar_length", "detail": "underfull"}]
     assert data["systems"][1]["suspects"] == [{"measure": 5, "staff": 2, "check": "range", "detail": "low"}]
     assert data["systems"][2]["suspects"] == []
+
+
+# ---- second read (#6487) ------------------------------------------------------------------
+
+import numpy as np  # noqa: E402
+from PIL import Image, ImageDraw  # noqa: E402
+
+
+def test_wide_deskew_finds_three_degrees():
+    # The narrow search hits its limit on a scan skewed by three degrees (#6487).
+    image = Image.new("L", (2000, 1400), 255)
+    draw = ImageDraw.Draw(image)
+    for top in (420, 840):
+        for y in range(top, top + 100, 20):
+            draw.line((100, y, 1899, y), fill=0, width=3)
+    image = image.rotate(-3.0, Image.Resampling.BILINEAR, fillcolor=255)
+
+    angle = review_layout.best_angle(image, review_layout.WIDE_ANGLE_TENTHS)
+    assert angle == pytest.approx(3.0, abs=0.3)
+    assert abs(review_layout.best_angle(image)) == 2.0
+
+
+def test_robust_peak_ignores_black_edge_row():
+    # A black scan edge can hide faint staff lines with the default threshold (#6487).
+    dark = np.zeros((1200, 1500), dtype=bool)
+    lines = [300, 320, 340, 360, 380]
+    for y in lines:
+        dark[y:y + 2, :675] = True
+    dark[10:13, :] = True
+
+    assert review_layout.find_staves(dark)[0] == []
+    staves, _, _ = review_layout.find_staves(dark, robust=True)
+    assert len(staves) == 1
+    assert staves[0] == pytest.approx(lines, abs=1)
+
+
+def test_group_systems_joins_piano_and_leaves_vocal_alone():
+    # The left connector joins only the two piano staves (#6487).
+    dark = np.zeros((700, 2000), dtype=bool)
+    vocal = list(range(100, 200, 20))
+    piano1 = list(range(300, 400, 20))
+    piano2 = list(range(500, 600, 20))
+    for staff in (vocal, piano1, piano2):
+        for y in staff:
+            dark[y - 1:y + 2, 200:1801] = True
+    dark[piano1[0]:piano2[-1] + 1, 200:203] = True
+    border = np.zeros(dark.shape[1], dtype=bool)
+
+    systems = review_layout.group_systems(dark, [vocal, piano1, piano2], 20, border)
+    assert systems == [[vocal], [piano1, piano2]]
+
+
+@needs_library
+@pytest.mark.parametrize(
+    ("slug", "expected_bars"),
+    [
+        ("kum-ba-yah", 16),
+        ("la-moldau", 32),
+        ("minuet-in-d-minor", 32),
+        ("let-me-fall-musicnotes-vocal-arrangement", 73),
+    ],
+)
+def test_second_read_recovers_exact_layout(slug, expected_bars, tmp_path):
+    # These scans need a second read to recover the expected bar count (#6487).
+    result = review_layout.layout_piece(LIBRARY, slug, out_dir=tmp_path)
+
+    assert result["match"] == "exact"
+    assert result["scan"]["bars"] == expected_bars
+    assert all(page["status"] == "ok" for page in result["pages"])
+    assert any(
+        warning.startswith("second read:")
+        for page in result["pages"]
+        for warning in page["warnings"]
+    )
+
+
+@needs_library
+def test_exact_piece_skips_second_read(tmp_path):
+    # An exact first read needs no retry (#6487).
+    result = review_layout.layout_piece(LIBRARY, "fur-elise", out_dir=tmp_path)
+
+    assert result["match"] == "exact"
+    assert not any(
+        warning.startswith("second read:")
+        for page in result["pages"]
+        for warning in page["warnings"]
+    )
