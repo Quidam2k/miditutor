@@ -3509,6 +3509,19 @@ export function ScoreView() {
   // #6371: his starred ranges on this piece, shortest first.
   const starred = starsInOrder(starsOf(pieceStars, piece.label));
   const overallStarred = !!overall && starred.some((sp) => sp.first === overall.first && sp.last === overall.last);
+  // #6513: stars and spots as one list by bar; a range that is both shows once. Ticked spots go last.
+  const loopRows = (() => {
+    const rows = new Map<string, { first: number; last: number; star: boolean; spot?: (typeof spotList)[number] }>();
+    for (const sp of starred) rows.set(`${sp.first}-${sp.last}`, { first: sp.first, last: sp.last, star: true });
+    for (const sp of spotList) {
+      const row = rows.get(`${sp.first}-${sp.last}`);
+      if (row) row.spot = sp;
+      else rows.set(`${sp.first}-${sp.last}`, { first: sp.first, last: sp.last, star: false, spot: sp });
+    }
+    const done = (r: { star: boolean; spot?: { ticked?: unknown } }) => Number(!!r.spot?.ticked && !r.star);
+    return [...rows.values()].sort((x, y) => done(x) - done(y) || x.first - y.first || x.last - y.last);
+  })();
+  const loopCount = loopRows.filter((r) => r.star || (r.spot && !r.spot.ticked)).length;
   const keyLabels = fingersOf(stepNotesRef.current[cursorStep]);
   for (const n of stepNotesRef.current[cursorStep] ?? []) if (staffOf(n) === 1) leftKeys.add(toMidi(n));
   for (const n of blockPos?.fingers ?? []) if (n.hand === 'L') leftKeys.add(n.midi);
@@ -4375,72 +4388,71 @@ export function ScoreView() {
                   {overallStarred ? '★' : '☆'}
                 </button>
               )}
-              {picking === 'off' && starred.length > 0 && (
-                <Popover label="Starred" testId="starred" btn={`${btn} px-1.5 py-0.5`}>
-                  {starred.map((sp) => (
-                    <span key={`${sp.first}-${sp.last}`} className="flex items-center gap-2">
-                      <button
-                        onClick={() => {
-                          editRange(sp);
-                          reportEvent('star-pick', { firstBar: sp.first, lastBar: sp.last });
-                        }}
-                        disabled={watching || keeping}
-                        className={`${btn} flex-1 text-left font-mono`}
-                        data-testid={`starred-${sp.first}-${sp.last}`}
-                      >
-                        {sp.first === sp.last ? `Bar ${sp.first}` : `Bars ${sp.first}–${sp.last}`}
-                      </button>
-                      <button
-                        data-stay
-                        onClick={() => useSettingsStore.getState().toggleStar(pieceLabelRef.current, sp)}
-                        className="px-1 text-gray-400 hover:text-red-300"
-                        title="Remove this star"
-                        aria-label={`Remove star ${sp.first}–${sp.last}`}
-                        data-testid={`unstar-${sp.first}-${sp.last}`}
-                      >
-                        ✕
-                      </button>
-                    </span>
-                  ))}
-                </Popover>
-              )}
               {picking === 'off' && (
-                <Popover label={`Spots ${openSpots}`} testId="spots" btn={`${btn} px-1.5 py-0.5`}>
-                  {overall && overall.last - overall.first < MAX_SPOT_BARS && (
+                // #6513: one list of his loops: starred ranges and trouble spots together, by bar.
+                <Popover label={`Loops ${loopCount}`} testId="loops" btn={`${btn} px-1.5 py-0.5`}>
+                  {overall && overall.last - overall.first < MAX_SPOT_BARS && !spotList.some((sp) => !sp.ticked && sp.first === overall.first && sp.last === overall.last) && (
                     <button onClick={() => putSpot(overall)} disabled={watching || keeping} className={btn} data-testid="spot-add">
-                      + Add {spanText(overall)}
+                      + Add {spanText(overall)} as a spot
                     </button>
                   )}
-                  {spotList.length === 0 && (
-                    <span className="text-xs text-gray-400">No trouble spots yet. Bars you keep missing in the range you are on get added here.</span>
+                  {loopRows.length === 0 && (
+                    <span className="text-xs text-gray-400">
+                      No loops yet. Star a range with ☆, and bars you keep missing or slowing down on get added here.
+                    </span>
                   )}
-                  {spotList.map((sp) =>
-                    sp.ticked ? (
-                      <span key={`${sp.first}-${sp.last}`} className="text-gray-500" data-testid={`spot-${sp.first}-${sp.last}`}>
-                        {spotLabel(sp, spotClean)}
+                  {loopRows.map(({ first, last, star, spot }) => {
+                    const id = `${first}-${last}`;
+                    const done = !!spot?.ticked && !star;
+                    return (
+                      <span key={id} className="flex items-center gap-2" data-testid={spot ? `spot-${id}` : undefined}>
+                        <span className={`w-4 text-center ${star ? 'text-yellow-300' : 'text-transparent'}`} aria-hidden>★</span>
+                        {done ? (
+                          <span className="flex-1 font-mono text-gray-500">{spotLabel(spot!, spotClean)}</span>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              editRange({ first, last });
+                              reportEvent(star ? 'star-pick' : 'spot-pick', { firstBar: first, lastBar: last });
+                            }}
+                            disabled={watching || keeping}
+                            className={`${btn} flex-1 text-left font-mono`}
+                            data-testid={star ? `starred-${id}` : `spot-loop-${id}`}
+                            title="Loop these bars"
+                          >
+                            {spot && !spot.ticked ? spotLabel(spot, spotClean) : first === last ? `Bar ${first}` : `Bars ${first}–${last}`}
+                          </button>
+                        )}
+                        {star && (
+                          <button
+                            data-stay
+                            onClick={() => useSettingsStore.getState().toggleStar(pieceLabelRef.current, { first, last })}
+                            className="px-1 text-gray-400 hover:text-red-300"
+                            title="Remove this star"
+                            aria-label={`Remove star ${first}–${last}`}
+                            data-testid={`unstar-${id}`}
+                          >
+                            ☆✕
+                          </button>
+                        )}
+                        {spot && !spot.ticked && (
+                          <button
+                            data-stay
+                            onClick={() => {
+                              useSettingsStore.getState().dismissSpot(pieceLabelRef.current, spot);
+                              reportEvent('spot', { removed: { first, last } });
+                            }}
+                            className="px-1 text-gray-400 hover:text-red-300"
+                            title="Take this spot off the list"
+                            aria-label={`Remove spot ${first}–${last}`}
+                            data-testid={`spot-x-${id}`}
+                          >
+                            ✕
+                          </button>
+                        )}
                       </span>
-                    ) : (
-                      <span key={`${sp.first}-${sp.last}`} className="flex items-center gap-2" data-testid={`spot-${sp.first}-${sp.last}`}>
-                        <span className="flex-1 font-mono text-gray-200">{spotLabel(sp, spotClean)}</span>
-                        <button onClick={() => editRange(sp)} disabled={watching || keeping} className={btn} data-testid={`spot-loop-${sp.first}-${sp.last}`}>
-                          Loop
-                        </button>
-                        <button
-                          data-stay
-                          onClick={() => {
-                            useSettingsStore.getState().dismissSpot(pieceLabelRef.current, sp);
-                            reportEvent('spot', { removed: { first: sp.first, last: sp.last } });
-                          }}
-                          className="px-1 text-gray-400 hover:text-red-300"
-                          title="Take this spot off the list"
-                          aria-label={`Remove spot ${sp.first}–${sp.last}`}
-                          data-testid={`spot-x-${sp.first}-${sp.last}`}
-                        >
-                          ✕
-                        </button>
-                      </span>
-                    ),
-                  )}
+                    );
+                  })}
                 </Popover>
               )}
               {picking === 'off' && loopBars && (

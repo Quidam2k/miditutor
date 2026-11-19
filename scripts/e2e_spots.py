@@ -82,7 +82,7 @@ def main() -> int:
         tip = page.get_by_test_id("spot-tip")
         check(tip.count() == 1 and "bars 3–5" in tip.inner_text(), "says Added: bars 3-5", tip.all_inner_texts())
 
-        page.get_by_test_id("spots").click()
+        page.get_by_test_id("loops").click()
         time.sleep(0.2)
         check("alone 0/5 · in context 0/5" in page.get_by_test_id("spot-3-5").inner_text(), "Spots list shows its counts")
         page.get_by_test_id("spot-loop-3-5").click()
@@ -123,7 +123,7 @@ def main() -> int:
 
         open_spot = next((x for x in screen().get("spots") or [] if not x["ticked"]), None)
         if open_spot:
-            page.get_by_test_id("spots").click()
+            page.get_by_test_id("loops").click()
             time.sleep(0.2)
             page.get_by_test_id(f"spot-x-{open_spot['first']}-{open_spot['last']}").click()
             time.sleep(0.3)

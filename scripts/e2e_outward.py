@@ -52,15 +52,32 @@ def main() -> int:
             time.sleep(0.2)
             check(star.get_attribute("aria-pressed") == "true", f"star button stars {first}-{last}")
 
-        page.get_by_test_id("starred").click()
+        page.get_by_test_id("loops").click()
         time.sleep(0.2)
-        rows = page.get_by_test_id("starred-panel").locator("[data-testid^='starred-']").all_inner_texts()
-        check(rows == ["Bars 3–4", "Bars 2–6"], "dropdown lists the stars shortest first", rows)
+        rows = page.get_by_test_id("loops-panel").locator("[data-testid^='starred-']").all_inner_texts()
+        check(rows == ["Bars 2–6", "Bars 3–4"], "Loops list goes by bar (#6513)", rows)
         page.get_by_test_id("starred-2-6").click()
         time.sleep(0.8)
         s = screen()
         check(s["loop"]["firstBar"] == 2 and s["loop"]["lastBar"] == 6, "picking a star loops it", s.get("loop"))
-        check(page.get_by_test_id("starred-panel").count() == 0, "picking closes the dropdown")
+        check(page.get_by_test_id("loops-panel").count() == 0, "picking closes the dropdown")
+
+        # #6513: one list. 2-6 as a spot too shows once, with its star and its counts; x takes only the spot off.
+        page.get_by_test_id("loops").click()
+        page.get_by_test_id("spot-add").click()
+        time.sleep(0.5)
+        if page.get_by_test_id("loops-panel").count() == 0:
+            page.get_by_test_id("loops").click()
+        row = page.get_by_test_id("loops-panel").get_by_test_id("spot-2-6")
+        text = row.inner_text() if row.count() else ""
+        check(row.count() == 1 and "★" in text and "alone 0/5" in text and row.get_by_test_id("starred-2-6").count() == 1,
+              "a starred range that is also a spot is one row with both", text)
+        check(page.get_by_test_id("loops").inner_text().startswith("Loops 2"), "Loops N counts the star 3-4 and the 2-6 row",
+              page.get_by_test_id("loops").inner_text())
+        page.get_by_test_id("spot-x-2-6").click()
+        time.sleep(0.3)
+        check(page.get_by_test_id("loops-panel").get_by_test_id("starred-2-6").count() == 1, "x on the spot keeps the star")
+        page.keyboard.press("Escape")
 
         loop(3, 4, outward=True)
         s = screen()
@@ -102,11 +119,11 @@ def main() -> int:
         check(s.get("backwards") is None and s["loop"]["firstBar"] == 2 and s["loop"]["lastBar"] == 6,
               "Outward off goes back to the whole 2-6 loop", s.get("loop"))
 
-        page.get_by_test_id("starred").click()
+        page.get_by_test_id("loops").click()
         time.sleep(0.2)
         page.get_by_test_id("unstar-3-4").click()
         time.sleep(0.2)
-        rows = page.get_by_test_id("starred-panel").locator("[data-testid^='starred-']").all_inner_texts()
+        rows = page.get_by_test_id("loops-panel").locator("[data-testid^='starred-']").all_inner_texts()
         check(rows == ["Bars 2–6"], "x removes a star, dropdown stays open", rows)
         page.keyboard.press("Escape")
 
