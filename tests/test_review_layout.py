@@ -220,3 +220,95 @@ def test_exact_piece_skips_second_read(tmp_path):
         for page in result["pages"]
         for warning in page["warnings"]
     )
+
+
+# ---- begin-repeat, curled staves, staff gaps (#6488/#6489/#6490) ---------------------------
+
+def test_begin_repeat_is_thick_then_thin():
+    # #6490: A begin repeat has a thick stroke followed by a thin stroke.
+    system = [list(range(100, 181, 20)), list(range(300, 381, 20))]
+    run = {"x0": 95, "x1": 125}
+    cases = [
+        ("thick then thin", [(100, 107), (112, 115)], True),
+        ("thin then thick", [(100, 103), (108, 115)], False),
+        ("single thin stroke", [(100, 103)], False),
+    ]
+
+    for shape, strokes, expected in cases:
+        dark = np.zeros((500, 400), dtype=bool)
+        for staff in system:
+            for x0, x1 in strokes:
+                dark[staff[0] - 2 : staff[-1] + 3, x0 : x1 + 1] = True
+        assert review_layout._begin_repeat(dark, system, run) == expected, shape
+
+
+def test_gap_groups_keeps_grand_staves_and_splits_singles():
+    # #6488: Small gaps join grand staves, while larger gaps separate systems.
+    staves = []
+    y = 100
+    for _ in range(3):
+        staves.append([y + 16 * line for line in range(5)])
+        y = staves[-1][-1] + 40
+        staves.append([y + 16 * line for line in range(5)])
+        y = staves[-1][-1] + 150
+
+    for _ in range(3):
+        staves.append([y + 16 * line for line in range(5)])
+        y = staves[-1][-1] + 150
+
+    assert review_layout.gap_groups(staves) == [
+        staves[0:2],
+        staves[2:4],
+        staves[4:6],
+        staves[6:7],
+        staves[7:8],
+        staves[8:9],
+    ]
+
+
+@needs_library
+@pytest.mark.parametrize(
+    ("slug", "expected"),
+    [
+        ("quidam-musicnotes-vocal-arrangement", 120),
+        ("alegria-from-alegria", 69),
+        ("alone-from-delirium", 40),
+        ("allegro-in-f-major-k-1c", None),
+    ],
+)
+def test_repeat_layout_matches_xml_measure_count(slug, expected, tmp_path):
+    # #6490: The scan bar count matches the XML measure count.
+    data = review_layout.layout_piece(LIBRARY, slug, out_dir=tmp_path)
+
+    assert data["match"] == "exact"
+    assert data["scan"]["bars"] == data["xml"]["measures"]
+    if expected is not None:
+        assert data["scan"]["bars"] == expected
+
+
+@needs_library
+def test_let_me_fall_curled_piano_staves_found(tmp_path):
+    # #6489: Both curled piano systems retain their two staves.
+    data = review_layout.layout_piece(
+        LIBRARY, "let-me-fall-musicnotes-vocal-arrangement", out_dir=tmp_path
+    )
+
+    assert data["match"] == "exact"
+    systems = data["systems"]
+    assert systems[2]["measures"] == [8, 10]
+    assert len(systems[2]["staves"]) == 2
+    assert systems[10]["measures"] == [33, 36]
+    assert len(systems[10]["staves"]) == 2
+
+
+@needs_library
+def test_front_run_is_not_exact(tmp_path):
+    # #6488: A layout that maps only a front run of the measures is not exact.
+    data = review_layout.layout_piece(
+        LIBRARY, "bright-lights-boogie", out_dir=tmp_path
+    )
+
+    if data["xml"]["measures"] == 28:
+        assert data["match"] != "exact"
+    else:
+        pytest.skip("score already fixed")
