@@ -56,3 +56,14 @@ MIDI Keyboard → WebMidi.js noteon → useMidi hook → Zustand store
 - Tailwind's Vite plugin (`@tailwindcss/vite`) is ESM-only and incompatible with Electron Forge's CJS config loading. Use `@tailwindcss/postcss` via `postcss.config.js` instead.
 - Audio must be initialized from a user gesture (browser autoplay policy). The "Start Practice" button triggers `initAudio()`.
 - WebMidi runs in the renderer process — no IPC hop needed for low-latency MIDI input.
+
+## Live pipelines (added 2026-11-18, #5493)
+
+The sections above describe the March note trainer. These run today; read their script docstrings before use.
+
+- **Scan -> score (OMR)**: `scripts/scan_pull.py` scans on Pinocchio, pulls + verifies TIFFs, converts and runs OMR (homr; `merge_omr_pages.py` joins pages). Scans and scores are private/copyrighted: library outside the repo, never committed.
+- **OMR audit / repair / annotate**: `omr_audit.py` (lint + compare vs `omr_second_engine.py` oemer/homr re-reads) -> `omr_fix.py` (reviewed repairs incl. `add_tie`) -> `annotate_scan.py` (fingering, chord symbols, expression marks, ties from page reads). Heavy OMR batches obey the Solace idle/RAM gates (`omr_second_engine.py`).
+- **MIDI import sweep**: `scripts/midi_to_score.py sweep` converts MIDI from the local, phone and Pinocchio inboxes into MusicXML. Meant to run every 15 min as scheduled task `MidiTutorMidiImport` (installer: `scripts/install_midi_sweep_task.bat`). As of 2026-11-18 that task is NOT installed on Solace: if imports seem stuck, that is why.
+- **Pieces to both boxes**: `scripts/sync_pieces.sh` copies finished scores to `~/MidiTutor Pieces` on Pinocchio and Solace. Dry-run first and READ it before the real run (memory `sync-dry-run-then-read`).
+- **Pinocchio deploy** (the owner's Mac at the piano): `scripts/deploy_pinocchio.sh` installs the latest CI macOS build (dispatch CI first); `deploy_scanner.sh` the SANE bundle; state via `scripts/pinocchio_state.sh`. Never run git/python3/cc/osascript over ssh on the Mac (dialogs on his screen).
+- **Lesson + desk helpers** (agent-run): `homework_sync.py` (JP's lesson log -> homework.json; the agent fetches the private Doc text), `set_fingering.py` (applies his fingering taps to the library score).

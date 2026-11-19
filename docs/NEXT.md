@@ -1,5 +1,7 @@
 # MidiTutor — pickup note
 
+> **Stale (flagged 2026-11-18, #5493):** this pickup note stops at the 09-28 milestone. The live pipelines are listed in `CLAUDE.md` under "Live pipelines".
+
 Last updated: 2026-09-28. **Milestone 2 (score following) is built and tested
 with the virtual keyboard. Next step: the owner tests it at the FP-30X.**
 
