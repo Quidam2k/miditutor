@@ -27,6 +27,8 @@ interface TutorBridge {
   binderInfo?: (slug: string) => Promise<{ pageStarts: number[]; confirmed: number; total: number }>;
   // sent: set when the Mac really queued paper (#6090)
   printBinder?: (slug: string, html: string) => Promise<{ pdf: string; bytes: number; sent?: { printer: string; job: string } }>;
+  // #6584: single-sided PDF for his teacher; a file only, nothing is printed or sent
+  savePagesPdf?: (slug: string, html: string) => Promise<{ pdf: string; bytes: number }>;
   reviewAppend?: (slug: string, event: Record<string, unknown>) => Promise<unknown>;
   saveMix?: (slug: string, mix: { harder: string; choice: MixChoice[]; musicxml: string; trust: PieceTrust }) => Promise<{ file: string }>;
   getHomework?: () => Promise<Homework | null>;

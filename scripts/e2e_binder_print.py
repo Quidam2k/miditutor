@@ -105,6 +105,19 @@ def run(pieces: Path) -> None:
         msg = note(page)
         check("3 pages, 6 sides" in msg, "Sorcerer's Apprentice: 3 paper pages, 6 sides", msg)
 
+        # #6584: Save as PDF = each page once, a file only
+        before = (pieces / "print" / f"{VERIFIED}-binder.pdf").stat().st_mtime
+        page.locator("[data-testid=print-binder]").click()
+        page.wait_for_selector("[data-testid=binder-preview]", timeout=120000)
+        page.locator("[data-testid=binder-preview-pdf]").click()
+        page.wait_for_function(
+            "() => /PDF for your teacher|failed/.test(document.querySelector('[data-testid=print-binder-note]')?.innerText ?? '')",
+            timeout=120000)
+        msg = note(page)
+        check("3 pages, one side each" in msg and "-pages.pdf" in msg, "Save as PDF: 3 pages, one side each, path named", msg)
+        check(page.locator("[data-testid=binder-preview]").count() == 0, "the preview closes after Save as PDF")
+        check((pieces / "print" / f"{VERIFIED}-binder.pdf").stat().st_mtime == before, "Save as PDF leaves the binder PDF alone")
+
     pdf = pieces / "print" / f"{VERIFIED}-binder.pdf"
     html = (pieces / "print" / f"{VERIFIED}-binder.html").read_text(encoding="utf-8")
     check(pdf.exists() and pdf.stat().st_size > 10000, "PDF saved next to the pieces", str(pdf))
@@ -130,6 +143,23 @@ def run(pieces: Path) -> None:
     # (fingers are text too, 1-5, so only numbers above 5 count as bar numbers here)
     check(firsts[1:] in ([23, 51], [24, 52]), "pages break where his paper does (bars 23 and 51)",
           str(firsts))
+    # #6584: the teacher PDF
+    tpdf = pieces / "print" / f"{VERIFIED}-pages.pdf"
+    thtml = (pieces / "print" / f"{VERIFIED}-pages.html").read_text(encoding="utf-8")
+    check(tpdf.exists() and tpdf.stat().st_size > 10000, "teacher PDF saved", str(tpdf))
+    tpages = len(re.findall(rb"/Type\s*/Page(?![s\w])", tpdf.read_bytes())) if tpdf.exists() else 0
+    check(tpages == 3, "teacher PDF has 3 pages (one side each)", f"pages={tpages}")
+    torder = re.findall(r'class="side(?: back)?" data-page="(\d+)"', thtml)
+    check(torder == ["1", "2", "3"] and 'class="side back"' not in thtml, "teacher pages run 1,2,3, no back sides", ",".join(torder))
+    tnums = [int(n) for n in re.findall(r">\s*(\d{1,3})\s*</text>", thtml) if int(n) > 5]
+    check(0 < len(set(tnums)) <= 16, "teacher PDF: bar numbers only at line starts (about 13 lines)", f"distinct={len(set(tnums))}")
+    check(not [c for c in HINT_COLOURS if c in thtml.lower()], "teacher PDF: no hint colour")
+    check("padding:0.5in" in thtml and "text-align:center" in thtml, "teacher PDF: even 0.5in margins, folio centred")
+    tfirsts = []
+    for chunk in re.split(r'<div class="side" data-page="\d+">', thtml)[1:]:
+        ns = [int(n) for n in re.findall(r">\s*(\d{1,3})\s*</text>", chunk) if 5 < int(n) < 100]
+        tfirsts.append(min(ns) if ns else None)
+    check(tfirsts[1:] in ([23, 51], [24, 52]), "teacher PDF pages break where his paper does", str(tfirsts))
     shot = os.environ.get("BINDER_SHOT")
     if shot and pdf.exists():
         try:

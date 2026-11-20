@@ -1077,7 +1077,7 @@ export function ScoreView() {
       const info = await bridge.binderInfo(scanSlug);
       const { html, pages } = await renderBinderHtml({ musicxml: piece.xml, title: piece.label, pageStarts: info.pageStarts });
       const verified = piece.trust?.status === 'verified';
-      setBinderPreview({ html, pages, confirmed: info.confirmed, total: info.total, verified });
+      setBinderPreview({ html, pages, confirmed: info.confirmed, total: info.total, verified, pageStarts: info.pageStarts });
       reportEvent('binder_print', { piece: scanSlug, preview: true, pages, ...(verified ? {} : { warned: 'unverified', confirmed: info.confirmed, total: info.total }) });
     } catch (err) {
       setPrintNote(`Print failed: ${(err as Error).message}`);
@@ -1102,6 +1102,25 @@ export function ScoreView() {
       setBinderPreview(null);
     } finally {
       setPrinting(false);
+    }
+  };
+  // #6584: the same pages, each once on one side, saved as a PDF file for his teacher. Never printed or sent.
+  const saveBinderPdf = async () => {
+    const bridge = window.tutorBridge;
+    if (!scanSlug || !bridge?.savePagesPdf || !binderPreview) return;
+    setPrinting(true);
+    try {
+      const { html, pages } = await renderBinderHtml({
+        musicxml: piece.xml, title: piece.label, pageStarts: binderPreview.pageStarts ?? [], sides: 'single',
+      });
+      const out = await bridge.savePagesPdf(scanSlug, html);
+      setPrintNote(`PDF for your teacher: ${pages} page${pages === 1 ? '' : 's'}, one side each. Saved ${out.pdf}`);
+      reportEvent('binder_pdf', { piece: scanSlug, pages, pdf: out.pdf, ...(binderPreview.verified ? {} : { unverified: true }) });
+    } catch (err) {
+      setPrintNote(`Save as PDF failed: ${(err as Error).message}`);
+    } finally {
+      setPrinting(false);
+      setBinderPreview(null);
     }
   };
   const cancelBinderPrint = () => {
@@ -4798,7 +4817,7 @@ export function ScoreView() {
         )}
         {printNote && <span className="text-xs text-gray-300" data-testid="print-binder-note">{printNote}</span>}
         {binderPreview && (
-          <BinderPreview data={binderPreview} busy={printing} onPrint={() => void confirmBinderPrint()} onCancel={cancelBinderPrint} />
+          <BinderPreview data={binderPreview} busy={printing} onPrint={() => void confirmBinderPrint()} onSavePdf={() => void saveBinderPdf()} onCancel={cancelBinderPrint} />
         )}
         {mixing && mixPlan && easyPiece && harderPiece && (
           <MixBuilder
@@ -4982,7 +5001,22 @@ export function ScoreView() {
               )}
               {picking === 'off' && (
                 // #6513: one list of his loops: starred ranges and trouble spots together, by bar.
-                <Popover label={`Loops ${loopCount}`} testId="loops" btn={`${btn} px-1.5 py-0.5`}>
+                <Popover label={`Loops ${loopCount}`} testId="loops" btn={`${btn} px-1.5 py-0.5`} wide>
+                  {/* #6582: the lesson plan, where he looks for loop tools. Same button rule as the toolbar one; starting it
+                      keeps his selected loop (Stop puts it back exactly). */}
+                  {loopBars && (
+                    <button
+                      onClick={lesson ? () => stopLesson('button') : startLesson}
+                      disabled={watching || keeping || !!block || !!chunk || (!lesson && !lessonReady)}
+                      className={`${btn} ${lesson ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+                      title={lesson ? 'Stop the lesson plan: back to your own loop'
+                        : lessonReady ? 'Loops the rough spots of your last laps one by one until clean, then the whole loop'
+                          : `Play the loop ${LESSON_MIN_LAPS} times first`}
+                      data-testid="lesson-plan-menu"
+                    >
+                      {lesson ? 'Stop lesson plan' : lessonReady ? 'Lesson plan: work the rough spots of this loop' : `Lesson plan (play the loop ${LESSON_MIN_LAPS} times first)`}
+                    </button>
+                  )}
                   {lastMerge && (
                     <button
                       data-stay
@@ -4992,9 +5026,9 @@ export function ScoreView() {
                       }}
                       className={btn}
                       data-testid="spot-unmerge"
-                      title="Put back the separate spots this loop was joined from"
+                      title="Splits that one joined spot back into the separate spots it replaced. Your selected loop stays as it is."
                     >
-                      ↶ Undo join: {spanText(lastMerge.to)} back to {lastMerge.from.length} spots
+                      ↶ Undo join: {spanText(lastMerge.to)} → back to {lastMerge.from.length} separate spot{lastMerge.from.length === 1 ? '' : 's'}
                     </button>
                   )}
                   {overall && overall.last - overall.first < MAX_SPOT_BARS && !spotList.some((sp) => !sp.ticked && sp.first === overall.first && sp.last === overall.last) && (
@@ -5005,6 +5039,13 @@ export function ScoreView() {
                   {loopRows.length === 0 && (
                     <span className="text-xs text-gray-400">
                       No loops yet. Star a range with ☆, and bars you keep missing or slowing down on get added here.
+                    </span>
+                  )}
+                  {openSpots > 0 && (
+                    <span className="text-xs leading-snug text-gray-400" data-testid="loops-legend">
+                      <b className="text-gray-300">Alone</b>: you looped just that spot (the loop sits inside it) with no wrong notes.{' '}
+                      <b className="text-gray-300">In context</b>: you played through it in a longer loop or the whole piece, with no wrong notes inside the spot (misses elsewhere don't count against it).
+                      A spot comes off the list when both reach {spotClean}. Picking a row replaces your selected loop.
                     </span>
                   )}
                   {loopRows.map(({ first, last, star, spot }) => {
@@ -5024,7 +5065,9 @@ export function ScoreView() {
                             disabled={watching || keeping}
                             className={`${btn} flex-1 text-left font-mono`}
                             data-testid={star ? `starred-${id}` : `spot-loop-${id}`}
-                            title="Loop these bars"
+                            title={spot && !spot.ticked
+                              ? `Loop these bars (replaces your selected loop). Alone ${Math.min(spot.alone, spotClean)}/${spotClean}: clean laps of just this spot. In context ${Math.min(spot.inContext, spotClean)}/${spotClean}: clean passes through it inside a longer loop or the whole piece.`
+                              : 'Loop these bars (replaces your selected loop)'}
                           >
                             {spot && !spot.ticked ? spotLabel(spot, spotClean) : first === last ? `Bar ${first}` : `Bars ${first}–${last}`}
                           </button>

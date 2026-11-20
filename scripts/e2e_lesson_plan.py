@@ -94,6 +94,29 @@ def stop_run(page):
     check("trouble spots exactly as before", screen().get("spots") == before)
 
 
+def menu_run(page):
+    """#6582: the Lesson plan row in the Loops menu starts and stops the plan without losing his loop."""
+    load("Lesson plan menu (e2e)", 4)
+    set_loop(1, 4)
+    for _ in range(5):
+        lap(range(1, 5), wrong_in=(2,))
+    time.sleep(3)
+    page.get_by_test_id("loops").click()
+    time.sleep(0.3)
+    row = page.get_by_test_id("lesson-plan-menu")
+    check("menu row enabled after 5 laps", row.is_enabled() and "Lesson plan" in row.inner_text())
+    check("opening the menu left his loop 1-4", loop_now() == (1, 4))
+    row.click()
+    time.sleep(1)
+    check("menu row starts the plan (looping 1-3)", screen().get("lesson") is not None and loop_now() == (1, 3))
+    page.get_by_test_id("loops").click()
+    time.sleep(0.3)
+    check("row now says Stop", "Stop lesson plan" in page.get_by_test_id("lesson-plan-menu").inner_text())
+    page.get_by_test_id("lesson-plan-menu").click()
+    time.sleep(1)
+    check("menu Stop -> his loop 1-4 again", loop_now() == (1, 4) and screen().get("lesson") is None)
+
+
 def backwards_run(page):
     load("Lesson plan backwards (e2e)", 4)
     set_loop(1, 4)
@@ -122,7 +145,7 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.connect_over_cdp(os.environ["MIDITUTOR_CDP"])
         page = next(pg for ctx in browser.contexts for pg in ctx.pages if "devtools" not in pg.url)
-        for scenario in (full_run, stop_run, backwards_run):
+        for scenario in (full_run, stop_run, menu_run, backwards_run):
             try:
                 scenario(page)
             except Exception as err:

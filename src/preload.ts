@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   // #5723 binder print: { pageStarts, confirmed, total } from review/<slug>.layout.json, then the PDF + print dialog.
   binderInfo: (slug: string) => ipcRenderer.invoke('pieces:binderInfo', slug),
   printBinder: (slug: string, html: string) => ipcRenderer.invoke('pieces:printBinder', slug, html),
+  savePagesPdf: (slug: string, html: string) => ipcRenderer.invoke('pieces:savePagesPdf', slug, html),
   // ~/MidiTutor Pieces/homework.json (JP's newest lesson entry), or null.
   getHomework: () => ipcRenderer.invoke('homework:get'),
   // #6112: lesson notebook entries, newest first ([] when none).

@@ -85,6 +85,14 @@ def main() -> int:
         page.get_by_test_id("loops").click()
         time.sleep(0.2)
         check("alone 0/5 · in context 0/5" in page.get_by_test_id("spot-3-5").inner_text(), "Spots list shows its counts")
+        # #6582: the menu explains itself (wording rests on TroubleSpots.countPass) and is wide
+        legend = page.get_by_test_id("loops-legend").inner_text()
+        check("Alone" in legend and "In context" in legend and "misses elsewhere don't count" in legend
+              and "both reach 5" in legend and "replaces your selected loop" in legend, "the legend explains alone / in context", legend)
+        check("Alone 0/5" in (page.get_by_test_id("spot-loop-3-5").get_attribute("title") or ""), "a spot row's tooltip explains its counts")
+        check(page.get_by_test_id("loops-panel").bounding_box()["width"] > 450, "the Loops menu is wide")
+        check(page.get_by_test_id("lesson-plan-menu").count() == 1 and page.get_by_test_id("lesson-plan-menu").is_disabled(),
+              "Lesson plan is in the menu, off until 5 laps")
         page.get_by_test_id("spot-loop-3-5").click()
         time.sleep(1.0)
         s = screen()

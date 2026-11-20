@@ -7,16 +7,20 @@ export interface BinderPreviewData {
   confirmed: number;
   total: number;
   verified: boolean;
+  /** The paper page starts the preview was drawn with, so the single-sided PDF breaks pages the same way. */
+  pageStarts?: number[];
 }
 
 /**
  * #6083: what "Print for binder" is about to print, before it prints. The iframe shows the very HTML
  * that gets printed. An unverified score still prints, behind a plain amber warning.
  */
-export function BinderPreview({ data, busy, onPrint, onCancel }: {
+export function BinderPreview({ data, busy, onPrint, onSavePdf, onCancel }: {
   data: BinderPreviewData;
   busy: boolean;
   onPrint: () => void;
+  /** #6584: save each page once, single-sided, as a PDF for his teacher. A file only: nothing prints. */
+  onSavePdf?: () => void;
   onCancel: () => void;
 }) {
   const warning = binderWarning(data.verified, data.confirmed, data.total);
@@ -36,6 +40,18 @@ export function BinderPreview({ data, busy, onPrint, onCancel }: {
         >
           {busy ? 'Printing…' : 'Print'}
         </button>
+        {onSavePdf && (
+          <button
+            type="button"
+            onClick={onSavePdf}
+            disabled={busy}
+            className="rounded bg-sky-800 px-3 py-1 text-white hover:bg-sky-700 disabled:opacity-50"
+            title="Each page once, one side, ordinary margins: a PDF file to send your teacher. Nothing is printed."
+            data-testid="binder-preview-pdf"
+          >
+            Save as PDF
+          </button>
+        )}
         <button
           type="button"
           onClick={onCancel}

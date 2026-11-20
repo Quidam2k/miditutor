@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   binderSides,
+  singleSides, // #6584
+  gapForFill,
+  AREA_ASPECT,
+  SINGLE_ASPECT,
+  SINGLE_MARGIN_IN,
   binderSpreads,
   paperPageStarts,
   confirmedLines,
@@ -179,5 +185,35 @@ describe('OSMD page starts for pieces with no usable layout (#6121)', () => {
     expect(pageStartsFromIndexes([0, 5, 5])).toEqual([]);
     expect(pageStartsFromIndexes([3, 9])).toEqual([]); // must open on bar 1
     expect(pageStartsFromIndexes([0, -1])).toEqual([]);
+  });
+});
+
+describe('single-sided teacher PDF (#6584)', () => {
+  it('lists each page once, in order', () => {
+    expect(singleSides(3)).toEqual([1, 2, 3]);
+    expect(singleSides(0)).toEqual([]);
+    expect(singleSides(1.5)).toEqual([]);
+    expect(binderSides(3)).toEqual([1, 1, 2, 2, 3, 3]);
+  });
+  it('has an even ordinary margin and a squarer sheet area than the punched binder', () => {
+    expect(SINGLE_MARGIN_IN).toBe(0.5);
+    expect(SINGLE_ASPECT).toBeCloseTo(7.5 / 10);
+    expect(SINGLE_ASPECT).not.toBe(AREA_ASPECT);
+  });
+  it('fills to the aspect it is given, binder aspect by default', () => {
+    expect(gapForFill(750, 1000, 4, 4, SINGLE_ASPECT)).toBe(4); // exactly the single sheet area: nothing to add
+    expect(gapForFill(750, 800, 4, 4, SINGLE_ASPECT)).toBeGreaterThan(4);
+    expect(gapForFill(700, 800, 4, 4)).toBe(gapForFill(700, 800, 4, 4, AREA_ASPECT));
+  });
+});
+
+describe('teacher PDF never prints (#6584)', () => {
+  it('savePagesPdf writes a file only: no print dialog, no lp, no sendToPaper', () => {
+    const src = readFileSync('src/main.ts', 'utf8');
+    const start = src.indexOf('const savePagesPdf');
+    const body = src.slice(start, src.indexOf('const saveMix', start));
+    expect(start).toBeGreaterThan(-1);
+    expect(body).toContain('printToPDF');
+    expect(body).not.toMatch(/\.print\(|sendToPaper|execFile|spawn/);
   });
 });

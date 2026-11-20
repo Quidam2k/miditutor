@@ -42,6 +42,12 @@ export function binderSides(pages: number): number[] {
   return sides;
 }
 
+/** #6584: the teacher PDF: each page once, on its own sheet. */
+export function singleSides(pages: number): number[] {
+  if (!isPositiveInteger(pages)) return [];
+  return Array.from({ length: pages }, (_, i) => i + 1);
+}
+
 /** List the overlapping spreads seen in the binder. */
 export function binderSpreads(pages: number): [number, number][] {
   if (!isPositiveInteger(pages)) return [];
@@ -114,14 +120,17 @@ export function binderWarning(verified: boolean, confirmed: number, total: numbe
 export const HOLE_IN = 0.6;
 export const EDGE_IN = 0.3;
 export const FOLIO_IN = 0.45;
+/** #6584: ordinary margin all round on the single-sided teacher PDF (no punched edge). */
+export const SINGLE_MARGIN_IN = 0.5;
 export const AREA_ASPECT = (8.5 - HOLE_IN - EDGE_IN) / (11 - EDGE_IN - FOLIO_IN);
+export const SINGLE_ASPECT = (8.5 - 2 * SINGLE_MARGIN_IN) / (11 - 2 * SINGLE_MARGIN_IN);
 // OSMD gap between systems (staff-spaces) never goes past this, so a short page isn't stretched silly.
 export const MAX_SYSTEM_GAP = 40;
 
 /** Extra system gap (staff-spaces, 10px each) that makes a page's drawing as tall as the sheet area. */
-export function gapForFill(width: number, height: number, systems: number, gap: number): number {
+export function gapForFill(width: number, height: number, systems: number, gap: number, aspect = AREA_ASPECT): number {
   if (systems < 2 || !(width > 0) || !(height > 0)) return gap;
-  const missing = width / AREA_ASPECT - height;
+  const missing = width / aspect - height;
   if (missing <= 0) return gap;
   return Math.min(MAX_SYSTEM_GAP, gap + missing / 10 / (systems - 1));
 }

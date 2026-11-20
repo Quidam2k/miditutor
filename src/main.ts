@@ -201,6 +201,27 @@ const printBinder = async (slug: string, html: string) => {
   }
 };
 
+// #6584: the single-sided teacher PDF (print/<slug>-pages.pdf). A file only: never a print dialog,
+// never lp, never sent anywhere.
+const savePagesPdf = async (slug: string, html: string) => {
+  if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error('bad piece name');
+  if (typeof html !== 'string' || !html.startsWith('<!DOCTYPE html>')) throw new Error('not a print page');
+  const dir = path.join(piecesDir(), 'print');
+  await fs.mkdir(dir, { recursive: true });
+  const page = path.join(dir, `${slug}-pages.html`);
+  const pdf = path.join(dir, `${slug}-pages.pdf`);
+  await fs.writeFile(page, html, 'utf8');
+  const win = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true } });
+  try {
+    await win.loadFile(page);
+    const data = await win.webContents.printToPDF({ pageSize: 'Letter', printBackground: true, margins: { marginType: 'none' } });
+    await fs.writeFile(pdf, data);
+    return { pdf, bytes: data.length };
+  } finally {
+    win.destroy();
+  }
+};
+
 const saveMix = async (slug: string, mix: { harder: string; choice: unknown; musicxml: string; trust: unknown }) => {
   const dir = piecesDir();
   // Same view as the picker: no mix from a hidden or no_mix Harder version (#9794).
@@ -450,6 +471,7 @@ const startTutorApi = () => {
   ipcMain.handle('pieces:writeScore', (_e, slug: string, musicxml: string) => writeScore(slug, musicxml));
   ipcMain.handle('pieces:binderInfo', (_e, slug: string) => binderInfo(slug));
   ipcMain.handle('pieces:printBinder', (_e, slug: string, html: string) => printBinder(slug, html));
+  ipcMain.handle('pieces:savePagesPdf', (_e, slug: string, html: string) => savePagesPdf(slug, html));
   // JP's newest lesson entry, written by scripts/homework_sync.py; null until the first sync (#5058).
   // #6112: the lesson notebook (lesson-notebook.jsonl, written by scripts/lesson_notebook_add.py), newest first.
   ipcMain.handle('notebook:get', readNotebook);

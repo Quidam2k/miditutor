@@ -6,11 +6,13 @@ import { createPortal } from 'react-dom';
  * Plain left click opens and closes it; a click outside, Escape or Enter closes it. It stays open
  * while he ticks several boxes. The badge floats over the button's corner: it never changes the button's size, so nothing next to it moves. The panel is capped to the window so it fits without scrolling the page.
  */
-export function Popover({ label, badge, testId, btn, onOpenChange, children }: {
+export function Popover({ label, badge, testId, btn, wide, onOpenChange, children }: {
   label: string;
   badge?: string;
   testId: string;
   btn: string;
+  /** #6582: a wider panel (for a list whose rows carry long labels). */
+  wide?: boolean;
   onOpenChange?: (open: boolean) => void;
   children: ReactNode;
 }) {
@@ -84,7 +86,7 @@ export function Popover({ label, badge, testId, btn, onOpenChange, children }: {
             const t = e.target as HTMLElement;
             if (e.key === 'Enter' && t.tagName !== 'BUTTON' && t.tagName !== 'TEXTAREA') setOpen(false);
           }}
-          className={`fixed z-50 flex w-[min(26rem,calc(100vw-2rem))] flex-col gap-2 overflow-y-auto rounded-md border border-gray-700 bg-gray-900 p-3 text-sm text-gray-300 shadow-lg`}
+          className={`fixed z-50 flex ${wide ? 'w-[min(36rem,calc(100vw-2rem))]' : 'w-[min(26rem,calc(100vw-2rem))]'} flex-col gap-2 overflow-y-auto rounded-md border border-gray-700 bg-gray-900 p-3 text-sm text-gray-300 shadow-lg`}
         >
           {children}
         </div>,

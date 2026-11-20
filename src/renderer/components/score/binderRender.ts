@@ -1,5 +1,7 @@
 import { OpenSheetMusicDisplay } from 'opensheetmusicdisplay';
-import { binderSides, EDGE_IN, FOLIO_IN, HOLE_IN, gapForFill, pageStartsFromIndexes } from '../../../shared/binderPrint';
+import {
+  binderSides, singleSides, EDGE_IN, FOLIO_IN, HOLE_IN, SINGLE_ASPECT, SINGLE_MARGIN_IN, gapForFill, pageStartsFromIndexes,
+} from '../../../shared/binderPrint';
 import { orderChordFingers } from './chordFingers';
 import { drawRangeByPosition } from './drawRange';
 import { dropChordRests } from '../../engine/chordRests';
@@ -73,13 +75,19 @@ async function osmdPageStarts(div: HTMLDivElement, musicxml: string): Promise<nu
   return pageStartsFromIndexes(firsts);
 }
 
-/** Render duplicated score pages as a complete Letter print document. */
+/**
+ * Render score pages as a complete Letter print document. 'both' (default, the binder): each page on
+ * both sides of its sheet, punched edge padded. 'single' (#6584, the teacher PDF): each page once with
+ * ordinary margins. Bar numbers are at the start of each line either way (#6107).
+ */
 export async function renderBinderHtml(opts: {
   musicxml: string;
   title: string;
   pageStarts: number[];
+  sides?: 'both' | 'single';
 }): Promise<{ html: string; pages: number }> {
   const { musicxml, title, pageStarts } = opts;
+  const single = opts.sides === 'single';
   const div = document.createElement('div');
   // Wide, so OSMD keeps his paper's lines (the XML's system breaks) instead of wrapping; the
   // page is scaled down to the sheet afterwards.
@@ -155,7 +163,7 @@ export async function renderBinderHtml(opts: {
         const cap = synthetic && systemsOf(osmd) < 3 ? gap * 2 : Number.POSITIVE_INFINITY;
         for (let pass = 0; pass < 3; pass++) {
           const { w, h } = sizeOf();
-          const next = Math.min(gapForFill(w, h, systemsOf(osmd), gap), cap);
+          const next = Math.min(gapForFill(w, h, systemsOf(osmd), gap, single ? SINGLE_ASPECT : undefined), cap);
           if (Math.abs(next - gap) < 0.25) break;
           gap = next;
           osmd.EngravingRules.MinimumDistanceBetweenSystems = gap;
@@ -182,20 +190,27 @@ export async function renderBinderHtml(opts: {
       clone.setAttribute('preserveAspectRatio', 'xMidYMin meet');
       return serializer.serializeToString(clone);
     });
-    const sides = binderSides(pages).map((page, i) =>
-      '<div class="side' + (i % 2 ? ' back' : '') + '" data-page="' + page + '">' + pageHtml[page - 1] +
+    const sides = (single ? singleSides(pages) : binderSides(pages)).map((page, i) =>
+      '<div class="side' + (!single && i % 2 ? ' back' : '') + '" data-page="' + page + '">' + pageHtml[page - 1] +
       '<div class="folio">' + page + ' / ' + pages + '</div></div>',
     ).join('');
+    const sideCss = single
+      // Teacher PDF: even margin all round, folio centred in the bottom margin.
+      ? '.side{width:8.5in;height:11in;box-sizing:border-box;padding:' + SINGLE_MARGIN_IN + 'in;page-break-after:always;break-after:page;overflow:hidden;position:relative}'
+      : '.side{width:8.5in;height:11in;box-sizing:border-box;padding:' + EDGE_IN + 'in ' + EDGE_IN + 'in ' + FOLIO_IN + 'in ' + HOLE_IN + 'in;page-break-after:always;break-after:page;overflow:hidden;position:relative}' +
+        // The back of each sheet is the same page turned over: the punched edge is now on the right.
+        '.side.back{padding:' + EDGE_IN + 'in ' + HOLE_IN + 'in ' + FOLIO_IN + 'in ' + EDGE_IN + 'in}';
+    const folioCss = single
+      ? '.folio{position:absolute;bottom:0.15in;left:0;right:0;text-align:center;font:10pt sans-serif;color:#000}'
+      : '.folio{position:absolute;bottom:0.15in;right:' + EDGE_IN + 'in;font:10pt sans-serif;color:#000}' +
+        '.back .folio{right:auto;left:' + EDGE_IN + 'in}';
     const html = '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' +
       escapeHtml(title) + '</title><style>' +
       '@page { size: letter; margin: 0 } html,body{margin:0;padding:0;background:#fff}' +
-      '.side{width:8.5in;height:11in;box-sizing:border-box;padding:' + EDGE_IN + 'in ' + EDGE_IN + 'in ' + FOLIO_IN + 'in ' + HOLE_IN + 'in;page-break-after:always;break-after:page;overflow:hidden;position:relative}' +
-      // The back of each sheet is the same page turned over: the punched edge is now on the right.
-      '.side.back{padding:' + EDGE_IN + 'in ' + HOLE_IN + 'in ' + FOLIO_IN + 'in ' + EDGE_IN + 'in}' +
+      sideCss +
       '.side:last-child{page-break-after:auto;break-after:auto}' +
       '.side svg{display:block;width:100%;height:100%}' +
-      '.folio{position:absolute;bottom:0.15in;right:' + EDGE_IN + 'in;font:10pt sans-serif;color:#000}' +
-      '.back .folio{right:auto;left:' + EDGE_IN + 'in}' +
+      folioCss +
       '</style></head><body>' + sides + '</body></html>';
     return { html: html.replace(hintColourPattern, '#000000'), pages };
   } finally {
