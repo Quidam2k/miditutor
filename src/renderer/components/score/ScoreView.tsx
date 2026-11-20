@@ -20,6 +20,7 @@ import {
   ADVICE_PAUSE_MS, ADVICE_STALE_MS, actionLabel, gapOpen, mayOffer, pauseCard, reshapeCard, speedCard, spotBackCard,
   velocityCard, worseCard, type AdviceCard, type AdviceRule,
 } from '../../engine/Advice';
+import { buildPlan, LESSON_MIN_LAPS, lessonLabel, lessonLapDone, nextLabel, skipStep, type LessonState } from '../../engine/LessonPlan';
 import { loopReshape, pauseBefore, spotBack, velocityOutlier, worseThanBest, type Run, type VelSample } from '../../engine/AdviceRules';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
@@ -758,6 +759,19 @@ export function ScoreView() {
   // Build backwards (#10133): the loop runs chunk.start..chunk.last and grows a bar at a time.
   const [chunk, setChunk] = useState<ChunkState | null>(null);
   const chunkRef = useRef<ChunkState | null>(null);
+  // #6530 F: the guided lesson plan (per session). Its loop moves never touch his saved loop or spots.
+  const [lesson, setLesson] = useState<LessonState | null>(null);
+  const lessonRef = useRef<LessonState | null>(null);
+  const putLesson = (l: LessonState | null) => {
+    lessonRef.current = l;
+    setLesson(l);
+  };
+  // The plan ends without moving the loop (whatever ends it sets its own).
+  const endLesson = (why: string) => {
+    if (!lessonRef.current) return;
+    reportEvent('lesson', { on: false, why, at: lessonRef.current.at });
+    putLesson(null);
+  };
   chunkRef.current = chunk;
   // #5657c blocking: his loop pressed one hand position at a time, as a chord, no timing.
   const [block, setBlockState] = useState<BlockState | null>(null);
@@ -789,7 +803,7 @@ export function ScoreView() {
   const pendingAdviceRef = useRef<{ card: AdviceCard; piece: string; loop: string; at: number } | null>(null);
   // #6530 E: what the rules learn from this loop (or whole-piece run): each lap's miss bars,
   // whether he paused before each bar, each credited note's velocity. A new piece or loop starts afresh.
-  const adviceDataRef = useRef({ key: '', laps: [] as number[][], entries: new Map<number, boolean[]>(), vel: [] as VelSample[], velLap: 0, prev: null as { bar: number; beat: number; at: number } | null, perBeat: [] as number[] });
+  const adviceDataRef = useRef({ key: '', laps: [] as number[][], entries: new Map<number, boolean[]>(), vel: [] as VelSample[], velLap: 0, prev: null as { bar: number; beat: number; at: number } | null, perBeat: [] as number[], lapCount: 0 });
   const adviceShownAtRef = useRef<number | null>(null);
   // e2e scripts set window.__adviceNoGap = true to see several banners in one run (e2e_advice_rules.py).
   const lastAdviceAt = () => ((window as unknown as { __adviceNoGap?: boolean }).__adviceNoGap ? null : adviceShownAtRef.current);
@@ -998,14 +1012,25 @@ export function ScoreView() {
     const r = followerRef.current?.range;
     return r ? `${r.first}-${r.last}` : 'none';
   };
+  // #6530 E/F: one lap of this loop ended: its miss bars (a scroll-skipped lap doesn't count).
+  const noteAdviceLap = () => {
+    const d = adviceData();
+    if (!lapSkippedRef.current) d.laps = [...d.laps.slice(-5), [...lapWrongBarsRef.current]];
+    d.velLap++;
+    d.lapCount++;
+    d.prev = null;
+  };
   const adviceData = () => {
     const key = `${pieceNameRef.current}|${loopKeyOf()}`;
     if (adviceDataRef.current.key !== key) {
-      adviceDataRef.current = { key, laps: [], entries: new Map(), vel: [], velLap: 0, prev: null, perBeat: [] };
+      adviceDataRef.current = { key, laps: [], entries: new Map(), vel: [], velLap: 0, prev: null, perBeat: [], lapCount: 0 };
     }
     return adviceDataRef.current;
   };
   const pieceSpots: Spot[] = own(allSpots, piece.label); // #6460
+  // #6530 F: the Lesson plan button turns on after this many laps of this loop, however they went.
+  const lessonReady = !!loopBars && adviceDataRef.current.key === `${pieceName}|${loopKeyOf()}` &&
+    adviceDataRef.current.lapCount >= LESSON_MIN_LAPS;
   const freshNow = freshRef.current?.label === piece.label ? freshRef.current : null;
   // #11354: hints start off on a new piece (fresh tune, sight-read pick), and stay off in a bare run.
   const hintsOffNew = useSettingsStore((s) => s.hintsOffNew);
@@ -1233,8 +1258,11 @@ export function ScoreView() {
       readAhead: readAhead ? { blanked } : null,
       // #6530 D: the advice banner on screen.
       advice: advice ? { ...advice.data, rule: advice.rule, text: advice.text, sub: advice.sub ?? null, action: advice.action ?? null } : null,
+      // #6530 F: the lesson plan, and whether its button is on.
+      lesson: lesson ? { main: lesson.main, steps: lesson.steps, at: lesson.at, clean: lesson.clean, need: lesson.steps[lesson.at].need } : null,
+      lessonReady,
     });
-  }, [advice, pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget]);
+  }, [advice, lesson, lessonReady, pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1627,6 +1655,8 @@ export function ScoreView() {
   // #6530 D/E: a waiting banner shows once he pauses (no note for 4 s) and Keep going isn't running.
   useEffect(() => {
     pendingAdviceRef.current = null;
+    lessonRef.current = null;
+    setLesson(null);
     lapsSinceAdviceRef.current = 0;
     keepLapsSinceAdviceRef.current = 0;
     setAdvice(null);
@@ -1661,6 +1691,7 @@ export function ScoreView() {
     }
     // One start at a time: a second click while audio or the Roland is still answering does nothing.
     if (keepStartingRef.current) return;
+    stopLesson('keep'); // #6530 F: Keep going runs on his own loop
     keepStartingRef.current = true;
     try {
       await beginKeep();
@@ -1788,6 +1819,11 @@ export function ScoreView() {
       if (!keepChunk) {
         setChunk(null);
         setBlock(null);
+        if (lessonRef.current) {
+          reportEvent('lesson', { on: false, why: 'loop' });
+          lessonRef.current = null;
+          setLesson(null);
+        }
       }
       if (bars) {
         const first = Math.min(bars.first, bars.last);
@@ -1822,6 +1858,7 @@ export function ScoreView() {
 
   // Build backwards on his loop: start on its last bar. Off again: back to the whole loop.
   const startBackwards = (bars: { first: number; last: number }) => {
+    endLesson('backwards'); // #6530 F: not alongside a lesson plan
     const c = startChunk(bars.first, bars.last, parseTargets(useSettingsStore.getState().backwardTargets));
     setChunk(c);
     applyLoop({ first: c.start, last: c.last }, true);
@@ -1832,7 +1869,7 @@ export function ScoreView() {
     if (chunk) {
       chunkEvent(chunk, { on: false });
       applyLoop({ first: chunk.first, last: chunk.last });
-    } else if (loopBars) startBackwards(loopBars);
+    } else if (loopBars) startBackwards(lessonRef.current?.main ?? loopBars);
   };
   // #6371 Build outward: his loop is the core; it grows a bar each side toward the smallest
   // starred span around it (else the whole piece).
@@ -1843,6 +1880,7 @@ export function ScoreView() {
   const beginOutward = (core: { first: number; last: number }) => {
     const whole = wholePiece();
     if (!whole) return;
+    endLesson('outward'); // #6530 F: not alongside a lesson plan
     const stars = starsOf(useSettingsStore.getState().pieceStars, pieceLabelRef.current);
     const c = startOutward(core, outerFor(core, stars, whole), parseTargets(useSettingsStore.getState().backwardTargets));
     setBlock(null); // the tutor API can start it while Block is on; the toolbar can't
@@ -1876,7 +1914,8 @@ export function ScoreView() {
     const skipped = lapSkippedRef.current;
     lapWrongBarsRef.current = new Set();
     lapSkippedRef.current = false;
-    if (!f || skipped || !f.steps.length) return;
+    // #6530 F: a lesson plan's laps leave his trouble-spot list alone (Jarvis 13356).
+    if (!f || skipped || !f.steps.length || lessonRef.current) return;
     const r = f.range;
     const lapBars = r ? { first: f.steps[r.first].measure, last: f.steps[r.last].measure } : wholePiece();
     if (!lapBars) return;
@@ -2068,11 +2107,53 @@ export function ScoreView() {
     setAdvice(null);
     reportEvent('advice', { rule, action });
   };
+  // #6530 F: build the plan from this loop's last laps (button only, after LESSON_MIN_LAPS laps).
+  const flashTip = (text: string) => {
+    setGrewTip(text);
+    window.clearTimeout(grewTipTimerRef.current);
+    grewTipTimerRef.current = window.setTimeout(() => setGrewTip(''), 3000);
+  };
+  const startLesson = () => {
+    const loop = loopBars;
+    if (!loop || chunkRef.current || blockRef.current || keepRef.current) return;
+    const plan = buildPlan(adviceData().laps, loop);
+    if (!plan) {
+      flashTip('This loop is clean.');
+      reportEvent('lesson', { on: false, why: 'clean' });
+      return;
+    }
+    const first = plan.steps[0];
+    putLesson(plan);
+    reportEvent('lesson', { on: true, main: plan.main, steps: plan.steps });
+    applyLoop({ first: first.first, last: first.last }, true);
+  };
+  // Stop: back to his own loop, exactly as it was (his saved loop and spot list never changed).
+  const stopLesson = (why: string) => {
+    const plan = lessonRef.current;
+    if (!plan) return;
+    putLesson(null);
+    reportEvent('lesson', { on: false, why, at: plan.at });
+    applyLoop(plan.main, true);
+  };
+  const skipLesson = () => {
+    const plan = lessonRef.current;
+    if (!plan) return;
+    const { state, done } = skipStep(plan);
+    if (done) {
+      stopLesson('skipped-last');
+      return;
+    }
+    putLesson(state);
+    const step = state.steps[state.at];
+    reportEvent('lesson', { at: state.at, skipped: true, firstBar: step.first, lastBar: step.last });
+    applyLoop({ first: step.first, last: step.last }, true);
+    flashTip(nextLabel(state));
+  };
   const toggleOutward = () => {
     if (chunk) {
       chunkEvent(chunk, { on: false });
       applyLoop({ first: chunk.first, last: chunk.last });
-    } else if (loopBars) beginOutward(loopBars);
+    } else if (loopBars) beginOutward(lessonRef.current?.main ?? loopBars);
   };
 
   // #5657c: the loop's notes grouped into hand positions; `at` resumes after a fingering reload.
@@ -2263,6 +2344,10 @@ export function ScoreView() {
       reportEvent('block', { on: false, at: b.at, done: b.done });
       setBlock(null);
       restart();
+    } else if (lessonRef.current) {
+      const main = lessonRef.current.main;
+      stopLesson('block'); // #6530 F: Block runs on his own loop
+      startBlock(main);
     } else if (loopBars) startBlock(loopBars);
   };
 
@@ -2352,6 +2437,44 @@ export function ScoreView() {
     lapWrongRef.current = 0;
     const c = chunkRef.current;
     const lapRange = followerRef.current?.range ?? null;
+    const plan = lessonRef.current;
+    if (!c && plan) {
+      // #6530 F: a clean lap counts toward this step; a wrong lap just doesn't count.
+      const { state, advanced, done } = lessonLapDone(plan, wrong);
+      reportEvent('lesson', {
+        at: state.at, clean: state.clean, need: state.steps[state.at].need, wrongInLap: wrong,
+        ...(advanced ? { advanced: true, firstBar: state.steps[state.at].first, lastBar: state.steps[state.at].last } : {}),
+        ...(done ? { done: true } : {}),
+      });
+      if (done) {
+        lessonRef.current = null;
+        setLesson(null);
+        applyLoop(state.main, true);
+        const r = followerRef.current?.range;
+        const prefs = useSettingsStore.getState();
+        if (prefs.celebrateChime) void playLapChime();
+        if (r) startWave(r.first, r.last, 0.7, 3);
+        reportEvent('celebrate', { what: 'lesson', steps: state.steps.length });
+        // Parked past the end like a Build backwards finale (#5382): Go again loops his loop again.
+        const f = followerRef.current;
+        if (f) f.seek(f.steps.length);
+        setReached('Lesson plan complete.');
+        syncUi();
+        return true;
+      }
+      lessonRef.current = state;
+      setLesson(state);
+      if (advanced) {
+        const step = state.steps[state.at];
+        applyLoop({ first: step.first, last: step.last }, true);
+        setGrewTip(nextLabel(state));
+        window.clearTimeout(grewTipTimerRef.current);
+        grewTipTimerRef.current = window.setTimeout(() => setGrewTip(''), 3000);
+        return true;
+      }
+      if (wrong === 0) celebrateLap(lapRange);
+      return false;
+    }
     if (!c) {
       if (wrong === 0) celebrateLap(lapRange);
       return false;
@@ -2478,13 +2601,15 @@ export function ScoreView() {
     else applyLoop(range);
   }, [pendingOpen, piece.id, drawn]);
 
-  const takeSnapshot = (on: Piece): SessionSnapshot => ({
+  // live = for a re-layout of this screen (#6531), where a lesson plan carries on: its sub-loop.
+  // Otherwise (relaunch, parked drill) the plan doesn't come back, so his own loop (#6530 F).
+  const takeSnapshot = (on: Piece, live = false): SessionSnapshot => ({
     at: Date.now(),
     pieceId: rememberRef(on.id, on.label, !!on.xml).id,
     pieceLabel: on.label,
-    loop: loopBars,
+    loop: live ? loopBars : (lessonRef.current?.main ?? loopBars),
     chunk,
-    lap,
+    lap: live || !lessonRef.current ? lap : 0,
     wrongCount,
     lapWrong: lapWrongRef.current,
     step: cursorStep,
@@ -2495,7 +2620,7 @@ export function ScoreView() {
   // #6531: where he is right now, for a re-layout (P / Strip-Pages-Scroll / bar numbers) of the
   // same score to put back: loop, place, lap, drill. Read by the load effect before it resets.
   liveSnapRef.current = status === 'ready' && onScreen && drawnPieceRef.current === piece.id
-    ? { ...takeSnapshot(onScreen), pieceId: piece.id }
+    ? { ...takeSnapshot(onScreen, true), pieceId: piece.id }
     : null;
 
   // #10236: keep the snapshot current. Not while loading, when these describe the piece before.
@@ -2806,7 +2931,10 @@ export function ScoreView() {
         resumeStepRef.current = null;
         resumeLoopRef.current = null;
         // A real piece switch ends Build backwards; a fingering/hold reload keeps it with the loop.
-        if (resume === null || !resumeLoop) setChunk(null);
+        if (resume === null || !resumeLoop) {
+          setChunk(null);
+          endLesson('reload'); // #6530 F: its loop is gone
+        }
         // #5657c: blocking too; a reload rebuilds its positions (fingers decide them) where he was.
         const blockAt = resume !== null && resumeLoop ? (blockRef.current?.at ?? null) : null;
         blockRef.current = null;
@@ -2967,6 +3095,7 @@ export function ScoreView() {
         paintHeldTies(settled.kind === 'loop' ? (f.range?.first ?? settled.to) - 1 : settled.from, settled.to);
         if (settled.kind === 'loop') overrunRef.current = f.range ? startOverrun(f.steps, f.range.last, ev.timestamp) : null;
         // The chunk grew a bar: the cursor jumped back, so this note was not aimed at it.
+        if (settled.kind === 'loop') noteAdviceLap(); // #6530 E/F
         if (settled.kind === 'loop' && chunkLap()) return;
       } else if (settled?.kind === 'complete') {
         emitRep('end'); // #6122: the whole piece, once
@@ -3131,13 +3260,7 @@ export function ScoreView() {
             marked: markedBpmRef.current, skipped: lapSkippedRef.current,
           });
           // #6530 D: every 3rd lap, does he miss more when this loop goes faster?
-          // #6530 E: this lap's miss bars, for loop reshape (a scroll-skipped lap doesn't count).
-          {
-            const d = adviceData();
-            if (!lapSkippedRef.current) d.laps = [...d.laps.slice(-5), [...lapWrongBarsRef.current]];
-            d.velLap++;
-            d.prev = null;
-          }
+          noteAdviceLap(); // #6530 E/F
           if (range && ++lapsSinceAdviceRef.current >= 3) {
             lapsSinceAdviceRef.current = 0;
             checkAdviceRef.current({ first: f.steps[range.first].measure, last: f.steps[range.last].measure }, 'lap');
@@ -4074,6 +4197,19 @@ export function ScoreView() {
               {chunk?.out ? 'Outward: on' : 'Build outward'}
             </button>
           )}
+          {loopBars && (
+            <button
+              onClick={lesson ? () => stopLesson('button') : startLesson}
+              disabled={watching || keeping || !!block || !!chunk || (!lesson && !lessonReady)}
+              className={`${btn} ${lesson ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+              title={lesson ? 'Stop the lesson plan: back to your own loop'
+                : lessonReady ? 'Loops the rough spots of your last laps one by one until clean, then the whole loop'
+                  : `Play the loop ${LESSON_MIN_LAPS} times first`}
+              data-testid="lesson-plan"
+            >
+              {lesson ? 'Stop lesson plan' : 'Lesson plan'}
+            </button>
+          )}
           {chunk && (
             <label className="flex items-center gap-1 text-sm text-gray-300" title="Clean laps per chunk: first, then every later one">
               Clean laps
@@ -4932,6 +5068,14 @@ export function ScoreView() {
                   {lapBpm && <span className="text-yellow-200/80">(last lap ♩ = {lapBpm})</span>}
                 </>
               )}
+            </span>
+          )}
+          {lesson && (
+            <span className="flex items-center gap-2 font-semibold text-yellow-300" data-testid="lesson-status">
+              {lessonLabel(lesson)}
+              <button onClick={skipLesson} className="rounded px-2 py-0.5 text-yellow-200 hover:bg-yellow-800/40" data-testid="lesson-skip">
+                Skip step
+              </button>
             </span>
           )}
           {chunk && (
