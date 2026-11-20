@@ -131,6 +131,11 @@ export function PracticeSettings({ btn }: { btn: string }) {
             onChange={(n) => s.setPrefs({ spotClean: Math.max(1, n) })}
             testId="spot-clean"
           />
+          <Check
+            k="adviceOn"
+            label="Tutor advice"
+            title="The tutor suggests things from your own playing, such as a slower tempo when you miss more at speed. At most one suggestion every 5 minutes, only when you pause, and 'Not today' quiets that one until tomorrow"
+          />
           <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Clean laps</div>
           <Check k="celebrateChime" label="Chime" title="A soft ding from the computer when you finish a lap with no wrong notes" />
           <Check k="celebrateWave" label="Glow wave" title="The notes of the loop glow softly, left to right, after a clean lap" />

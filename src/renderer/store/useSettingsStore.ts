@@ -3,6 +3,8 @@ import type { Reaction } from '../engine/TempoClimb';
 import { EYES_UP_START_MS, EyesUpMode } from '../engine/EyesUp';
 import { GRAZE_MS } from '../engine/ScoreFollower';
 import { starsOf, toggleSpan } from '../engine/OutwardChunk';
+import type { AdviceQuiet, AdviceRule } from '../engine/Advice';
+import { quietToday } from '../engine/Advice';
 import { removeSpot, SPOT_KEEP_DAYS, undoMerge, type Dismissed, type Spot, type SpotMerge } from '../engine/TroubleSpots';
 import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
@@ -100,6 +102,10 @@ interface SettingsState {
   climbReaction: Reaction;
   climbTargets: Record<string, number>;
   rolandClick: boolean;
+  /** #6530 E: the tutor's own advice banners (Practice settings "Tutor advice"), and the rules he said "Not today" to. */
+  adviceOn: boolean;
+  adviceQuiet: AdviceQuiet;
+  quietAdvice: (rule: AdviceRule, day: string) => void;
   /** Keep going's tempo per piece, so he picks up where he left off. */
   keepBpms: Record<string, number>;
   /** #5521 clean-run celebrations, each on its own: a ding per clean lap, a glow wave, a finale. */
@@ -166,7 +172,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'climbOn' | 'climbReaction' | 'rolandClick' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'missKind' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder' | 'spotClean';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'climbOn' | 'climbReaction' | 'rolandClick' | 'adviceOn' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'missKind' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder' | 'spotClean';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -226,6 +232,9 @@ export const useSettingsStore = create<SettingsState>()(
       climbReaction: 'normal',
       climbTargets: {},
       rolandClick: false,
+      adviceOn: true,
+      adviceQuiet: {},
+      quietAdvice: (rule, day) => set((s) => ({ adviceQuiet: quietToday(s.adviceQuiet, rule, day) })),
       keepBpms: {},
       celebrateChime: true,
       celebrateWave: false,

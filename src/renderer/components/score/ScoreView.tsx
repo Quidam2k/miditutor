@@ -15,6 +15,8 @@ import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapBeats, lapEndMs,
 import { climbLabel, climbLap, climbPercent, parseTempo, startClimb, type Climb } from '../../engine/TempoClimb';
 import { rolandOffNow, rolandSend } from '../../engine/RolandMetronome';
 import { markedTempo, playedTempo } from '../../engine/Tempo';
+import { slowBars, speedVsMisses, type SpeedAdvice } from '../../engine/SpeedMisses';
+import { ADVICE_PAUSE_MS, ADVICE_STALE_MS, mayOffer } from '../../engine/Advice';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
 import { PracticeReport } from './PracticeReport';
@@ -674,6 +676,8 @@ export function ScoreView() {
   const keepRef = useRef<{
     run: KeepRun; timer: number; beat: number; step: number;
     climb: Climb | null; climbKey: string; roland: boolean; rolandOn: boolean;
+    /** #6530 D: [Play it slower] clicks even with the click setting off. */
+    click: boolean;
   } | null>(null);
   const keepStartingRef = useRef(false);
   const [climb, setClimb] = useState<Climb | null>(null);
@@ -776,6 +780,13 @@ export function ScoreView() {
   const lapSkippedRef = useRef(false);
   const missLogRef = useRef(new Map<string, number[]>());
   const lapsSinceSpotCheckRef = useRef(0);
+  // #6530 D/E: the tutor's own advice. A banner found after a lap waits for a pause to show.
+  const [advice, setAdvice] = useState<{ speed: SpeedAdvice; slow: number[] } | null>(null);
+  const pendingAdviceRef = useRef<{ speed: SpeedAdvice; slow: number[]; piece: string; loop: string; at: number } | null>(null);
+  const adviceShownAtRef = useRef<number | null>(null);
+  const lapsSinceAdviceRef = useRef(0);
+  const keepLapsSinceAdviceRef = useRef(0);
+  const checkAdviceRef = useRef<(bars: { first: number; last: number }) => void>(() => {});
   const spotPassRef = useRef<() => void>(() => {});
   const checkSpotsRef = useRef<(range: { first: number; last: number }) => void>(() => {});
   const [spotTip, setSpotTip] = useState('');
@@ -971,6 +982,13 @@ export function ScoreView() {
     setMixing(false);
   };
   const pieceName = piece.group ? `${piece.label} (${piece.group.label})` : piece.label;
+  const pieceNameRef = useRef(pieceName);
+  pieceNameRef.current = pieceName;
+  // #6530 D: which loop is set now (an advice banner found for another loop is dropped).
+  const loopKeyOf = () => {
+    const r = followerRef.current?.range;
+    return r ? `${r.first}-${r.last}` : 'none';
+  };
   const pieceSpots: Spot[] = own(allSpots, piece.label); // #6460
   const freshNow = freshRef.current?.label === piece.label ? freshRef.current : null;
   // #11354: hints start off on a new piece (fresh tune, sight-read pick), and stay off in a bare run.
@@ -1197,8 +1215,10 @@ export function ScoreView() {
       expression: exprFindings,
       // #5652 C: Read ahead on, and how many note groups are blanked at the cursor now.
       readAhead: readAhead ? { blanked } : null,
+      // #6530 D: the advice banner on screen.
+      advice: advice ? { ...advice.speed, rule: 'speed', why: advice.speed.rule, slowBars: advice.slow } : null,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget]);
+  }, [advice, pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1588,6 +1608,36 @@ export function ScoreView() {
     };
   }, [piece.id, drawnXml]);
 
+  // #6530 D/E: a waiting banner shows once he pauses (no note for 4 s) and Keep going isn't running.
+  useEffect(() => {
+    pendingAdviceRef.current = null;
+    lapsSinceAdviceRef.current = 0;
+    keepLapsSinceAdviceRef.current = 0;
+    setAdvice(null);
+    let seen = useMidiStore.getState().lastNoteOn;
+    let lastAt = Date.now();
+    const id = window.setInterval(() => {
+      const now = Date.now();
+      const ev = useMidiStore.getState().lastNoteOn;
+      if (ev !== seen) {
+        seen = ev;
+        lastAt = now;
+      }
+      const p = pendingAdviceRef.current;
+      // Not over Keep going, Play it for me, Block, Key first or Pause.
+      if (!p || keepRef.current || keepStartingRef.current || watchBpmRef.current !== null || blockRef.current ||
+        keyGateRef.current || useMidiStore.getState().pausedAt !== null || now - lastAt < ADVICE_PAUSE_MS) return;
+      pendingAdviceRef.current = null;
+      const st = useSettingsStore.getState();
+      // Stale: another piece, another loop since, or found over 2 minutes ago.
+      if (p.piece !== pieceNameRef.current || p.loop !== loopKeyOf() || now - p.at > ADVICE_STALE_MS || !st.adviceOn || !mayOffer('speed', now, localDay(), adviceShownAtRef.current, st.adviceQuiet)) return;
+      adviceShownAtRef.current = now;
+      setAdvice({ speed: p.speed, slow: p.slow });
+      reportEvent('advice', { ...p.speed, rule: 'speed', why: p.speed.rule, shown: true, slowBars: p.slow });
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [piece.id]);
+
   const toggleKeep = async () => {
     if (keepRef.current) {
       restart();
@@ -1602,9 +1652,11 @@ export function ScoreView() {
       keepStartingRef.current = false;
     }
   };
-  const beginKeep = async () => {
+  // slowerBpm (#6530 D [Play it slower]): this tempo, no climb, the click on whatever the setting says.
+  const beginKeep = async (slowerBpm?: number) => {
     const f = followerRef.current;
-    if (!f?.steps.length || status !== 'ready' || watching || blockRef.current || keyGateRef.current) return;
+    // [Play it slower] has just stopped any watch; this render's `watching` can still say true.
+    if (!f?.steps.length || status !== 'ready' || (watching && slowerBpm === undefined) || blockRef.current || keyGateRef.current) return;
     try {
       await initAudio();
     } catch (err) {
@@ -1622,17 +1674,17 @@ export function ScoreView() {
     // The same piece and bars carry on the climb they had (a whole-piece run ends after one pass).
     const climbKey = `${pieceLabelRef.current}#${first}-${last}`;
     const carry = climbCarryRef.current;
-    const climbing = !startPrefs.climbOn ? null
+    const climbing = !startPrefs.climbOn || slowerBpm !== undefined ? null
       : carry && carry.key === climbKey && carry.climb.target === clampBpm(climbTarget) ? carry.climb
       : startClimb(climbTarget, startPrefs.keepBpms[pieceLabelRef.current] ?? null);
-    const bpm = climbing ? climbing.bpm : clampBpm(keepBpm);
+    const bpm = climbing ? climbing.bpm : clampBpm(slowerBpm ?? keepBpm);
     const count = countInBeats(steps, first);
     // The Roland's own click (opt-in): its tempo now, switched on at the first beat after the count-in.
     // No Roland found = the app's click.
     const roland = startPrefs.rolandClick && await rolandSend({ tempo: bpm });
     if (followerRef.current !== f || keepRef.current || useMidiStore.getState().pausedAt !== null) return;
     const run = startKeep(first, last, bpm, Date.now() + count * beatMs(bpm));
-    keepRef.current = { run, timer: 0, beat: Number.NEGATIVE_INFINITY, step: -2, climb: climbing, roland, rolandOn: false, climbKey };
+    keepRef.current = { run, timer: 0, beat: Number.NEGATIVE_INFINITY, step: -2, climb: climbing, roland, rolandOn: false, climbKey, click: slowerBpm !== undefined };
     setClimb(climbing);
     setKeepLast(startPrefs.rolandClick && !roland ? "Couldn't reach the Roland's metronome: the app is clicking." : null);
     if (climbing) reportEvent('climb', { on: true, target: climbing.target, start: climbing.start, reaction: startPrefs.climbReaction, roland });
@@ -1672,6 +1724,11 @@ export function ScoreView() {
         } else setKeepLast(lapLabel(lap));
         if (k.roland && lap.nextBpm !== lap.bpm) void rolandSend({ tempo: lap.nextBpm });
         reportEvent('keep', { ...lap });
+        // #6530 D: a Keep going lap (not a climb: the climb sets its own tempo) counts toward speed vs misses.
+        if (!k.climb && ++keepLapsSinceAdviceRef.current >= 3) {
+          keepLapsSinceAdviceRef.current = 0;
+          checkAdviceRef.current({ first: steps[r.first].measure, last: steps[r.last].measure });
+        }
         if (lap.nextBpm !== lap.bpm) {
           setKeepBpm(lap.nextBpm);
           prefs.setKeepBpm(pieceLabelRef.current, lap.nextBpm);
@@ -1693,7 +1750,7 @@ export function ScoreView() {
         }
         const down = beat < 0 ? beat === -count : beat % count === 0;
         // With the Roland clicking, the app only counts in (its beat can't be lined up with ours).
-        if (prefs.keepClick && !(k.roland && beat >= 0)) playNote(down ? 96 : 91, '32n');
+        if ((prefs.keepClick || k.click) && !(k.roland && beat >= 0)) playNote(down ? 96 : 91, '32n');
         setKeep((s) => s && { ...s, count: beat < 0 ? -beat : 0 });
       }
       const i = stepAt(r, steps, t);
@@ -1862,6 +1919,51 @@ export function ScoreView() {
         ...(merged.length ? { merged: merged.map((m) => ({ from: m.from.map(({ first, last }) => ({ first, last })), to: m.to })) } : {}),
       });
     }, (err: unknown) => console.warn('[spots] rollup failed:', err));
+  };
+  // #6530 D: from his last 7 days of laps and passes over these bars: does he miss more when faster?
+  // A finding waits in pendingAdviceRef for a pause (below), never shown mid-lap (Karen 13318).
+  checkAdviceRef.current = (bars) => {
+    const st = useSettingsStore.getState();
+    if (!st.adviceOn || pendingAdviceRef.current || !mayOffer('speed', Date.now(), localDay(), adviceShownAtRef.current, st.adviceQuiet)) return;
+    const call = (window as unknown as { tutorBridge?: { practiceRollup?: (days: number) => Promise<Rollup | null> } }).tutorBridge?.practiceRollup;
+    if (!call) return;
+    const name = pieceName;
+    const loop = loopKeyOf();
+    // A moment for the log to take the run just reported.
+    window.setTimeout(() => {
+      void call(7).then((roll) => {
+        if (pieceNameRef.current !== name) return;
+        const p = roll?.pieces.find((x) => x.piece === name);
+        const speed = p ? speedVsMisses(p.runs, bars) : null;
+        if (!p || !speed) return;
+        const slow = slowBars(p.spotBars.filter((b) => b.bar >= speed.first && b.bar <= speed.last));
+        pendingAdviceRef.current = { speed, slow, piece: name, loop, at: Date.now() };
+      }, (err: unknown) => console.warn('[advice] rollup failed:', err));
+    }, 300);
+  };
+  const playSlower = async () => {
+    const a = advice;
+    if (!a) return;
+    setAdvice(null);
+    reportEvent('advice', { rule: 'speed', action: 'slower', tryBpm: a.speed.tryBpm });
+    // The whole piece, from the top, at his clean tempo, with the click. restart() also stops a watch.
+    if (followerRef.current?.range) applyLoop(null);
+    else restart();
+    const bpm = clampBpm(a.speed.tryBpm);
+    setKeepBpm(bpm);
+    useSettingsStore.getState().setKeepBpm(pieceLabelRef.current, bpm);
+    if (keepStartingRef.current) return;
+    keepStartingRef.current = true;
+    try {
+      await beginKeep(bpm);
+    } finally {
+      keepStartingRef.current = false;
+    }
+  };
+  const closeAdvice = (action: 'not-today' | 'close') => {
+    if (action === 'not-today') useSettingsStore.getState().quietAdvice('speed', localDay());
+    setAdvice(null);
+    reportEvent('advice', { rule: 'speed', action });
   };
   const toggleOutward = () => {
     if (chunk) {
@@ -2897,6 +2999,11 @@ export function ScoreView() {
             bpm, ms: lapMs || null, wrong: lapWrongRef.current, wrongBars: [...lapWrongBarsRef.current].sort((a, b) => a - b),
             marked: markedBpmRef.current, skipped: lapSkippedRef.current,
           });
+          // #6530 D: every 3rd lap, does he miss more when this loop goes faster?
+          if (range && ++lapsSinceAdviceRef.current >= 3) {
+            lapsSinceAdviceRef.current = 0;
+            checkAdviceRef.current({ first: f.steps[range.first].measure, last: f.steps[range.last].measure });
+          }
           chunkLap();
           break;
         }
@@ -2914,6 +3021,8 @@ export function ScoreView() {
             wrongBars: [...lapWrongBarsRef.current].sort((a, b) => a - b), marked: markedBpmRef.current,
             skipped: lapSkippedRef.current,
           });
+          const passLast = f.steps[result.from]?.measure;
+          if (runStartBarRef.current !== null && passLast !== undefined) checkAdviceRef.current({ first: runStartBarRef.current, last: passLast });
           spotPassRef.current();
           paintHeldTies(result.from, f.steps.length - 1);
           if (fresh && fresh.label === pieceLabelRef.current && passMs > 0) {
@@ -4766,6 +4875,31 @@ export function ScoreView() {
             data-testid="target-reached-restart"
           >
             Go again
+          </button>
+        </div>
+      )}
+      {advice && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-sm text-amber-100" data-testid="advice">
+          <span className="flex-1">
+            You miss more above ♩ = {advice.speed.above}. Try the whole piece at ♩ = {advice.speed.tryBpm} with a click?
+            {advice.slow.length > 0 && (
+              <span className="block text-amber-200/80">
+                You slow down most at {advice.slow.length === 1 ? 'bar' : 'bars'} {advice.slow.join(', ')}.
+              </span>
+            )}
+          </span>
+          <button
+            onClick={() => void playSlower()}
+            className="rounded bg-amber-600 px-3 py-1 font-semibold text-white hover:bg-amber-500"
+            data-testid="advice-slower"
+          >
+            Play it slower
+          </button>
+          <button onClick={() => closeAdvice('not-today')} className="rounded px-2 py-1 text-amber-200 hover:bg-amber-800/40" data-testid="advice-not-today">
+            Not today
+          </button>
+          <button onClick={() => closeAdvice('close')} className="rounded px-2 py-1 text-amber-200 hover:bg-amber-800/40" aria-label="Close" data-testid="advice-close">
+            ×
           </button>
         </div>
       )}
