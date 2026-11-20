@@ -34,6 +34,8 @@ export function playNote(midiNumber: number, duration = '8n'): void {
   if (!synth || !initialized) return;
   const note = midiToToneNote(midiNumber);
   synth.triggerAttackRelease(note, duration);
+  // #6587: e2e scripts set window.__clickLog = [] to read which pitches Keep going's click played, in order.
+  (window as unknown as { __clickLog?: number[] }).__clickLog?.push(midiNumber);
 }
 
 /**

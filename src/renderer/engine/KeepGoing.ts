@@ -56,8 +56,10 @@ export function lapBeats(steps: ScoreStep[], first: number, last: number): numbe
   return Math.max(end - steps[first].beat, 1e-6);
 }
 
-/** Beats in the first step's bar, for the count-in (4 when it can't be told). */
+/** Beats in the first step's bar, for the count-in (its time signature's; 4 when it can't be told). */
 export function countInBeats(steps: ScoreStep[], first: number): number {
+  const sig = steps[first]?.bar?.beats;
+  if (sig !== undefined) return Math.max(2, Math.min(12, Math.round(sig)));
   const bar = steps[first]?.measure;
   if (bar === undefined) return 4;
   const start = steps.find((s) => s.measure === bar)?.beat;
@@ -65,6 +67,59 @@ export function countInBeats(steps: ScoreStep[], first: number): number {
   if (start === undefined || next === undefined) return 4;
   const beats = Math.round(next - start);
   return beats >= 2 && beats <= 12 ? beats : 4;
+}
+
+/** One click: `rel` quarter-note beats from the lap's first step (negative = the count-in); `down` = the bar's accent. */
+export interface Click { rel: number; down: boolean }
+
+const EPS = 1e-6;
+
+/**
+ * #6587: the lap's click grid from each bar's real time signature. Clicks fall on quarter-note pulses
+ * counted from the bar line, the accent on the bar's first pulse. A bar that is not a whole number of
+ * quarters (3/8 = 1.5, 5/8 = 2.5) just goes quiet on its trailing half beat until the next bar's accent.
+ * A piece's opening pickup bar counts its pulses back from its end, so the accent lands on the real downbeat.
+ * Steps with no bar data (nothing to read) fall back to the first bar's length all the way through.
+ */
+export function lapClicks(steps: ScoreStep[], first: number, last: number): Click[] {
+  const t0 = steps[first].beat;
+  const span = lapBeats(steps, first, last);
+  const out: Click[] = [];
+  const seen = new Set<number>();
+  let missing = false;
+  for (let i = first; i <= last; i++) {
+    const bar = steps[i].bar;
+    if (!bar) { missing = true; break; }
+    if (seen.has(bar.start)) continue;
+    seen.add(bar.start);
+    const add = (abs: number, down: boolean) => { if (abs >= t0 - EPS && abs < t0 + span - EPS) out.push({ rel: abs - t0, down }); };
+    if (bar.start < EPS && bar.len < bar.beats - EPS) {
+      for (let j = 1; bar.len - j >= -EPS; j++) add(bar.start + bar.len - j, false);
+    } else {
+      for (let k = 0; k < bar.len - EPS; k++) add(bar.start + k, k === 0);
+    }
+  }
+  if (missing) {
+    const count = countInBeats(steps, first);
+    out.length = 0;
+    for (let k = 0; k < span - EPS; k++) out.push({ rel: k, down: k % count === 0 });
+  }
+  return out.sort((x, y) => x.rel - y.rel);
+}
+
+/** The count-in: one bar of the first step's length, its first click the accent. */
+export function countInClicks(steps: ScoreStep[], first: number): Click[] {
+  const n = countInBeats(steps, first);
+  return Array.from({ length: n }, (_, j) => ({ rel: j - n, down: j === 0 }));
+}
+
+/** The first time signature in the loop (or its count-in bar) that is not 4/4, e.g. "6/8"; null if all 4/4 or unknown. */
+export function oddMeter(steps: ScoreStep[], first: number, last: number): string | null {
+  for (let i = first; i <= last; i++) {
+    const sig = steps[i].bar?.sig;
+    if (sig && sig !== '4/4') return sig;
+  }
+  return null;
 }
 
 export function startKeep(first: number, last: number, bpm: number, startMs: number): KeepRun {

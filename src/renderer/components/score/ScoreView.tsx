@@ -11,7 +11,7 @@ import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { MISS_KINDS, MISS_KIND_LABEL, MISS_VOLUME_MAX, initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen, releaseChords } from '../../audio/AudioEngine';
 import { emitRep } from '../../store/useRepStore';
 import { overrunNote, startOverrun, type Overrun } from '../../engine/Overrun';
-import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapBeats, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
+import { beatMs, clampBpm, closeLap, countInBeats, countInClicks, keepNote, lapBeats, lapClicks, lapEndMs, lapLabel, oddMeter, startKeep, stepAt, type Click, type KeepRun } from '../../engine/KeepGoing';
 import { climbLabel, climbLap, climbPercent, parseTempo, startClimb, type Climb } from '../../engine/TempoClimb';
 import { rolandOffNow, rolandSend, setRolandSink } from '../../engine/RolandMetronome';
 import { markedTempo, playedTempo } from '../../engine/Tempo';
@@ -292,6 +292,18 @@ function keepCursorHeight(container: HTMLElement): MutationObserver {
   return obs;
 }
 
+// #6587: the bar the click follows: where it starts, how long its time signature says, how long it really is.
+interface OsmdMeasure {
+  AbsoluteTimestamp?: { RealValue: number };
+  Duration?: { RealValue: number };
+  ActiveTimeSignature?: { Numerator: number; Denominator: number };
+}
+function barOf(m: OsmdMeasure | undefined): ScoreStep['bar'] {
+  const ts = m?.ActiveTimeSignature;
+  if (!m || !ts || !ts.Denominator || !m.AbsoluteTimestamp || !m.Duration) return undefined;
+  return { start: m.AbsoluteTimestamp.RealValue * 4, beats: (ts.Numerator * 4) / ts.Denominator, len: m.Duration.RealValue * 4, sig: `${ts.Numerator}/${ts.Denominator}` };
+}
+
 // Walk the cursor over the whole piece once to build the step list, then reset.
 // Also records, per step, the written notes still sounding there (tie continuations
 // and longer notes struck earlier), so a re-strike of one is not called wrong and a
@@ -334,6 +346,7 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
     const under = struck.filter((n) => selectedStaff === null || staffOf(n) === selectedStaff);
     const other = struck.filter((n) => selectedStaff !== null && staffOf(n) !== selectedStaff);
     const beat = cursor.iterator.currentTimeStamp.RealValue * 4;
+    const bar = barOf(cursor.iterator.CurrentMeasure as unknown as OsmdMeasure | undefined);
     active = active.filter((a) => a.end > beat + 1e-6);
     restBefore.push(steps.length > 0 && soundEnd < beat - 1e-6);
     // The other hand is optional, so playing its written notes is not wrong.
@@ -343,6 +356,7 @@ function extractSteps(osmd: OpenSheetMusicDisplay, hand: 'both' | 'right' | 'lef
       notes: under.map(toMidi),
       beat,
       measure,
+      ...(bar ? { bar } : {}),
       ringing: [...new Set(ring.map(toMidi))],
     });
     notes.push(under);
@@ -679,7 +693,9 @@ export function ScoreView() {
   const [keep, setKeep] = useState<{ bpm: number; lap: number; count: number; hit: number; wrong: number } | null>(null);
   // #6530 C: climb = the tempo climb riding on this run; roland = the piano's own metronome is clicking.
   const keepRef = useRef<{
-    run: KeepRun; timer: number; beat: number; step: number;
+    run: KeepRun; timer: number; step: number;
+    /** #6587: the click grid (count-in first, then the lap) and how far through it we are. */
+    clicks: Click[]; ci: number; counting: boolean;
     climb: Climb | null; climbKey: string; roland: boolean; rolandOn: boolean;
     /** #6530 D: [Play it slower] clicks even with the click setting off. */
     click: boolean;
@@ -702,7 +718,8 @@ export function ScoreView() {
   const rolandClickOn = useSettingsStore((s) => s.rolandClick);
   const keepClickOn = useSettingsStore((s) => s.keepClick);
   // #6587 B: who is clicking right now (null = not running); 'roland-on' only after the on write went out.
-  const [clickState, setClickState] = useState<'app' | 'quiet' | 'roland-wait' | 'roland-on' | 'roland-missing' | 'roland-lost' | null>(null);
+  const [clickState, setClickState] = useState<'app' | 'quiet' | 'roland-wait' | 'roland-on' | 'roland-missing' | 'roland-lost' | 'roland-meter' | null>(null);
+  const [clickMeter, setClickMeter] = useState<string | null>(null);
   const [keepBpm, setKeepBpm] = useState(60);
   const [keepLast, setKeepLast] = useState<string | null>(null);
   const keeping = keep !== null;
@@ -712,10 +729,11 @@ export function ScoreView() {
     clickState === 'roland-on' ? 'Roland'
     : clickState === 'roland-wait' ? 'Roland (starts after the count-in)'
     : clickState === 'roland-missing' ? 'Roland not found (app clicking)'
+    : clickState === 'roland-meter' ? `app clicking: ${clickMeter} piece`
     : clickState === 'roland-lost' ? 'Roland did not start (app clicking)'
     : clickState === 'app' ? 'app'
     : clickState === 'quiet' ? 'off'
-    : rolandClickOn ? 'Roland' : keepClickOn ? 'app' : 'off');
+    : rolandClickOn ? 'Roland' : keepClickOn || climbOn ? 'app' : 'off');
   const [watchNotes, setWatchNotes] = useState<number[]>([]);
   const held = useMidiStore((s) => s.held);
   const showKeyboard = useSettingsStore((s) => s.showKeyboard);
@@ -1776,14 +1794,20 @@ export function ScoreView() {
     const bpm = climbing ? climbing.bpm : clampBpm(slowerBpm ?? keepBpm);
     const count = countInBeats(steps, first);
     // The Roland's own click (opt-in): its tempo now, switched on at the first beat after the count-in.
-    // No Roland found = the app's click.
-    const roland = startPrefs.rolandClick && await rolandSend({ tempo: bpm });
+    // No Roland found = the app's click. Only 4/4 pieces: its beat type is not set from here, so any other meter gets the app's click.
+    const odd = oddMeter(steps, first, last);
+    const roland = startPrefs.rolandClick && !odd && await rolandSend({ tempo: bpm });
     if (followerRef.current !== f || keepRef.current || useMidiStore.getState().pausedAt !== null) return;
     const run = startKeep(first, last, bpm, Date.now() + count * beatMs(bpm));
-    keepRef.current = { run, timer: 0, beat: Number.NEGATIVE_INFINITY, step: -2, climb: climbing, roland, rolandOn: false, climbKey, click: slowerBpm !== undefined };
+    // A climb, or a Roland that won't click, always has the app's click (this run only; his Click setting is never changed).
+    keepRef.current = { run, timer: 0, step: -2, clicks: [...countInClicks(steps, first), ...lapClicks(steps, first, last)], ci: 0, counting: true,
+      climb: climbing, roland, rolandOn: false, climbKey, click: slowerBpm !== undefined || !!climbing || (startPrefs.rolandClick && !roland) };
     setClimb(climbing);
-    setClickState(startPrefs.rolandClick ? (roland ? 'roland-wait' : 'roland-missing') : startPrefs.keepClick || slowerBpm !== undefined ? 'app' : 'quiet');
-    setKeepLast(startPrefs.rolandClick && !roland ? "Couldn't reach the Roland's metronome: the app is clicking." : null);
+    setClickState(startPrefs.rolandClick ? (roland ? 'roland-wait' : odd ? 'roland-meter' : 'roland-missing') : startPrefs.keepClick || slowerBpm !== undefined || climbing ? 'app' : 'quiet');
+    setClickMeter(odd);
+    setKeepLast(!startPrefs.rolandClick || roland ? null
+      : odd ? `The Roland's click only follows 4/4 pieces; this one is ${odd}, so the app is clicking.`
+      : "Couldn't reach the Roland's metronome: the app is clicking.");
     if (climbing) reportEvent('climb', { on: true, target: climbing.target, start: climbing.start, reaction: startPrefs.climbReaction, roland });
     setKeep({ bpm, lap: 1, count, hit: 0, wrong: 0 });
     moveCursorTo(first);
@@ -1834,26 +1858,31 @@ export function ScoreView() {
           restart();
           return;
         }
-        k.beat = Number.NEGATIVE_INFINITY;
+        k.clicks = lapClicks(steps, r.first, r.last);
+        k.ci = 0;
         setKeep((s) => s && { ...s, bpm: r.bpm, lap: r.lap, hit: 0, wrong: 0 });
       }
-      // The click on every beat of the count-in and the lap, the bar's first beat higher.
-      const beat = Math.floor((t - r.startMs) / beatMs(r.bpm));
-      if (beat !== k.beat) {
-        k.beat = beat;
-        if (k.roland && !k.rolandOn && beat >= 0) {
-          k.rolandOn = true;
-          // Only a write that went out counts as "Roland on"; otherwise the app clicks from the next beat.
-          void rolandSend({ on: 1 }).then((ok) => {
-            if (keepRef.current !== k) return;
-            if (ok) setClickState('roland-on');
-            else { k.roland = false; k.rolandOn = false; setClickState('roland-lost'); }
-          });
-        }
-        const down = beat < 0 ? beat === -count : beat % count === 0;
+      // The click on every pulse of the count-in and the lap, each bar's first higher (the bar's own time signature).
+      const pos = (t - r.startMs) / beatMs(r.bpm);
+      if (k.roland && !k.rolandOn && pos >= 0) {
+        k.rolandOn = true;
+        // Only a write that went out counts as "Roland on"; otherwise the app clicks from the next beat.
+        void rolandSend({ on: 1 }).then((ok) => {
+          if (keepRef.current !== k) return;
+          if (ok) setClickState('roland-on');
+          else { k.roland = false; k.rolandOn = false; k.click = true; setClickState('roland-lost'); }
+        });
+      }
+      let c: Click | undefined;
+      while (k.ci < k.clicks.length && k.clicks[k.ci].rel <= pos) c = k.clicks[k.ci++];
+      if (c) {
         // With the Roland clicking, the app only counts in (its beat can't be lined up with ours).
-        if ((prefs.keepClick || k.click) && !(k.roland && beat >= 0)) playNote(down ? 96 : 91, '32n');
-        setKeep((s) => s && { ...s, count: beat < 0 ? -beat : 0 });
+        if ((prefs.keepClick || k.click) && !(k.roland && c.rel >= 0)) playNote(c.down ? 96 : 91, '32n');
+        setKeep((s) => s && { ...s, count: c.rel < 0 ? -c.rel : 0 });
+        if (c.rel >= 0) k.counting = false;
+      } else if (k.counting && pos >= 0) {
+        k.counting = false;
+        setKeep((s) => s && { ...s, count: 0 });
       }
       const i = stepAt(r, steps, t);
       if (i >= 0 && i !== k.step) {

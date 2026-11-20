@@ -21,6 +21,8 @@ export interface ScoreStep {
   beat: number;
   /** 1-based measure number. */
   measure: number;
+  /** #6587: its bar, for the click: start beat, the time signature's length, the bar's real length (a pickup is shorter), "6/8". */
+  bar?: { start: number; beats: number; len: number; sig: string };
   /** Written notes still sounding here (tied or held over); a re-strike is not wrong. */
   ringing?: number[];
 }

@@ -119,8 +119,8 @@ export function PracticeSettings({ btn }: { btn: string }) {
           </label>
           <Check
             k="rolandClick"
-            label="Roland's own metronome (experimental)"
-            title="Off by default. Keep going sets your Roland's built-in metronome to the lap's tempo over USB and turns it on, instead of the app's click (the app still counts you in). Only the metronome's on/off and tempo are ever sent. If no Roland is found, the app's click plays."
+            label="Roland's own metronome (not tested on your piano yet)"
+            title="Off by default, and not tested on your piano yet: it may not start. Keep going sets your Roland's built-in metronome to the lap's tempo over USB and turns it on, instead of the app's click (the app still counts you in). Only the metronome's on/off and tempo are ever sent. Only for 4/4 pieces. If no Roland is found, it doesn't start, or the piece isn't 4/4, the app's click plays."
           />
           <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Trouble spots</div>
           <Num
