@@ -196,6 +196,49 @@ def exercise(page) -> None:
     print("SKIP finger-wheel over a note (covered by e2e_wheel_edit.py in Strip)")
 
 
+HAS_BAR_JS = """(n) => [...document.querySelectorAll('[id^=osmdCanvasPage]')]
+  .filter((d) => d.style.visibility !== 'hidden')
+  .some((d) => [...d.querySelectorAll('svg text')].some((t) => t.textContent.trim() === String(n)))"""
+
+
+def loop_opens(page) -> None:
+    """#6585: Two pages opens on the spread holding the loop's first bar; a loop longer than two
+    pages opens at its start and says it goes on; no title block; the toggle is called Two pages."""
+    from e2e_backwards import screen
+
+    check("Two pages" == tid(page, "layout-pages").inner_text().strip(), "the layout button says Two pages")
+    tid(page, "layout-strip").click()
+    page.wait_for_timeout(1500)
+    tc.request("POST", "/loop", {"firstBar": 81, "lastBar": 84})
+    page.wait_for_timeout(1000)
+    tid(page, "layout-pages").click()
+    page.wait_for_timeout(2500)
+    check(page.evaluate(HAS_BAR_JS, 81), "loop 81-84: entering Two pages lands on the spread holding bar 81",
+          str(visible_pages(page)))
+    check(visible_pages(page)[0] > 1, "... not the first spread", str(visible_pages(page)))
+    check(page.get_by_test_id("page-loop-note").count() == 0, "a loop that fits shows no 'goes on' note")
+    lp = screen().get("loop") or {}
+    check((lp.get("firstBar"), lp.get("lastBar")) == (81, 84), "entering Two pages keeps his loop", str(lp))
+    title = page.evaluate("() => [...document.querySelectorAll('[id^=osmdCanvasPage] svg text')].some((t) => t.textContent.includes('Page turn (e2e)'))")
+    check(not title, "no title block on the pages")
+    tid(page, "layout-strip").click()
+    page.wait_for_timeout(1500)
+    tc.request("POST", "/loop", {"firstBar": 21, "lastBar": 150})
+    page.wait_for_timeout(1000)
+    tid(page, "layout-pages").click()
+    page.wait_for_timeout(2500)
+    check(page.evaluate(HAS_BAR_JS, 21), "loop 21-150 (longer than two pages) opens at its first bar", str(visible_pages(page)))
+    note = page.get_by_test_id("page-loop-note")
+    check(note.count() == 1 and "goes on to page" in note.inner_text(), "... and says it goes on",
+          note.all_inner_texts() if note.count() else "no note")
+    page.keyboard.press("p")
+    page.wait_for_timeout(1500)
+    page.keyboard.press("p")
+    page.wait_for_timeout(2500)
+    lp = screen().get("loop") or {}
+    check((lp.get("firstBar"), lp.get("lastBar")) == (21, 150), "P round trip keeps the loop", str(lp))
+
+
 def main() -> int:
     out = Path(sys.argv[1] if len(sys.argv) > 1 else "screengrab")
     out.mkdir(parents=True, exist_ok=True)
@@ -229,6 +272,7 @@ def main() -> int:
             page.get_by_role("button", name="Score", exact=True).click()
             page.wait_for_selector("[data-testid=bar-now]")
             exercise(page)
+            loop_opens(page)
         page.screenshot(path=str(out / "page-turn.png"))
         tid(page, "layout-strip").click()
         page.wait_for_timeout(1500)

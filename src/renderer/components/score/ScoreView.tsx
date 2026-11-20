@@ -1450,6 +1450,14 @@ export function ScoreView() {
     const page = Number(/^osmdCanvasPage(\d+)$/.exec(id)?.[1] ?? 0);
     return page ? Math.floor((page - 1) / 2) : null;
   }, []);
+  // #6585: the spread a bar is drawn on (null before the pages exist).
+  const spreadOfBar = useCallback((bar: number) => {
+    const osmd = osmdRef.current;
+    const container = containerRef.current;
+    if (!osmd || !container || bar < 1) return null;
+    const page = Number(/^osmdCanvasPage(\d+)$/.exec(pageSvgOf(osmd, container, bar - 1)?.parentElement?.id ?? '')?.[1] ?? 0);
+    return page ? Math.floor((page - 1) / 2) : null;
+  }, []);
 
   // Move the visible cursor to step index i (relative moves; OSMD has no seek).
   const moveCursorTo = useCallback((i: number) => {
@@ -2813,9 +2821,30 @@ export function ScoreView() {
       window.removeEventListener('mouseup', onButton);
     };
   }, [scoreLayout, togglePages, turnSpread]);
+  // #6585: opening Two pages with a loop selected lands on the spread holding the loop's first bar
+  // (the breaks are fixed; a loop longer than two pages simply opens at its start).
+  const pagesOpenedRef = useRef(false);
+  const holdSpreadAtStepRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (scoreLayout !== 'pages') {
+      pagesOpenedRef.current = false;
+      return;
+    }
+    if (status !== 'ready' || pagesOpenedRef.current) return;
+    const at = loopBars ? spreadOfBar(loopBars.first) : null;
+    // No page divs yet (the layout change is still redrawing): try again when it is ready.
+    if (loopBars && at === null) return;
+    pagesOpenedRef.current = true;
+    if (at === null) return;
+    // The cursor may sit on another spread: leave him on the loop's until the cursor actually moves.
+    holdSpreadAtStepRef.current = cursorStep;
+    showSpread(at, true);
+  }, [scoreLayout, status, drawn, loopBars, cursorStep, spreadOfBar, showSpread]); // drawn: each redraw (layout change) re-checks
   // Playing on past the spread turns it: he is never left on an old one.
   useEffect(() => {
     if (scoreLayout !== 'pages' || status !== 'ready') return;
+    if (holdSpreadAtStepRef.current === cursorStep) return; // opened on his loop (#6585)
+    holdSpreadAtStepRef.current = null;
     const at = cursorSpread();
     if (at !== null && at !== spreadRef.current) showSpread(at, true);
   }, [cursorStep, scoreLayout, status, showSpread, cursorSpread]);
@@ -2890,7 +2919,7 @@ export function ScoreView() {
       autoResize: true,
       autoBeam: true,
       backend: 'svg',
-      drawTitle: !strip,
+      drawTitle: !strip && scoreLayout !== 'pages', // Two pages: music only, the title is in the piece list (#6585)
       followCursor: scoreLayout === 'scroll', // #6373: Pages follows a spread at a time instead
       // Break lines where the printed page does (#5056), so the bar number at the start
       // of each line matches the boxed number on his page.
@@ -2903,6 +2932,8 @@ export function ScoreView() {
       ...(strip ? {
         renderSingleHorizontalStaffline: true,
         measureNumberInterval: 1,
+      } : {}),
+      ...(strip || scoreLayout === 'pages' ? {
         drawSubtitle: false,
         drawComposer: false,
         drawLyricist: false,
@@ -4141,7 +4172,7 @@ export function ScoreView() {
         <div role="group" aria-label="Layout" data-testid="layout-toggle" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
           {([
             ['strip', 'Strip', 'One long line of music that slides along as you play'],
-            ['pages', 'Pages', 'Two pages side by side (P flips here and back)'],
+            ['pages', 'Two pages', 'Two whole pages side by side, like the printed music, with no title block; opens on your loop. P flips here and back.'],
             ['scroll', 'Scroll', 'One long page that scrolls down'],
           ] as const).map(([value, label, title]) => (
             <button
@@ -5317,6 +5348,15 @@ export function ScoreView() {
                   <span title="P flips back; scroll, Page Up / Page Down or click a page's outer edge to turn">
                     {lo === hi ? `Page ${lo}` : `Pages ${lo}-${hi}`} of {spreadView.pages}
                   </span>
+                  {loopBars && (() => {
+                    // #6585: a loop that runs past this spread is not silently cut off.
+                    const end = spreadOfBar(loopBars.last);
+                    return end !== null && end > spreadView.at ? (
+                      <span className="text-sky-700" data-testid="page-loop-note">
+                        · loop bars {loopBars.first}–{loopBars.last} goes on to page {end * 2 + 1}
+                      </span>
+                    ) : null;
+                  })()}
                   <button data-testid="page-next" disabled={spreadView.at === last} onClick={turn(1)} className="px-1 disabled:opacity-30" title="Turn forward (Page Down)">›</button>
                 </div>
                 <button data-testid="page-edge-back" aria-label="Turn back" disabled={spreadView.at === 0} onClick={turn(-1)}

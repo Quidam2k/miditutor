@@ -14,7 +14,8 @@ export const ON_STAYS_VISIBLE = false;
 /** Same quiet gap as the Practiced meter (PRACTICE_IDLE_MS). */
 export const SESSION_QUIET_MS = 10 * 60 * 1000;
 /** Never folded away: they silence or test something he must be able to see (our rule, not his words). */
-export const NEVER_HIDE: ReadonlySet<string> = new Set(['missSound']);
+// layout: Strip | Two pages | Scroll must stay findable (#6585).
+export const NEVER_HIDE: ReadonlySet<string> = new Set(['missSound', 'layout']);
 
 export interface Usage {
   uses: number;
