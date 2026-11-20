@@ -12,6 +12,7 @@ import { MISS_KINDS, MISS_KIND_LABEL, MISS_VOLUME_MAX, initAudio, playChime, pla
 import { emitRep } from '../../store/useRepStore';
 import { overrunNote, startOverrun, type Overrun } from '../../engine/Overrun';
 import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
+import { markedTempo, playedTempo } from '../../engine/Tempo';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
 import { PracticeReport } from './PracticeReport';
@@ -1046,6 +1047,11 @@ export function ScoreView() {
   const latestXmlRef = useRef(piece.xml);
   latestXmlRef.current = piece.xml;
   const fifths = useMemo(() => fifthsOf(piece.xml), [piece.xml]);
+  // #6530 B: the tempo the score marks (a bundled piece's own target wins), on screen and in lap/pass events.
+  // Only a bundled target caps Keep going: a MIDI import's mark is often just the file's default 120.
+  const markedBpm = useMemo(() => piece.targetBpm ?? markedTempo(piece.xml), [piece.targetBpm, piece.xml]);
+  const markedBpmRef = useRef(markedBpm);
+  markedBpmRef.current = markedBpm;
   // JP 10/9 "Key first": a new piece (fresh tune, sight-read pick) opens with its key signature's
   // sharps or flats to play before the score takes notes. Armed once per piece.
   const [keyGateNow, setKeyGateState] = useState<KeyGate | null>(null);
@@ -1123,6 +1129,7 @@ export function ScoreView() {
           : feedback,
       paceBpm: pace,
       loop: loopBars ? { firstBar: loopBars.first, lastBar: loopBars.last, lap, lastLapBpm: lapBpm } : null,
+      markedBpm,
       backwards: chunk
         ? { firstBar: chunk.first, lastBar: chunk.last, startBar: chunk.start, endBar: loopEnd(chunk), outward: chunk.out === true,
             clean: chunk.clean, need: chunk.need, done: chunk.done, reached: reached !== null }
@@ -1159,7 +1166,7 @@ export function ScoreView() {
       // #5652 C: Read ahead on, and how many note groups are blanked at the cursor now.
       readAhead: readAhead ? { blanked } : null,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout]);
+  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -2550,7 +2557,7 @@ export function ScoreView() {
         setDrawn((n) => n + 1);
         reportEvent('piece', {
           piece: pieceName, steps: steps.length, bars: steps[steps.length - 1]?.measure ?? 0,
-          expressionMarks: exprMarksParsed.length,
+          expressionMarks: exprMarksParsed.length, marked: markedBpmRef.current,
         });
       })
       .catch((err: unknown) => {
@@ -2788,10 +2795,9 @@ export function ScoreView() {
           // One lap done: its average tempo, then a clean page for the next lap.
           const range = f.range;
           const start = lapStartRef.current;
-          if (range && start !== null && ev.timestamp > start) {
-            const beats = f.steps[result.from].beat - f.steps[range.first].beat;
-            if (beats > 0) setLapBpm(Math.round(beats / ((ev.timestamp - start) / 60000)));
-          }
+          const lapMs = range && start !== null ? ev.timestamp - start : 0;
+          const bpm = range ? playedTempo(f.steps[result.from].beat - f.steps[range.first].beat, lapMs) : null;
+          if (bpm) setLapBpm(bpm);
           lapStartRef.current = null;
           overrunRef.current = range ? startOverrun(f.steps, range.last, ev.timestamp) : null;
           setMarks([]);
@@ -2804,22 +2810,32 @@ export function ScoreView() {
             lap: result.lap, // #5853: the loop's bars and the help on screen, for the practice history
             firstBar: range ? f.steps[range.first]?.measure : null, lastBar: range ? f.steps[range.last]?.measure : null,
             hints: hintsLogRef.current?.state ?? null,
+            // #6530 B: this lap's tempo and misses (chunkLap resets them just below), for speed-vs-misses.
+            bpm, ms: lapMs || null, wrong: lapWrongRef.current, wrongBars: [...lapWrongBarsRef.current].sort((a, b) => a - b),
+            marked: markedBpmRef.current, skipped: lapSkippedRef.current,
           });
           chunkLap();
           break;
         }
         case 'complete': {
           emitRep('end'); // #6122
-          spotPassRef.current();
-          paintHeldTies(result.from, f.steps.length - 1);
           const fresh = freshRef.current;
           const begun = lapStartRef.current;
-          if (fresh && fresh.label === pieceLabelRef.current && begun !== null && ev.timestamp > begun) {
-            const ms = ev.timestamp - begun;
-            const beats = f.steps[result.from].beat - f.steps[f.range?.first ?? 0].beat;
+          const passMs = begun !== null ? ev.timestamp - begun : 0;
+          const passBpm = playedTempo(f.steps[result.from].beat - f.steps[f.range?.first ?? 0].beat, passMs);
+          // #6530 B: a whole pass (or a run to the end of his range) with its tempo and misses;
+          // before spotPass, which clears this pass's miss bars. skipped = a scroll jump, the tempo is off.
+          reportEvent('pass', {
+            firstBar: runStartBarRef.current, lastBar: f.steps[result.from]?.measure ?? null,
+            bpm: passBpm, ms: passMs || null, wrong: lapWrongRef.current,
+            wrongBars: [...lapWrongBarsRef.current].sort((a, b) => a - b), marked: markedBpmRef.current,
+            skipped: lapSkippedRef.current,
+          });
+          spotPassRef.current();
+          paintHeldTies(result.from, f.steps.length - 1);
+          if (fresh && fresh.label === pieceLabelRef.current && passMs > 0) {
             reportEvent('fresh-done', {
-              id: fresh.id, key: fresh.key, label: fresh.label, ms, wrong: wrongCountRef.current,
-              bpm: beats > 0 ? Math.round(beats / (ms / 60000)) : null,
+              id: fresh.id, key: fresh.key, label: fresh.label, ms: passMs, wrong: wrongCountRef.current, bpm: passBpm,
             });
           }
           setFeedback({ kind: 'complete' });
@@ -4564,7 +4580,7 @@ export function ScoreView() {
           {/* His live tempo, big enough to read from the bench (#8979). */}
           <span className="text-gray-400" data-testid="tempo">
             <span className="font-mono text-2xl font-bold text-white">♩ = {pace ?? '—'}</span>
-            {piece.targetBpm && <span className="text-gray-500"> (target {piece.targetBpm})</span>}
+            {markedBpm && <span className="text-gray-500"> ({piece.targetBpm ? "target" : "marked"} {markedBpm})</span>}
           </span>
           <span className="min-w-[14rem] font-medium" data-testid="feedback">
             {feedback.kind === 'wrong' && (
