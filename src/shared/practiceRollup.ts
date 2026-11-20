@@ -7,7 +7,10 @@ export interface PieceRollup {
   worstBars: BarStat[]; fingers: FingerStat[]; days: DayStat[]; fingerData: boolean;
   /** #6460: bars he misses or hesitates on, most first (trouble spots come from these). */
   spotBars: BarStat[];
+  /** #6530 D: each loop lap, whole pass and Keep going lap with its tempo and wrong notes (speed vs misses). */
+  runs: RunStat[];
 }
+export interface RunStat { date: string; at: number; kind: 'lap' | 'pass' | 'keep'; bpm: number; wrong: number; firstBar: number; lastBar: number }
 export interface Rollup { from: string | null; to: string | null; pieces: PieceRollup[] }
 
 type Accumulator = PieceRollup & {
@@ -31,6 +34,8 @@ const MIN_GAPS = 8;
 const MAX_GAP_MS = 10_000; // longer than this he stopped, not hesitated
 const MAX_SPOT_BARS = 30;
 const MOVED_ON = new Set(['advance', 'complete', 'loop']);
+const MAX_RUNS = 400;
+const bar = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
 
 function median(values: number[]): number {
   const sorted = values.slice().sort((a, b) => a - b);
@@ -50,7 +55,21 @@ export function rollup(days: DayLog[], opts?: { topBars?: number; minStrikes?: n
   const topBars = Math.max(0, Math.floor(opts?.topBars ?? 5));
   let current = '(unknown)';
 
+  const getPiece = (name: string): Accumulator => {
+    let piece = pieces.get(name);
+    if (!piece) {
+      piece = {
+        piece: name, strikes: 0, misses: 0, rate: 0, laps: 0, cleanLaps: 0,
+        worstBars: [], fingers: [], days: [], fingerData: false, spotBars: [], runs: [],
+        barMap: new Map(), fingerMap: new Map(), dayMap: new Map(), gaps: [],
+      };
+      pieces.set(name, piece);
+    }
+    return piece;
+  };
+
   for (const day of ordered) {
+    let keepRange: { first: number; last: number } | null = null;
     let spoiled = false;
     let prev: { piece: string; step: number; at: number } | null = null;
     for (const value of Array.isArray(day.entries) ? day.entries : []) {
@@ -68,19 +87,30 @@ export function rollup(days: DayLog[], opts?: { topBars?: number; minStrikes?: n
         spoiled = true;
         continue;
       }
+      // #6530 D: a run's tempo and misses. A Keep going lap gets its bars from the 'keep' on event.
+      if (entry.kind === 'keep' && entry.on === true) {
+        keepRange = bar(entry.firstBar) && bar(entry.lastBar) ? { first: entry.firstBar, last: entry.lastBar } : null;
+      }
+      const isKeepLap = entry.kind === 'keep' && entry.on === undefined && typeof entry.lap === 'number';
+      if ((entry.kind === 'lap' || entry.kind === 'pass' || isKeepLap) && entry.skipped !== true &&
+        typeof entry.bpm === 'number' && Number.isFinite(entry.bpm) && entry.bpm > 0) {
+        const first = isKeepLap ? keepRange?.first : entry.firstBar;
+        const last = isKeepLap ? keepRange?.last : entry.lastBar;
+        const wrong = (typeof entry.wrong === 'number' ? entry.wrong : 0) +
+          (isKeepLap && typeof entry.missed === 'number' ? entry.missed : 0);
+        if (bar(first) && bar(last) && last >= first) {
+          getPiece(current).runs.push({
+            date: day.date, at: typeof entry.timestamp === 'number' ? entry.timestamp : 0,
+            kind: isKeepLap ? 'keep' : entry.kind as 'lap' | 'pass', bpm: entry.bpm, wrong, firstBar: first, lastBar: last,
+          });
+        }
+      }
+      if (entry.kind === 'pass' || entry.kind === 'keep') continue;
       const lap = entry.kind === 'lap';
       if (!lap && (entry.kind !== 'follow' ||
         typeof entry.result !== 'string' || !results.has(entry.result))) continue;
 
-      let piece = pieces.get(current);
-      if (!piece) {
-        piece = {
-          piece: current, strikes: 0, misses: 0, rate: 0, laps: 0, cleanLaps: 0,
-          worstBars: [], fingers: [], days: [], fingerData: false, spotBars: [],
-          barMap: new Map(), fingerMap: new Map(), dayMap: new Map(), gaps: [],
-        };
-        pieces.set(current, piece);
-      }
+      const piece = getPiece(current);
       let stat = piece.dayMap.get(day.date);
       if (!stat) {
         stat = { date: day.date, strikes: 0, misses: 0, rate: 0, laps: 0, cleanLaps: 0 };
@@ -159,6 +189,7 @@ export function rollup(days: DayLog[], opts?: { topBars?: number; minStrikes?: n
       }
       return {
         ...piece,
+        runs: piece.runs.slice(-MAX_RUNS),
         rate: rate(piece.misses, piece.strikes),
         worstBars: Array.from(barMap.values(), bar => ({
           ...bar, rate: rate(bar.misses, bar.strikes),
