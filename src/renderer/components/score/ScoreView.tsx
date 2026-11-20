@@ -609,6 +609,10 @@ export function ScoreView() {
   // #5947: the note he just fingered; "apply to all matching" spreads its spot's whole fingering.
   const [spreadFrom, setSpreadFrom] = useState<{ target: FingerTarget; name: string } | null>(null);
   const resumeStepRef = useRef<number | null>(null);
+  const liveSnapRef = useRef<SessionSnapshot | null>(null);
+  // The snapshot a re-layout puts back, and the score last drawn (piece + xml) it must match.
+  const relayoutSnapRef = useRef<SessionSnapshot | null>(null);
+  const loadedRef = useRef<{ pieceId: string; xml: string | undefined } | null>(null);
   // #10134: the loop he had set when a fingering edit re-rendered the score.
   const resumeLoopRef = useRef<{ first: number; last: number } | null>(null);
   // The chord symbol in force where he is playing, the keys struck under it, and
@@ -1142,6 +1146,9 @@ export function ScoreView() {
       spots: pieceSpots.map((sp) => ({
         first: sp.first, last: sp.last, alone: sp.alone, inContext: sp.inContext, ticked: sp.ticked ?? null, auto: sp.auto === true,
       })),
+      // #6531: his starred ranges for this piece, and the layout on screen.
+      stars: starsInOrder(starsOf(pieceStars, piece.label)),
+      scoreLayout,
       pickingLoop: picking === 'off' ? null : picking,
       playedMarks: marks.length,
       wrongMarks: marks.filter((m) => m.wrong).length,
@@ -1151,7 +1158,7 @@ export function ScoreView() {
       // #5652 C: Read ahead on, and how many note groups are blanked at the cursor now.
       readAhead: readAhead ? { blanked } : null,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots]);
+  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -2135,6 +2142,13 @@ export function ScoreView() {
       setBands([]);
     }
   }, [previewBars, loopBars, pickStart, status, layoutTick]);
+  // #6531: coming from the Strip, the pages are measured before they have settled into place, so
+  // the loop shading landed off the spread. Measure the overlays again once the new layout is drawn.
+  useEffect(() => {
+    if (status !== 'ready') return;
+    const timer = window.setTimeout(() => setLayoutTick((t) => t + 1), 300);
+    return () => window.clearTimeout(timer);
+  }, [scoreLayout, status]);
 
   // A loop asked for through the tutor API (POST /loop, DELETE /loop). Used up once it applies:
   // left in the store, it came back on every piece that finished loading (#10262).
@@ -2173,6 +2187,11 @@ export function ScoreView() {
     following,
     showOriginal,
   });
+  // #6531: where he is right now, for a re-layout (P / Strip-Pages-Scroll / bar numbers) of the
+  // same score to put back: loop, place, lap, drill. Read by the load effect before it resets.
+  liveSnapRef.current = status === 'ready' && onScreen && drawnPieceRef.current === piece.id
+    ? { ...takeSnapshot(onScreen), pieceId: piece.id }
+    : null;
 
   // #10236: keep the snapshot current. Not while loading, when these describe the piece before.
   useEffect(() => {
@@ -2379,6 +2398,12 @@ export function ScoreView() {
       setStatus('loading');
       return;
     }
+    // #6531: the same score drawn again in another layout keeps where he was (it cleared his loop).
+    // Only when the last score drawn is this same piece with this same xml (a re-read file is not a re-layout).
+    const live = liveSnapRef.current;
+    const loaded = loadedRef.current;
+    relayoutSnapRef.current = live && loaded && loaded.pieceId === piece.id && loaded.xml === drawnXml &&
+      live.pieceId === piece.id && resumeStepRef.current === null ? live : null;
     // #10262: off the sight-read piece. Back on a parked piece the drill returns (before the load:
     // the hand decides the steps); anywhere else the hand Sight-read chose doesn't follow him.
     const settings = useSettingsStore.getState();
@@ -2461,8 +2486,13 @@ export function ScoreView() {
         setPickStart(null);
         restart();
         // After his fingering edit re-renders the score, put him back where he was.
-        const snap = restoreRef.current;
+        // A relaunch or parked-drill restore wins; a re-layout snapshot is used only for its own piece.
+        const relaySnap = relayoutSnapRef.current?.pieceId === piece.id ? relayoutSnapRef.current : null;
+        relayoutSnapRef.current = null;
+        loadedRef.current = { pieceId: piece.id, xml: drawnXml };
+        const snap = restoreRef.current?.pieceId === piece.id ? restoreRef.current : (relaySnap ?? restoreRef.current);
         restoreRef.current = null;
+        const relayout = snap !== null && snap === relaySnap;
         const restored = resumeStepRef.current === null && snap?.pieceId === piece.id ? snap : null;
         const resume = restored ? restored.step : resumeStepRef.current;
         const resumeLoop = restored ? restored.loop : resumeLoopRef.current;
@@ -2490,7 +2520,7 @@ export function ScoreView() {
             }
             setWrongCount(restored.wrongCount);
             lapWrongRef.current = restored.lapWrong;
-            reportEvent('restore', { step: resume, loop: range ? resumeLoop : null, lap: restored.lap });
+            reportEvent(relayout ? 'relayout' : 'restore', { step: resume, loop: range ? resumeLoop : null, lap: restored.lap });
           }
           if (resume < followerRef.current.steps.length) followerRef.current.seek(resume);
           moveCursorTo(Math.min(followerRef.current.index, followerRef.current.steps.length - 1));
@@ -2500,7 +2530,7 @@ export function ScoreView() {
           if (blockAt !== null && range && resumeLoop) startBlockRef.current(resumeLoop, blockAt);
         }
         // #6513: a piece just opened (not a fingering reload): bars anywhere in it he keeps missing join his spots.
-        if ((resume === null || restored) && steps.length) {
+        if ((resume === null || restored) && !relayout && steps.length) {
           checkSpotsRef.current({ first: steps[0].measure, last: steps[steps.length - 1].measure });
         }
         drawnPieceRef.current = piece.id;
@@ -3599,7 +3629,7 @@ export function ScoreView() {
         <div role="group" aria-label="Layout" data-testid="layout-toggle" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
           {([
             ['strip', 'Strip', 'One long line of music that slides along as you play'],
-            ['pages', 'Pages', 'Two pages side by side'],
+            ['pages', 'Pages', 'Two pages side by side (P flips here and back)'],
             ['scroll', 'Scroll', 'One long page that scrolls down'],
           ] as const).map(([value, label, title]) => (
             <button
