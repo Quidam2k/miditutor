@@ -39,6 +39,12 @@ export function rolandMessage(param: RolandParam, value: number): number[] {
 /** His piano's USB MIDI output, by name. */
 const ROLAND_NAME = /roland|fp-?\d0/i;
 
+/** #6587 A: one line per write for the debugging feed, so a piano that ignores us shows up in /events. */
+export interface RolandWrite { param: RolandParam; value: number; bytes: string; port: string | null; ok: boolean; error?: string }
+let sink: ((w: RolandWrite) => void) | null = null;
+export const setRolandSink = (fn: ((w: RolandWrite) => void) | null): void => { sink = fn; };
+const hex = (m: readonly number[]) => m.map((b) => b.toString(16).padStart(2, '0')).join(' ');
+
 /** Lazily asks for SysEx MIDI access on its own (the WebMidi input path stays sysex-free). */
 let access: Promise<MIDIAccess> | null = null;
 /** The piano's output once found, so the metronome can be switched off synchronously on unload. */
@@ -50,18 +56,28 @@ let lastOut: MIDIOutput | null = null;
  * falls back to our click.
  */
 export async function rolandSend(settings: Partial<Record<RolandParam, number>>): Promise<boolean> {
+  const params = Object.keys(settings) as RolandParam[];
+  let port: string | null = null;
   try {
-    const messages = (Object.keys(settings) as RolandParam[]).map((p) => rolandMessage(p, settings[p] as number));
+    const messages = params.map((p) => rolandMessage(p, settings[p] as number));
     access ??= navigator.requestMIDIAccess({ sysex: true });
     const midi = await access;
     const out = [...midi.outputs.values()].find((o) => ROLAND_NAME.test(o.name ?? ''));
     lastOut = out ?? null;
-    if (!out) return false;
+    port = out?.name ?? null;
+    const report = (ok: boolean, error?: string) =>
+      params.forEach((p, i) => sink?.({ param: p, value: settings[p] as number, bytes: hex(messages[i]), port, ok, ...(error ? { error } : {}) }));
+    if (!out) {
+      report(false, 'no Roland output among: ' + ([...midi.outputs.values()].map((o) => o.name).join(', ') || 'none'));
+      return false;
+    }
     for (const m of messages) out.send(m);
+    report(true);
     return true;
   } catch (err) {
     access = null;
     console.warn('[roland] metronome send failed:', err);
+    params.forEach((p) => sink?.({ param: p, value: settings[p] as number, bytes: '', port, ok: false, error: String(err) }));
     return false;
   }
 }

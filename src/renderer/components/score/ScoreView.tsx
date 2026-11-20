@@ -13,7 +13,7 @@ import { emitRep } from '../../store/useRepStore';
 import { overrunNote, startOverrun, type Overrun } from '../../engine/Overrun';
 import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapBeats, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
 import { climbLabel, climbLap, climbPercent, parseTempo, startClimb, type Climb } from '../../engine/TempoClimb';
-import { rolandOffNow, rolandSend } from '../../engine/RolandMetronome';
+import { rolandOffNow, rolandSend, setRolandSink } from '../../engine/RolandMetronome';
 import { markedTempo, playedTempo } from '../../engine/Tempo';
 import { slowBars, speedVsMisses } from '../../engine/SpeedMisses';
 import {
@@ -693,10 +693,29 @@ export function ScoreView() {
     window.addEventListener('beforeunload', off);
     return () => window.removeEventListener('beforeunload', off);
   }, []);
+  // #6587 A: every metronome write to the piano goes to the events feed (what, bytes, port, ok).
+  useEffect(() => {
+    setRolandSink((w) => reportEvent('roland', { ...w }));
+    return () => setRolandSink(null);
+  }, []);
   const climbOn = useSettingsStore((s) => s.climbOn);
+  const rolandClickOn = useSettingsStore((s) => s.rolandClick);
+  const keepClickOn = useSettingsStore((s) => s.keepClick);
+  // #6587 B: who is clicking right now (null = not running); 'roland-on' only after the on write went out.
+  const [clickState, setClickState] = useState<'app' | 'quiet' | 'roland-wait' | 'roland-on' | 'roland-missing' | 'roland-lost' | null>(null);
   const [keepBpm, setKeepBpm] = useState(60);
   const [keepLast, setKeepLast] = useState<string | null>(null);
   const keeping = keep !== null;
+  // #6587 B: the tempo now (the climb's, the run's, or the box's) and who is clicking: "♩ 64 · click: Roland".
+  const readoutBpm = climb?.bpm ?? keep?.bpm ?? clampBpm(keepBpm);
+  const clickReadout = `♩ ${readoutBpm} · click: ` + (
+    clickState === 'roland-on' ? 'Roland'
+    : clickState === 'roland-wait' ? 'Roland (starts after the count-in)'
+    : clickState === 'roland-missing' ? 'Roland not found (app clicking)'
+    : clickState === 'roland-lost' ? 'Roland did not start (app clicking)'
+    : clickState === 'app' ? 'app'
+    : clickState === 'quiet' ? 'off'
+    : rolandClickOn ? 'Roland' : keepClickOn ? 'app' : 'off');
   const [watchNotes, setWatchNotes] = useState<number[]>([]);
   const held = useMidiStore((s) => s.held);
   const showKeyboard = useSettingsStore((s) => s.showKeyboard);
@@ -1240,6 +1259,7 @@ export function ScoreView() {
       markedBpm,
       climb: climb ? { ...climb, percent: climbPercent(climb) } : null,
       climbTarget,
+      clickReadout,
       backwards: chunk
         ? { firstBar: chunk.first, lastBar: chunk.last, startBar: chunk.start, endBar: loopEnd(chunk), outward: chunk.out === true,
             clean: chunk.clean, need: chunk.need, done: chunk.done, reached: reached !== null }
@@ -1281,7 +1301,7 @@ export function ScoreView() {
       lesson: lesson ? { main: lesson.main, steps: lesson.steps, at: lesson.at, clean: lesson.clean, need: lesson.steps[lesson.at].need } : null,
       lessonReady,
     });
-  }, [advice, lesson, lessonReady, pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget]);
+  }, [advice, lesson, lessonReady, pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget, clickReadout]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1529,6 +1549,7 @@ export function ScoreView() {
       keepRef.current = null;
       setKeep(null);
       setClimb(null);
+      setClickState(null);
       reportEvent('keep', { on: false });
     }
     watchRunRef.current++;
@@ -1676,6 +1697,7 @@ export function ScoreView() {
       keepRef.current = null;
       setKeep(null);
       setClimb(null);
+      setClickState(null);
     };
   }, [piece.id, drawnXml]);
 
@@ -1760,6 +1782,7 @@ export function ScoreView() {
     const run = startKeep(first, last, bpm, Date.now() + count * beatMs(bpm));
     keepRef.current = { run, timer: 0, beat: Number.NEGATIVE_INFINITY, step: -2, climb: climbing, roland, rolandOn: false, climbKey, click: slowerBpm !== undefined };
     setClimb(climbing);
+    setClickState(startPrefs.rolandClick ? (roland ? 'roland-wait' : 'roland-missing') : startPrefs.keepClick || slowerBpm !== undefined ? 'app' : 'quiet');
     setKeepLast(startPrefs.rolandClick && !roland ? "Couldn't reach the Roland's metronome: the app is clicking." : null);
     if (climbing) reportEvent('climb', { on: true, target: climbing.target, start: climbing.start, reaction: startPrefs.climbReaction, roland });
     setKeep({ bpm, lap: 1, count, hit: 0, wrong: 0 });
@@ -1820,7 +1843,12 @@ export function ScoreView() {
         k.beat = beat;
         if (k.roland && !k.rolandOn && beat >= 0) {
           k.rolandOn = true;
-          void rolandSend({ on: 1 });
+          // Only a write that went out counts as "Roland on"; otherwise the app clicks from the next beat.
+          void rolandSend({ on: 1 }).then((ok) => {
+            if (keepRef.current !== k) return;
+            if (ok) setClickState('roland-on');
+            else { k.roland = false; k.rolandOn = false; setClickState('roland-lost'); }
+          });
         }
         const down = beat < 0 ? beat === -count : beat % count === 0;
         // With the Roland clicking, the app only counts in (its beat can't be lined up with ours).
@@ -4377,6 +4405,13 @@ export function ScoreView() {
               className="w-14 rounded bg-gray-800 px-1 text-sm text-gray-100 disabled:opacity-50"
               data-testid="climb-target"
             />
+            <span
+              className={`font-mono ${clickState === 'roland-missing' || clickState === 'roland-lost' ? 'text-amber-300' : 'text-gray-300'}`}
+              title={"The tempo now, and who is clicking: the app, or the Roland piano's own metronome (Practice settings).\nThe Roland only shows \"Roland\" once the app has switched its metronome on.\nIf the piano is not found or does not start, the app clicks instead."}
+              data-testid="click-readout"
+            >
+              {clickReadout}
+            </span>
             {climb && (
               <span className="flex items-center gap-1" data-testid="climb-thermo" title={`Started at ♩ = ${climb.start}; now ${climb.bpm}; target ${climb.target}`}>
                 <span className="relative h-8 w-2 overflow-hidden rounded-full bg-gray-700">

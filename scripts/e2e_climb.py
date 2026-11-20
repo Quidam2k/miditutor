@@ -59,6 +59,8 @@ def main():
         check("climb starts at 100 aiming for 100, quick, no Roland",
               bool(climb_on) and (climb_on[0].get("start"), climb_on[0].get("target"), climb_on[0].get("reaction"), climb_on[0].get("roland")) == (BPM, BPM, "quick", False))
         check("thermometer shown", page.get_by_test_id("climb-thermo").count() == 1)
+        ro = page.get_by_test_id("click-readout").text_content() or ""
+        check("readout shows tempo and the app click", ro == f"♩ {BPM} · click: app")
 
         beat_ms = 60000 / BPM
         for i, n in enumerate(NOTES):
@@ -82,6 +84,7 @@ def main():
         page.get_by_test_id("keep-going").click()
         time.sleep(0.5)
         check("stop clears the climb", screen().get("climb") is None and page.get_by_test_id("climb-thermo").count() == 0)
+        check("readout stays after stop", (page.get_by_test_id("click-readout").text_content() or "").endswith("click: app"))
 
         # A new target below which it climbs: starts at his saved 94; a clean 5 s lap holds
         # (Quick needs 30 s at a tempo), and the old +4 rule must NOT fire while climbing.
@@ -102,6 +105,23 @@ def main():
         check("clean lap counted", laps[0].get("hit") == 8)
         check("climb holds (needs 30 s), no +4 step", changes[0].get("change") == "hold" and laps[0].get("nextBpm") == 94)
         page.get_by_test_id("keep-going").click()
+        # #6587: Roland click on with no piano here: it says so, the app clicks, and the failed write is logged.
+        page.get_by_test_id("practice-settings").click()
+        page.get_by_test_id("rolandClick").check()
+        page.get_by_test_id("practice-settings").click()
+        check("readout names Roland when chosen", (page.get_by_test_id("click-readout").text_content() or "").endswith("click: Roland"))
+        seq = tc.state()["eventSeq"]
+        page.get_by_test_id("keep-going").click()
+        wait_for(lambda: [e for e in events_since(seq, "keep") if e.get("on") is True])
+        rl = wait_for(lambda: [e for e in events_since(seq, "roland")]) or [{}]
+        print("roland event:", rl[0])
+        check("roland event logged, failed, with port info", rl[0].get("param") == "tempo" and rl[0].get("ok") is False and bool(rl[0].get("error")))
+        check("readout says Roland not found, app clicking", (page.get_by_test_id("click-readout").text_content() or "").endswith("Roland not found (app clicking)"))
+        check("screen carries the readout", "Roland not found" in (screen().get("clickReadout") or ""))
+        page.get_by_test_id("keep-going").click()
+        page.get_by_test_id("practice-settings").click()
+        page.get_by_test_id("rolandClick").uncheck()
+        page.get_by_test_id("practice-settings").click()
         page.get_by_test_id("climb-on").uncheck()
         browser.close()
 
