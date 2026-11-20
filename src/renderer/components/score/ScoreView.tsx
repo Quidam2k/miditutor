@@ -15,8 +15,12 @@ import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapBeats, lapEndMs,
 import { climbLabel, climbLap, climbPercent, parseTempo, startClimb, type Climb } from '../../engine/TempoClimb';
 import { rolandOffNow, rolandSend } from '../../engine/RolandMetronome';
 import { markedTempo, playedTempo } from '../../engine/Tempo';
-import { slowBars, speedVsMisses, type SpeedAdvice } from '../../engine/SpeedMisses';
-import { ADVICE_PAUSE_MS, ADVICE_STALE_MS, mayOffer } from '../../engine/Advice';
+import { slowBars, speedVsMisses } from '../../engine/SpeedMisses';
+import {
+  ADVICE_PAUSE_MS, ADVICE_STALE_MS, actionLabel, gapOpen, mayOffer, pauseCard, reshapeCard, speedCard, spotBackCard,
+  velocityCard, worseCard, type AdviceCard, type AdviceRule,
+} from '../../engine/Advice';
+import { loopReshape, pauseBefore, spotBack, velocityOutlier, worseThanBest, type Run, type VelSample } from '../../engine/AdviceRules';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
 import { PracticeReport } from './PracticeReport';
@@ -781,12 +785,17 @@ export function ScoreView() {
   const missLogRef = useRef(new Map<string, number[]>());
   const lapsSinceSpotCheckRef = useRef(0);
   // #6530 D/E: the tutor's own advice. A banner found after a lap waits for a pause to show.
-  const [advice, setAdvice] = useState<{ speed: SpeedAdvice; slow: number[] } | null>(null);
-  const pendingAdviceRef = useRef<{ speed: SpeedAdvice; slow: number[]; piece: string; loop: string; at: number } | null>(null);
+  const [advice, setAdvice] = useState<AdviceCard | null>(null);
+  const pendingAdviceRef = useRef<{ card: AdviceCard; piece: string; loop: string; at: number } | null>(null);
+  // #6530 E: what the rules learn from this loop (or whole-piece run): each lap's miss bars,
+  // whether he paused before each bar, each credited note's velocity. A new piece or loop starts afresh.
+  const adviceDataRef = useRef({ key: '', laps: [] as number[][], entries: new Map<number, boolean[]>(), vel: [] as VelSample[], velLap: 0, prev: null as { bar: number; beat: number; at: number } | null, perBeat: [] as number[] });
   const adviceShownAtRef = useRef<number | null>(null);
+  // e2e scripts set window.__adviceNoGap = true to see several banners in one run (e2e_advice_rules.py).
+  const lastAdviceAt = () => ((window as unknown as { __adviceNoGap?: boolean }).__adviceNoGap ? null : adviceShownAtRef.current);
   const lapsSinceAdviceRef = useRef(0);
   const keepLapsSinceAdviceRef = useRef(0);
-  const checkAdviceRef = useRef<(bars: { first: number; last: number }) => void>(() => {});
+  const checkAdviceRef = useRef<(bars: { first: number; last: number }, kind: 'lap' | 'pass' | 'keep') => void>(() => {});
   const spotPassRef = useRef<() => void>(() => {});
   const checkSpotsRef = useRef<(range: { first: number; last: number }) => void>(() => {});
   const [spotTip, setSpotTip] = useState('');
@@ -988,6 +997,13 @@ export function ScoreView() {
   const loopKeyOf = () => {
     const r = followerRef.current?.range;
     return r ? `${r.first}-${r.last}` : 'none';
+  };
+  const adviceData = () => {
+    const key = `${pieceNameRef.current}|${loopKeyOf()}`;
+    if (adviceDataRef.current.key !== key) {
+      adviceDataRef.current = { key, laps: [], entries: new Map(), vel: [], velLap: 0, prev: null, perBeat: [] };
+    }
+    return adviceDataRef.current;
   };
   const pieceSpots: Spot[] = own(allSpots, piece.label); // #6460
   const freshNow = freshRef.current?.label === piece.label ? freshRef.current : null;
@@ -1216,7 +1232,7 @@ export function ScoreView() {
       // #5652 C: Read ahead on, and how many note groups are blanked at the cursor now.
       readAhead: readAhead ? { blanked } : null,
       // #6530 D: the advice banner on screen.
-      advice: advice ? { ...advice.speed, rule: 'speed', why: advice.speed.rule, slowBars: advice.slow } : null,
+      advice: advice ? { ...advice.data, rule: advice.rule, text: advice.text, sub: advice.sub ?? null, action: advice.action ?? null } : null,
     });
   }, [advice, pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget]);
 
@@ -1630,10 +1646,10 @@ export function ScoreView() {
       pendingAdviceRef.current = null;
       const st = useSettingsStore.getState();
       // Stale: another piece, another loop since, or found over 2 minutes ago.
-      if (p.piece !== pieceNameRef.current || p.loop !== loopKeyOf() || now - p.at > ADVICE_STALE_MS || !st.adviceOn || !mayOffer('speed', now, localDay(), adviceShownAtRef.current, st.adviceQuiet)) return;
+      if (p.piece !== pieceNameRef.current || p.loop !== loopKeyOf() || now - p.at > ADVICE_STALE_MS || !st.adviceOn || !mayOffer(p.card.rule, now, localDay(), lastAdviceAt(), st.adviceQuiet)) return;
       adviceShownAtRef.current = now;
-      setAdvice({ speed: p.speed, slow: p.slow });
-      reportEvent('advice', { ...p.speed, rule: 'speed', why: p.speed.rule, shown: true, slowBars: p.slow });
+      setAdvice(p.card);
+      reportEvent('advice', { ...p.card.data, rule: p.card.rule, text: p.card.text, shown: true });
     }, 500);
     return () => window.clearInterval(id);
   }, [piece.id]);
@@ -1727,7 +1743,7 @@ export function ScoreView() {
         // #6530 D: a Keep going lap (not a climb: the climb sets its own tempo) counts toward speed vs misses.
         if (!k.climb && ++keepLapsSinceAdviceRef.current >= 3) {
           keepLapsSinceAdviceRef.current = 0;
-          checkAdviceRef.current({ first: steps[r.first].measure, last: steps[r.last].measure });
+          checkAdviceRef.current({ first: steps[r.first].measure, last: steps[r.last].measure }, 'keep');
         }
         if (lap.nextBpm !== lap.bpm) {
           setKeepBpm(lap.nextBpm);
@@ -1920,36 +1936,100 @@ export function ScoreView() {
       });
     }, (err: unknown) => console.warn('[spots] rollup failed:', err));
   };
-  // #6530 D: from his last 7 days of laps and passes over these bars: does he miss more when faster?
-  // A finding waits in pendingAdviceRef for a pause (below), never shown mid-lap (Karen 13318).
-  checkAdviceRef.current = (bars) => {
+  // #6530 D/E: after a lap or a pass, the first rule with something to say (7-day roll-up + this loop's
+  // own laps). A finding waits in pendingAdviceRef for a pause (below), never shown mid-lap (Karen 13318).
+  checkAdviceRef.current = (bars, kind) => {
     const st = useSettingsStore.getState();
-    if (!st.adviceOn || pendingAdviceRef.current || !mayOffer('speed', Date.now(), localDay(), adviceShownAtRef.current, st.adviceQuiet)) return;
+    if (!st.adviceOn || pendingAdviceRef.current || !gapOpen(Date.now(), lastAdviceAt())) return;
     const call = (window as unknown as { tutorBridge?: { practiceRollup?: (days: number) => Promise<Rollup | null> } }).tutorBridge?.practiceRollup;
-    if (!call) return;
     const name = pieceName;
+    const title = pieceLabelRef.current;
     const loop = loopKeyOf();
+    const steps = followerRef.current?.steps ?? [];
+    // This loop's data as it stands now (the next lap adds to it while the roll-up loads).
+    const d = adviceData();
+    const laps = d.laps.map((l) => [...l]);
+    const entries = new Map([...d.entries].filter(([bar]) => bar > bars.first && bar <= bars.last).map(([bar, l]) => [bar, [...l]]));
+    const vel = [...d.vel];
+    // #6530 E: the pass just played, as it stands before spotPass clears it (a skipped pass isn't judged).
+    const live: Run | null = kind === 'pass' && !lapSkippedRef.current
+      ? { first: bars.first, last: bars.last, wrong: lapWrongRef.current, wrongBars: [...lapWrongBarsRef.current], at: Date.now() }
+      : null;
+    const midnight = new Date().setHours(0, 0, 0, 0);
+    const missesToday = new Map<number, number>();
+    for (const [key, times] of missLogRef.current) {
+      if (!key.startsWith(`${title}#`)) continue;
+      const n = times.filter((t) => t >= midnight).length;
+      if (n) missesToday.set(Number(key.slice(title.length + 1)), n);
+    }
+    const find = (roll: Rollup | null): AdviceCard | null => {
+      const day = localDay();
+      const quiet = useSettingsStore.getState().adviceQuiet;
+      const ok = (r: AdviceRule) => quiet[r] !== day;
+      const p = roll?.pieces.find((x) => x.piece === name);
+      const speed = () => {
+        const sp = p && ok('speed') ? speedVsMisses(p.runs, bars) : null;
+        return sp && p ? speedCard(sp, slowBars(p.spotBars.filter((b) => b.bar >= sp.first && b.bar <= sp.last))) : null;
+      };
+      if (kind === 'keep') return speed();
+      const back = () => {
+        if (!ok('spotBack')) return null;
+        const mine = own(useSettingsStore.getState().troubleSpots, title);
+        const active = mine.filter((sp) => !sp.ticked);
+        // A ticked spot that a live one covers again is already back on his list.
+        const near = mine.filter((sp) => sp.last >= bars.first && sp.first <= bars.last &&
+          !(sp.ticked && active.some((o) => o.last >= sp.first && o.first <= sp.last)));
+        const r = spotBack(near, missesToday, day);
+        return r ? spotBackCard(r.spot, r.daysAgo, r.misses) : null;
+      };
+      const reshape = () => {
+        const r = kind === 'lap' && ok('reshape') ? loopReshape(laps, bars) : null;
+        return r ? reshapeCard(r.clean, r.windows) : null;
+      };
+      const pause = () => {
+        const r = ok('pause') ? pauseBefore(entries) : null;
+        return r ? pauseCard(r.bar, r.times, bars.first) : null;
+      };
+      const quieter = () => {
+        const r = ok('velocity') ? velocityOutlier(vel) : null;
+        const bar = r ? steps[r.step]?.measure : undefined;
+        return r && bar !== undefined ? velocityCard(noteName(r.note), bar, r.ratio, r.laps, r.hand) : null;
+      };
+      const worse = () => {
+        if (!p || !live || !ok('worse')) return null;
+        // Earlier runs of the same bars; the one just logged (this pass) is left out.
+        const others: Run[] = p.runs
+          .filter((x) => x.kind !== 'keep' && x.firstBar === bars.first && x.lastBar === bars.last && x.at < live.at - 10_000)
+          .map((x) => ({ first: x.firstBar, last: x.lastBar, wrong: x.wrong, wrongBars: x.wrongBars ?? [], at: x.at }));
+        const r = worseThanBest(live, others);
+        return r ? worseCard(r.now, r.best, r.windows) : null;
+      };
+      return kind === 'lap'
+        ? speed() ?? back() ?? reshape() ?? pause() ?? quieter()
+        : speed() ?? worse() ?? back() ?? pause() ?? quieter();
+    };
+    const offer = (roll: Rollup | null) => {
+      if (pieceNameRef.current !== name || pendingAdviceRef.current) return;
+      const card = find(roll);
+      if (card) pendingAdviceRef.current = { card, piece: name, loop, at: Date.now() };
+    };
+    if (!call) {
+      offer(null);
+      return;
+    }
     // A moment for the log to take the run just reported.
     window.setTimeout(() => {
-      void call(7).then((roll) => {
-        if (pieceNameRef.current !== name) return;
-        const p = roll?.pieces.find((x) => x.piece === name);
-        const speed = p ? speedVsMisses(p.runs, bars) : null;
-        if (!p || !speed) return;
-        const slow = slowBars(p.spotBars.filter((b) => b.bar >= speed.first && b.bar <= speed.last));
-        pendingAdviceRef.current = { speed, slow, piece: name, loop, at: Date.now() };
-      }, (err: unknown) => console.warn('[advice] rollup failed:', err));
+      void call(7).then(offer, (err: unknown) => {
+        console.warn('[advice] rollup failed:', err);
+        offer(null);
+      });
     }, 300);
   };
-  const playSlower = async () => {
-    const a = advice;
-    if (!a) return;
-    setAdvice(null);
-    reportEvent('advice', { rule: 'speed', action: 'slower', tryBpm: a.speed.tryBpm });
+  const playSlower = async (tryBpm: number) => {
     // The whole piece, from the top, at his clean tempo, with the click. restart() also stops a watch.
     if (followerRef.current?.range) applyLoop(null);
     else restart();
-    const bpm = clampBpm(a.speed.tryBpm);
+    const bpm = clampBpm(tryBpm);
     setKeepBpm(bpm);
     useSettingsStore.getState().setKeepBpm(pieceLabelRef.current, bpm);
     if (keepStartingRef.current) return;
@@ -1960,10 +2040,33 @@ export function ScoreView() {
       keepStartingRef.current = false;
     }
   };
-  const closeAdvice = (action: 'not-today' | 'close') => {
-    if (action === 'not-today') useSettingsStore.getState().quietAdvice('speed', localDay());
+  const actOnAdvice = () => {
+    const a = advice;
+    const act = a?.action;
+    if (!a || !act) return;
     setAdvice(null);
-    reportEvent('advice', { rule: 'speed', action });
+    reportEvent('advice', {
+      rule: a.rule, action: act.kind,
+      ...(act.kind === 'slower' ? { tryBpm: act.bpm } : act.kind === 'loop' ? { span: act.span } : { windows: act.windows }),
+    });
+    if (act.kind === 'slower') void playSlower(act.bpm);
+    else if (act.kind === 'loop') applyLoop(act.span);
+    else if (act.windows.length) {
+      // #6530 E loop reshape: the new loops go on his trouble-spot list; the first one starts now.
+      const st = useSettingsStore.getState();
+      const title = pieceLabelRef.current;
+      const day = localDay();
+      st.setSpots(title, act.windows.reduce((list, w) => addSpot(list, w, day, true), prune(own(st.troubleSpots, title), day)));
+      reportEvent('spot', { added: act.windows, auto: true, reshape: true });
+      applyLoop(act.windows[0]);
+      showSpotTip(`Added: ${act.windows.map(spanText).join(', ')}`);
+    }
+  };
+  const closeAdvice = (action: 'not-today' | 'close') => {
+    const rule = advice?.rule ?? 'speed';
+    if (action === 'not-today') useSettingsStore.getState().quietAdvice(rule, localDay());
+    setAdvice(null);
+    reportEvent('advice', { rule, action });
   };
   const toggleOutward = () => {
     if (chunk) {
@@ -2957,6 +3060,34 @@ export function ScoreView() {
         if (result.kind === 'loop') exprNewPassRef.current = true;
       }
 
+      // #6530 E: what the advice rules learn from each credited note (before noteCredit moves lastAdvance).
+      if (credited && step) {
+        const d = adviceData();
+        const n = (stepNotesRef.current[idx] ?? []).find((x) => !x.IsGraceNote && toMidi(x) === ev.note);
+        if (n && ev.velocity > 0) {
+          d.vel.push({ step: idx, note: ev.note, hand: staffOf(n) === 0 ? 'R' : 'L', velocity: ev.velocity, lap: d.velLap });
+          if (d.vel.length > 3000) d.vel.splice(0, d.vel.length - 3000);
+        }
+        // Onto a new bar (not the loop's first): time per written beat over twice his usual is a pause
+        // before it (per beat, so a long note or a tie ending the bar played in time is not a pause).
+        if (result.kind === 'advance') {
+          const prev = d.prev;
+          const beats = prev ? step.beat - prev.beat : 0;
+          if (prev && beats > 0) {
+            const perBeat = (ev.timestamp - prev.at) / beats;
+            const startBar = f.range ? f.steps[f.range.first]?.measure : f.steps[0]?.measure;
+            if (step.measure !== prev.bar && step.measure !== startBar && d.perBeat.length >= 4) {
+              const sorted = [...d.perBeat].sort((a, b) => a - b);
+              const usual = sorted[Math.floor(sorted.length / 2)];
+              const list = d.entries.get(step.measure) ?? [];
+              list.push(perBeat > 2 * usual && ev.timestamp - prev.at > 600);
+              d.entries.set(step.measure, list.slice(-10));
+            }
+            d.perBeat = [...d.perBeat.slice(-15), perBeat];
+          }
+          d.prev = { bar: step.measure, beat: step.beat, at: ev.timestamp };
+        }
+      }
       if (credited) noteCredit(result.kind === 'advance' || result.kind === 'loop' ? ev.timestamp : null);
       if (step && credited) bumpBare((r) => bareNote(r, step.measure));
       if (step && (result.kind === 'wrong' || result.kind === 'stray')) bumpBare((r) => bareMiss(r, step.measure));
@@ -3000,9 +3131,16 @@ export function ScoreView() {
             marked: markedBpmRef.current, skipped: lapSkippedRef.current,
           });
           // #6530 D: every 3rd lap, does he miss more when this loop goes faster?
+          // #6530 E: this lap's miss bars, for loop reshape (a scroll-skipped lap doesn't count).
+          {
+            const d = adviceData();
+            if (!lapSkippedRef.current) d.laps = [...d.laps.slice(-5), [...lapWrongBarsRef.current]];
+            d.velLap++;
+            d.prev = null;
+          }
           if (range && ++lapsSinceAdviceRef.current >= 3) {
             lapsSinceAdviceRef.current = 0;
-            checkAdviceRef.current({ first: f.steps[range.first].measure, last: f.steps[range.last].measure });
+            checkAdviceRef.current({ first: f.steps[range.first].measure, last: f.steps[range.last].measure }, 'lap');
           }
           chunkLap();
           break;
@@ -3022,7 +3160,12 @@ export function ScoreView() {
             skipped: lapSkippedRef.current,
           });
           const passLast = f.steps[result.from]?.measure;
-          if (runStartBarRef.current !== null && passLast !== undefined) checkAdviceRef.current({ first: runStartBarRef.current, last: passLast });
+          if (runStartBarRef.current !== null && passLast !== undefined) checkAdviceRef.current({ first: runStartBarRef.current, last: passLast }, 'pass');
+          {
+            const d = adviceData();
+            d.velLap++;
+            d.prev = null;
+          }
           spotPassRef.current();
           paintHeldTies(result.from, f.steps.length - 1);
           if (fresh && fresh.label === pieceLabelRef.current && passMs > 0) {
@@ -3506,6 +3649,7 @@ export function ScoreView() {
     pedalCoachRef.current.reset();
     // A jump starts a new pass: spans he skipped must not be judged.
     exprRef.current?.reset();
+    adviceDataRef.current.prev = null; // #6530 E: the time spent jumping is not a pause before a bar
     moveCursorTo(Math.min(f.index, f.steps.length - 1));
     setFeedback({ kind: 'idle' });
     syncUi();
@@ -4879,22 +5023,20 @@ export function ScoreView() {
         </div>
       )}
       {advice && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-sm text-amber-100" data-testid="advice">
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-700/60 bg-amber-900/20 px-3 py-2 text-sm text-amber-100" data-testid="advice" data-rule={advice.rule}>
           <span className="flex-1">
-            You miss more above ♩ = {advice.speed.above}. Try the whole piece at ♩ = {advice.speed.tryBpm} with a click?
-            {advice.slow.length > 0 && (
-              <span className="block text-amber-200/80">
-                You slow down most at {advice.slow.length === 1 ? 'bar' : 'bars'} {advice.slow.join(', ')}.
-              </span>
-            )}
+            {advice.text}
+            {advice.sub && <span className="block text-amber-200/80">{advice.sub}</span>}
           </span>
-          <button
-            onClick={() => void playSlower()}
-            className="rounded bg-amber-600 px-3 py-1 font-semibold text-white hover:bg-amber-500"
-            data-testid="advice-slower"
-          >
-            Play it slower
-          </button>
+          {advice.action && (
+            <button
+              onClick={actOnAdvice}
+              className="rounded bg-amber-600 px-3 py-1 font-semibold text-white hover:bg-amber-500"
+              data-testid={`advice-${advice.action.kind}`}
+            >
+              {actionLabel(advice.action)}
+            </button>
+          )}
           <button onClick={() => closeAdvice('not-today')} className="rounded px-2 py-1 text-amber-200 hover:bg-amber-800/40" data-testid="advice-not-today">
             Not today
           </button>

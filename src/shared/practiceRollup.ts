@@ -10,7 +10,7 @@ export interface PieceRollup {
   /** #6530 D: each loop lap, whole pass and Keep going lap with its tempo and wrong notes (speed vs misses). */
   runs: RunStat[];
 }
-export interface RunStat { date: string; at: number; kind: 'lap' | 'pass' | 'keep'; bpm: number; wrong: number; firstBar: number; lastBar: number }
+export interface RunStat { date: string; at: number; kind: 'lap' | 'pass' | 'keep'; bpm: number; wrong: number; firstBar: number; lastBar: number; wrongBars: number[] }
 export interface Rollup { from: string | null; to: string | null; pieces: PieceRollup[] }
 
 type Accumulator = PieceRollup & {
@@ -102,6 +102,8 @@ export function rollup(days: DayLog[], opts?: { topBars?: number; minStrikes?: n
           getPiece(current).runs.push({
             date: day.date, at: typeof entry.timestamp === 'number' ? entry.timestamp : 0,
             kind: isKeepLap ? 'keep' : entry.kind as 'lap' | 'pass', bpm: entry.bpm, wrong, firstBar: first, lastBar: last,
+            // #6530 E: which bars the misses hit (a Keep going lap doesn't log them).
+            wrongBars: !isKeepLap && Array.isArray(entry.wrongBars) ? entry.wrongBars.filter(bar) : [],
           });
         }
       }

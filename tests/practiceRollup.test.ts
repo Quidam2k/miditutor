@@ -239,19 +239,19 @@ describe('runs (#6530 D)', () => {
   it('collects lap, pass and Keep going laps with tempo and misses', () => {
     const r = rollup([{ date: '2026-11-19', entries: [
       { kind: 'piece', piece: 'P' },
-      { kind: 'lap', lap: 1, firstBar: 3, lastBar: 6, bpm: 72, wrong: 1, timestamp: 10 },
+      { kind: 'lap', lap: 1, firstBar: 3, lastBar: 6, bpm: 72, wrong: 1, wrongBars: [4, 'x', 5], timestamp: 10 },
       { kind: 'lap', lap: 2, firstBar: 3, lastBar: 6, bpm: 90, wrong: 0, skipped: true, timestamp: 11 },
       { kind: 'pass', firstBar: 1, lastBar: 20, bpm: 80, wrong: 4, timestamp: 12 },
       { kind: 'keep', on: true, bpm: 60, firstBar: 5, lastBar: 8 },
-      { kind: 'keep', lap: 1, bpm: 60, missed: 2, wrong: 1, timestamp: 13 },
+      { kind: 'keep', lap: 1, bpm: 60, missed: 2, wrong: 1, wrongBars: [6], timestamp: 13 },
       { kind: 'keep', on: false },
       { kind: 'lap', lap: 3, bpm: null, firstBar: 3, lastBar: 6 },
     ] }]);
     const p = r.pieces.find((x) => x.piece === 'P')!;
     expect(p.runs).toEqual([
-      { date: '2026-11-19', at: 10, kind: 'lap', bpm: 72, wrong: 1, firstBar: 3, lastBar: 6 },
-      { date: '2026-11-19', at: 12, kind: 'pass', bpm: 80, wrong: 4, firstBar: 1, lastBar: 20 },
-      { date: '2026-11-19', at: 13, kind: 'keep', bpm: 60, wrong: 3, firstBar: 5, lastBar: 8 },
+      { date: '2026-11-19', at: 10, kind: 'lap', bpm: 72, wrong: 1, firstBar: 3, lastBar: 6, wrongBars: [4, 5] },
+      { date: '2026-11-19', at: 12, kind: 'pass', bpm: 80, wrong: 4, firstBar: 1, lastBar: 20, wrongBars: [] },
+      { date: '2026-11-19', at: 13, kind: 'keep', bpm: 60, wrong: 3, firstBar: 5, lastBar: 8, wrongBars: [] },
     ]);
     expect(p.laps).toBe(3);
   });
