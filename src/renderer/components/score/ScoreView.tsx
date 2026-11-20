@@ -612,7 +612,7 @@ export function ScoreView() {
   const liveSnapRef = useRef<SessionSnapshot | null>(null);
   // The snapshot a re-layout puts back, and the score last drawn (piece + xml) it must match.
   const relayoutSnapRef = useRef<SessionSnapshot | null>(null);
-  const loadedRef = useRef<{ pieceId: string; xml: string | undefined } | null>(null);
+  const loadedRef = useRef<{ pieceId: string; xml: string | undefined; layout: string } | null>(null);
   // #10134: the loop he had set when a fingering edit re-rendered the score.
   const resumeLoopRef = useRef<{ first: number; last: number } | null>(null);
   // The chord symbol in force where he is playing, the keys struck under it, and
@@ -796,6 +796,7 @@ export function ScoreView() {
   const missKind = useSettingsStore((s) => s.missKind);
   const backwardTargets = useSettingsStore((s) => s.backwardTargets);
   const pieceStars = useSettingsStore((s) => s.pieceStars);
+  const spotMerges = useSettingsStore((s) => s.spotMerges);
   const allSpots = useSettingsStore((s) => s.troubleSpots);
   const spotClean = useSettingsStore((s) => s.spotClean);
   const setBackwardTargets = useSettingsStore((s) => s.setBackwardTargets);
@@ -1753,14 +1754,23 @@ export function ScoreView() {
       // A whole-piece check (#6513) tops the open list up to AUTO_OPEN_CAP; a loop he set adds as before.
       const isWhole = range.first <= whole.first && range.last >= whole.last;
       const open = current.filter((s) => !s.ticked).length;
-      const { spots, added } = autoSpots(
+      const { spots, added, merged } = autoSpots(
         current, own(st.spotDismissed, title), bars, range, whole, Date.now(), localDay(), recent,
         isWhole ? Math.min(AUTO_MAX_PER_CHECK, AUTO_OPEN_CAP - open) : AUTO_MAX_PER_CHECK,
       );
-      if (!added.length) return;
+      if (!added.length && !merged.length) return;
       st.setSpots(title, spots);
-      showSpotTip(`Added: ${added.map(spanText).join(', ')}`);
-      reportEvent('spot', { added, auto: true });
+      // #6530: overlapping spots he hadn't started on became one 3-5 bar loop; logged so he can undo it.
+      if (merged.length) st.logMerges(title, merged);
+      const said = [
+        ...(added.length ? [`Added: ${added.map(spanText).join(', ')}`] : []),
+        ...merged.map((m) => `Joined ${m.from.length} spots into ${spanText(m.to)}`),
+      ];
+      showSpotTip(said.join(' · '));
+      reportEvent('spot', {
+        added, auto: true,
+        ...(merged.length ? { merged: merged.map((m) => ({ from: m.from.map(({ first, last }) => ({ first, last })), to: m.to })) } : {}),
+      });
     }, (err: unknown) => console.warn('[spots] rollup failed:', err));
   };
   const toggleOutward = () => {
@@ -2402,8 +2412,10 @@ export function ScoreView() {
     // Only when the last score drawn is this same piece with this same xml (a re-read file is not a re-layout).
     const live = liveSnapRef.current;
     const loaded = loadedRef.current;
+    // ...and only when the layout itself changed: the same piece pushed again starts fresh, as before.
+    const layoutKey = `${scoreLayout}/${everyBarNumbers}`;
     relayoutSnapRef.current = live && loaded && loaded.pieceId === piece.id && loaded.xml === drawnXml &&
-      live.pieceId === piece.id && resumeStepRef.current === null ? live : null;
+      loaded.layout !== layoutKey && live.pieceId === piece.id && resumeStepRef.current === null ? live : null;
     // #10262: off the sight-read piece. Back on a parked piece the drill returns (before the load:
     // the hand decides the steps); anywhere else the hand Sight-read chose doesn't follow him.
     const settings = useSettingsStore.getState();
@@ -2489,7 +2501,7 @@ export function ScoreView() {
         // A relaunch or parked-drill restore wins; a re-layout snapshot is used only for its own piece.
         const relaySnap = relayoutSnapRef.current?.pieceId === piece.id ? relayoutSnapRef.current : null;
         relayoutSnapRef.current = null;
-        loadedRef.current = { pieceId: piece.id, xml: drawnXml };
+        loadedRef.current = { pieceId: piece.id, xml: drawnXml, layout: `${scoreLayout}/${everyBarNumbers}` };
         const snap = restoreRef.current?.pieceId === piece.id ? restoreRef.current : (relaySnap ?? restoreRef.current);
         restoreRef.current = null;
         const relayout = snap !== null && snap === relaySnap;
@@ -3548,6 +3560,12 @@ export function ScoreView() {
   const openSpots = spotList.filter((sp) => !sp.ticked).length;
   // #6371: his starred ranges on this piece, shortest first.
   const starred = starsInOrder(starsOf(pieceStars, piece.label));
+  // #6530: the latest join of his spots, if its loop is still on the list as joined.
+  const lastMerge = (() => {
+    const list = own(spotMerges, piece.label);
+    const m = list[list.length - 1];
+    return m && pieceSpots.some((sp) => !sp.ticked && sp.first === m.to.first && sp.last === m.to.last) ? m : null;
+  })();
   const overallStarred = !!overall && starred.some((sp) => sp.first === overall.first && sp.last === overall.last);
   // #6513: stars and spots as one list by bar; a range that is both shows once. Ticked spots go last.
   const loopRows = (() => {
@@ -4431,6 +4449,20 @@ export function ScoreView() {
               {picking === 'off' && (
                 // #6513: one list of his loops: starred ranges and trouble spots together, by bar.
                 <Popover label={`Loops ${loopCount}`} testId="loops" btn={`${btn} px-1.5 py-0.5`}>
+                  {lastMerge && (
+                    <button
+                      data-stay
+                      onClick={() => {
+                        const undone = useSettingsStore.getState().undoLastMerge(piece.label);
+                        if (undone) reportEvent('spot', { unmerged: undone.to, restored: undone.from.length });
+                      }}
+                      className={btn}
+                      data-testid="spot-unmerge"
+                      title="Put back the separate spots this loop was joined from"
+                    >
+                      ↶ Undo join: {spanText(lastMerge.to)} back to {lastMerge.from.length} spots
+                    </button>
+                  )}
                   {overall && overall.last - overall.first < MAX_SPOT_BARS && !spotList.some((sp) => !sp.ticked && sp.first === overall.first && sp.last === overall.last) && (
                     <button onClick={() => putSpot(overall)} disabled={watching || keeping} className={btn} data-testid="spot-add">
                       + Add {spanText(overall)} as a spot

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { EYES_UP_START_MS, EyesUpMode } from '../engine/EyesUp';
 import { GRAZE_MS } from '../engine/ScoreFollower';
 import { starsOf, toggleSpan } from '../engine/OutwardChunk';
-import { removeSpot, SPOT_KEEP_DAYS, type Dismissed, type Spot } from '../engine/TroubleSpots';
+import { removeSpot, SPOT_KEEP_DAYS, undoMerge, type Dismissed, type Spot, type SpotMerge } from '../engine/TroubleSpots';
 import { persist } from 'zustand/middleware';
 import { Clef } from '../types/music';
 import { ExerciseType } from '../types/exercise';
@@ -43,6 +43,8 @@ interface SettingsState {
   /** #6460: trouble spots per piece (title), and spots he removed (so auto-add leaves them be). */
   troubleSpots: Record<string, Spot[]>;
   spotDismissed: Record<string, Dismissed[]>;
+  // #6530: auto spots the window rule merged, newest last (last 10 per piece), so a merge can be undone.
+  spotMerges: Record<string, SpotMerge[]>;
   /** #6460: clean loops alone AND clean passes in context it takes to clear a spot (Todd: 5). */
   spotClean: number;
   /** #5259: the piece list shows only favorites (and the piece on screen). */
@@ -146,6 +148,8 @@ interface SettingsState {
   setPieceLoop: (title: string, bars: { first: number; last: number }) => void;
   toggleStar: (title: string, bars: { first: number; last: number }) => void;
   setSpots: (title: string, spots: Spot[]) => void;
+  logMerges: (title: string, merges: SpotMerge[]) => void;
+  undoLastMerge: (title: string) => SpotMerge | null;
   dismissSpot: (title: string, span: { first: number; last: number }, keep?: boolean) => void;
   setKeepBpm: (title: string, bpm: number) => void;
   setFavoritesOnly: (on: boolean) => void;
@@ -164,7 +168,7 @@ export function localDay(now = new Date()): string {
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       clef: 'treble',
       exerciseType: 'note-identification',
       showKeyboard: true,
@@ -184,6 +188,7 @@ export const useSettingsStore = create<SettingsState>()(
       pieceStars: {},
       troubleSpots: {},
       spotDismissed: {},
+      spotMerges: {},
       spotClean: 5,
       favoritesOnly: false,
       trainerClef: 'treble',
@@ -271,6 +276,18 @@ export const useSettingsStore = create<SettingsState>()(
       toggleStar: (title, bars) =>
         set((s) => ({ pieceStars: { ...s.pieceStars, [title]: toggleSpan(starsOf(s.pieceStars, title), bars) } })),
       setSpots: (title, spots) => set((s) => ({ troubleSpots: { ...s.troubleSpots, [title]: spots } })),
+      logMerges: (title, merges) =>
+        set((s) => ({ spotMerges: { ...s.spotMerges, [title]: [...own<SpotMerge>(s.spotMerges, title), ...merges].slice(-10) } })),
+      undoLastMerge: (title) => {
+        const list = own<SpotMerge>(get().spotMerges, title);
+        const last = list[list.length - 1];
+        if (!last) return null;
+        set((s) => ({
+          troubleSpots: { ...s.troubleSpots, [title]: undoMerge(own(s.troubleSpots, title), last) },
+          spotMerges: { ...s.spotMerges, [title]: list.slice(0, -1) },
+        }));
+        return last;
+      },
       // keep: a ticked-off spot stays on show; only the misses before now stop it coming straight back.
       dismissSpot: (title, span, keep = false) =>
         set((s) => ({
