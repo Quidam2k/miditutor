@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useSettingsStore, type PrefKey } from '../../store/useSettingsStore';
 import { LessonNotes } from './LessonNotes';
 
-type Toggle = Exclude<PrefKey, 'grazeMs' | 'minVelocity' | 'trainingWheels' | 'eyesUp' | 'eyesUpMs' | 'missVolume' | 'missKind' | 'spotClean'>; // #6047, #5799
+type Toggle = Exclude<PrefKey, 'grazeMs' | 'minVelocity' | 'trainingWheels' | 'eyesUp' | 'eyesUpMs' | 'missVolume' | 'missKind' | 'spotClean' | 'climbReaction'>; // #6047, #5799
 
 function Check({ k, label, title }: { k: Toggle; label: string; title: string }) {
   const on = useSettingsStore((s) => s[k]);
@@ -100,6 +100,27 @@ export function PracticeSettings({ btn }: { btn: string }) {
             k="keepStepUp"
             label="Speed up 4 after a good lap"
             title="After a Keep going lap with 9 in 10 notes right and few wrong ones, the next lap goes 4 clicks faster (JP: go up in 4s), never past the piece's target tempo"
+          />
+          <label
+            className="flex items-center justify-between gap-3"
+            title="Tempo climb: how quickly the tempo moves. Gentle: up 2 after 3 clean laps and a minute, down after 4+ misses. Normal: up 4 after 2 clean laps and 45 s, down after 3+ misses. Quick: up 6 after 1 clean lap and 30 s, down after 2+ misses."
+          >
+            Climb reacts
+            <select
+              value={s.climbReaction}
+              onChange={(e) => s.setPrefs({ climbReaction: e.target.value as typeof s.climbReaction })}
+              className="rounded bg-gray-800 px-1 text-gray-100"
+              data-testid="climbReaction"
+            >
+              <option value="gentle">Gentle</option>
+              <option value="normal">Normal</option>
+              <option value="quick">Quick</option>
+            </select>
+          </label>
+          <Check
+            k="rolandClick"
+            label="Roland's own metronome (experimental)"
+            title="Off by default. Keep going sets your Roland's built-in metronome to the lap's tempo over USB and turns it on, instead of the app's click (the app still counts you in). Only the metronome's on/off and tempo are ever sent. If no Roland is found, the app's click plays."
           />
           <div className="mt-1 border-t border-gray-700 pt-2 text-xs uppercase tracking-wide text-gray-500">Trouble spots</div>
           <Num

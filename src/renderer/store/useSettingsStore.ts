@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { Reaction } from '../engine/TempoClimb';
 import { EYES_UP_START_MS, EyesUpMode } from '../engine/EyesUp';
 import { GRAZE_MS } from '../engine/ScoreFollower';
 import { starsOf, toggleSpan } from '../engine/OutwardChunk';
@@ -94,6 +95,11 @@ interface SettingsState {
   /** #5652 K Keep going: a click on every beat, and +4 after a clean lap (JP 9/11). */
   keepClick: boolean;
   keepStepUp: boolean;
+  /** #6530 C tempo climb: on for Keep going, how fast it reacts, the target per piece, and the Roland's own click (opt-in). */
+  climbOn: boolean;
+  climbReaction: Reaction;
+  climbTargets: Record<string, number>;
+  rolandClick: boolean;
   /** Keep going's tempo per piece, so he picks up where he left off. */
   keepBpms: Record<string, number>;
   /** #5521 clean-run celebrations, each on its own: a ding per clean lap, a glow wave, a finale. */
@@ -152,6 +158,7 @@ interface SettingsState {
   undoLastMerge: (title: string) => SpotMerge | null;
   dismissSpot: (title: string, span: { first: number; last: number }, keep?: boolean) => void;
   setKeepBpm: (title: string, bpm: number) => void;
+  setClimbTarget: (title: string, bpm: number) => void;
   setFavoritesOnly: (on: boolean) => void;
   toggleFavoritePiece: (title: string) => void;
   setPieceVersion: (slug: string, file: string) => void;
@@ -159,7 +166,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'missKind' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder' | 'spotClean';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'climbOn' | 'climbReaction' | 'rolandClick' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'missKind' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder' | 'spotClean';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -215,6 +222,10 @@ export const useSettingsStore = create<SettingsState>()(
       readAhead: false,
       keepClick: true,
       keepStepUp: true,
+      climbOn: false,
+      climbReaction: 'normal',
+      climbTargets: {},
+      rolandClick: false,
       keepBpms: {},
       celebrateChime: true,
       celebrateWave: false,
@@ -298,6 +309,7 @@ export const useSettingsStore = create<SettingsState>()(
           },
         })),
       setKeepBpm: (title, bpm) => set((s) => ({ keepBpms: { ...s.keepBpms, [title]: bpm } })),
+      setClimbTarget: (title, bpm) => set((s) => ({ climbTargets: { ...s.climbTargets, [title]: bpm } })),
       setFavoritesOnly: (on) => set({ favoritesOnly: on }),
       toggleFavoritePiece: (title) =>
         set((s) => ({

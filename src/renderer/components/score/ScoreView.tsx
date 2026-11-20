@@ -11,7 +11,9 @@ import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { MISS_KINDS, MISS_KIND_LABEL, MISS_VOLUME_MAX, initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen, releaseChords } from '../../audio/AudioEngine';
 import { emitRep } from '../../store/useRepStore';
 import { overrunNote, startOverrun, type Overrun } from '../../engine/Overrun';
-import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
+import { beatMs, clampBpm, closeLap, countInBeats, keepNote, lapBeats, lapEndMs, lapLabel, startKeep, stepAt, type KeepRun } from '../../engine/KeepGoing';
+import { climbLabel, climbLap, climbPercent, parseTempo, startClimb, type Climb } from '../../engine/TempoClimb';
+import { rolandOffNow, rolandSend } from '../../engine/RolandMetronome';
 import { markedTempo, playedTempo } from '../../engine/Tempo';
 import { PianoKeyboard88, keyCenterPct } from '../homework/PianoKeyboard88';
 import { MiniStaff, MiniStaffPart, miniStaffPlacements, miniDuration, MINI_STAFF_BAND_PX } from './MiniStaff';
@@ -668,7 +670,21 @@ export function ScoreView() {
   const [blanked, setBlanked] = useState(0);
   // Keep going (#5652 K): the cursor runs on the beat; his notes are tallied, nothing waits.
   const [keep, setKeep] = useState<{ bpm: number; lap: number; count: number; hit: number; wrong: number } | null>(null);
-  const keepRef = useRef<{ run: KeepRun; timer: number; beat: number; step: number } | null>(null);
+  // #6530 C: climb = the tempo climb riding on this run; roland = the piano's own metronome is clicking.
+  const keepRef = useRef<{
+    run: KeepRun; timer: number; beat: number; step: number;
+    climb: Climb | null; climbKey: string; roland: boolean; rolandOn: boolean;
+  } | null>(null);
+  const keepStartingRef = useRef(false);
+  const [climb, setClimb] = useState<Climb | null>(null);
+  const climbCarryRef = useRef<{ key: string; climb: Climb } | null>(null);
+  // A reload or quit mid-run must not leave the piano clicking.
+  useEffect(() => {
+    const off = () => { if (keepRef.current?.rolandOn) rolandOffNow(); };
+    window.addEventListener('beforeunload', off);
+    return () => window.removeEventListener('beforeunload', off);
+  }, []);
+  const climbOn = useSettingsStore((s) => s.climbOn);
   const [keepBpm, setKeepBpm] = useState(60);
   const [keepLast, setKeepLast] = useState<string | null>(null);
   const keeping = keep !== null;
@@ -1052,6 +1068,20 @@ export function ScoreView() {
   const markedBpm = useMemo(() => piece.targetBpm ?? markedTempo(piece.xml), [piece.targetBpm, piece.xml]);
   const markedBpmRef = useRef(markedBpm);
   markedBpmRef.current = markedBpm;
+  // #6530 C: a tempo JP set for this piece in his homework notes ("♩ = 80"), the climb's default target.
+  const [homeworkBpm, setHomeworkBpm] = useState<number | null>(null);
+  useEffect(() => {
+    let live = true;
+    setHomeworkBpm(null);
+    const file = piece.id.startsWith('file:') ? piece.id.slice(5) : null;
+    if (!file) return;
+    void window.tutorBridge?.getHomework?.().then((hw) => {
+      const item = hw?.items.find((i) => i.kind === 'piece' && (i.file === file || i.files?.includes(file)));
+      if (live && item) setHomeworkBpm(parseTempo([item.label, ...(item.notes ?? [])].join(' ')));
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [piece.id]);
+  const climbTarget = useSettingsStore((s) => s.climbTargets[piece.label]) ?? homeworkBpm ?? markedBpm ?? clampBpm(keepBpm + 20);
   // JP 10/9 "Key first": a new piece (fresh tune, sight-read pick) opens with its key signature's
   // sharps or flats to play before the score takes notes. Armed once per piece.
   const [keyGateNow, setKeyGateState] = useState<KeyGate | null>(null);
@@ -1130,6 +1160,8 @@ export function ScoreView() {
       paceBpm: pace,
       loop: loopBars ? { firstBar: loopBars.first, lastBar: loopBars.last, lap, lastLapBpm: lapBpm } : null,
       markedBpm,
+      climb: climb ? { ...climb, percent: climbPercent(climb) } : null,
+      climbTarget,
       backwards: chunk
         ? { firstBar: chunk.first, lastBar: chunk.last, startBar: chunk.start, endBar: loopEnd(chunk), outward: chunk.out === true,
             clean: chunk.clean, need: chunk.need, done: chunk.done, reached: reached !== null }
@@ -1166,7 +1198,7 @@ export function ScoreView() {
       // #5652 C: Read ahead on, and how many note groups are blanked at the cursor now.
       readAhead: readAhead ? { blanked } : null,
     });
-  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm]);
+  }, [pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1402,8 +1434,10 @@ export function ScoreView() {
   const restart = useCallback(() => {
     if (keepRef.current) {
       window.clearInterval(keepRef.current.timer);
+      if (keepRef.current.rolandOn) void rolandSend({ on: 0 });
       keepRef.current = null;
       setKeep(null);
+      setClimb(null);
       reportEvent('keep', { on: false });
     }
     watchRunRef.current++;
@@ -1547,8 +1581,10 @@ export function ScoreView() {
     setKeepLast(null);
     return () => {
       if (keepRef.current) window.clearInterval(keepRef.current.timer);
+      if (keepRef.current?.rolandOn) void rolandSend({ on: 0 });
       keepRef.current = null;
       setKeep(null);
+      setClimb(null);
     };
   }, [piece.id, drawnXml]);
 
@@ -1557,6 +1593,16 @@ export function ScoreView() {
       restart();
       return;
     }
+    // One start at a time: a second click while audio or the Roland is still answering does nothing.
+    if (keepStartingRef.current) return;
+    keepStartingRef.current = true;
+    try {
+      await beginKeep();
+    } finally {
+      keepStartingRef.current = false;
+    }
+  };
+  const beginKeep = async () => {
     const f = followerRef.current;
     if (!f?.steps.length || status !== 'ready' || watching || blockRef.current || keyGateRef.current) return;
     try {
@@ -1571,11 +1617,25 @@ export function ScoreView() {
     const looping = !!f.range;
     const first = f.range?.first ?? 0;
     const last = f.range?.last ?? steps.length - 1;
-    const bpm = clampBpm(keepBpm);
+    const startPrefs = useSettingsStore.getState();
+    // #6530 C: a climb starts from his last Keep going tempo (or 70% of the target) and aims for the target.
+    // The same piece and bars carry on the climb they had (a whole-piece run ends after one pass).
+    const climbKey = `${pieceLabelRef.current}#${first}-${last}`;
+    const carry = climbCarryRef.current;
+    const climbing = !startPrefs.climbOn ? null
+      : carry && carry.key === climbKey && carry.climb.target === clampBpm(climbTarget) ? carry.climb
+      : startClimb(climbTarget, startPrefs.keepBpms[pieceLabelRef.current] ?? null);
+    const bpm = climbing ? climbing.bpm : clampBpm(keepBpm);
     const count = countInBeats(steps, first);
+    // The Roland's own click (opt-in): its tempo now, switched on at the first beat after the count-in.
+    // No Roland found = the app's click.
+    const roland = startPrefs.rolandClick && await rolandSend({ tempo: bpm });
+    if (followerRef.current !== f || keepRef.current || useMidiStore.getState().pausedAt !== null) return;
     const run = startKeep(first, last, bpm, Date.now() + count * beatMs(bpm));
-    keepRef.current = { run, timer: 0, beat: Number.NEGATIVE_INFINITY, step: -2 };
-    setKeepLast(null);
+    keepRef.current = { run, timer: 0, beat: Number.NEGATIVE_INFINITY, step: -2, climb: climbing, roland, rolandOn: false, climbKey };
+    setClimb(climbing);
+    setKeepLast(startPrefs.rolandClick && !roland ? "Couldn't reach the Roland's metronome: the app is clicking." : null);
+    if (climbing) reportEvent('climb', { on: true, target: climbing.target, start: climbing.start, reaction: startPrefs.climbReaction, roland });
     setKeep({ bpm, lap: 1, count, hit: 0, wrong: 0 });
     moveCursorTo(first);
     setMeasure(steps[first].measure);
@@ -1590,9 +1650,27 @@ export function ScoreView() {
       const r = k.run;
       const prefs = useSettingsStore.getState();
       if (t >= lapEndMs(r, steps)) {
-        const lap = closeLap(r, steps, prefs.keepStepUp, piece.targetBpm);
+        const lap = closeLap(r, steps, prefs.keepStepUp && !k.climb, piece.targetBpm);
         emitRep('end'); // #6122
-        setKeepLast(lapLabel(lap));
+        if (k.climb) {
+          // #6530 C: the climb, not the +4 rule, sets the next lap's tempo.
+          const sec = (lapBeats(steps, r.first, r.last) * beatMs(lap.bpm)) / 1000;
+          const { climb: next, change } = climbLap(k.climb, lap, sec, prefs.climbReaction);
+          k.climb = next;
+          climbCarryRef.current = { key: k.climbKey, climb: next };
+          r.bpm = next.bpm;
+          lap.nextBpm = next.bpm;
+          setClimb(next);
+          setKeepLast(`${lapLabel({ ...lap, nextBpm: lap.bpm })} ${climbLabel(next, change)}`);
+          reportEvent('climb', { change, bpm: next.bpm, target: next.target, lap: lap.lap, missed: lap.missed, wrong: lap.wrong });
+          if (change === 'reached') {
+            // #5521's glow wave three times and the chime.
+            if (prefs.celebrateChime) void playLapChime();
+            startWave(r.first, r.last, 0.7, 3);
+            reportEvent('celebrate', { what: 'climb', target: next.target });
+          }
+        } else setKeepLast(lapLabel(lap));
+        if (k.roland && lap.nextBpm !== lap.bpm) void rolandSend({ tempo: lap.nextBpm });
         reportEvent('keep', { ...lap });
         if (lap.nextBpm !== lap.bpm) {
           setKeepBpm(lap.nextBpm);
@@ -1609,8 +1687,13 @@ export function ScoreView() {
       const beat = Math.floor((t - r.startMs) / beatMs(r.bpm));
       if (beat !== k.beat) {
         k.beat = beat;
+        if (k.roland && !k.rolandOn && beat >= 0) {
+          k.rolandOn = true;
+          void rolandSend({ on: 1 });
+        }
         const down = beat < 0 ? beat === -count : beat % count === 0;
-        if (prefs.keepClick) playNote(down ? 96 : 91, '32n');
+        // With the Roland clicking, the app only counts in (its beat can't be lined up with ours).
+        if (prefs.keepClick && !(k.roland && beat >= 0)) playNote(down ? 96 : 91, '32n');
         setKeep((s) => s && { ...s, count: beat < 0 ? -beat : 0 });
       }
       const i = stepAt(r, steps, t);
@@ -3824,6 +3907,52 @@ export function ScoreView() {
               className="w-14 rounded bg-gray-800 px-1 text-sm text-gray-100 disabled:opacity-50"
               data-testid="keep-bpm"
             />
+          </span>
+          {/* #6530 C: tempo climb: Keep going starts lower and works up to the target as his laps come clean. */}
+          <span
+            className="flex items-center gap-1 text-xs text-gray-400"
+            title="Climb: Keep going starts at your last tempo here (or 70% of the target) and goes up after clean laps, down after rough ones, until you reach the target. The target starts as your teacher's homework tempo or the score's marked tempo. How fast it reacts is in Practice settings."
+          >
+            <label className="flex items-center gap-1">
+              <input
+                type="checkbox"
+                checked={climbOn}
+                disabled={keeping}
+                onChange={(e) => useSettingsStore.getState().setPrefs({ climbOn: e.target.checked })}
+                data-testid="climb-on"
+              />
+              Climb to ♩
+            </label>
+            <input
+              type="number"
+              min={20}
+              max={240}
+              value={climbTarget}
+              disabled={keeping || !climbOn}
+              onChange={(e) => useSettingsStore.getState().setClimbTarget(piece.label, Number(e.target.value) || climbTarget)}
+              onBlur={() => {
+                // Only a target he typed is saved, so a later homework tempo still wins over a mere look.
+                const st = useSettingsStore.getState();
+                if (st.climbTargets[piece.label] !== undefined) st.setClimbTarget(piece.label, clampBpm(climbTarget));
+              }}
+              className="w-14 rounded bg-gray-800 px-1 text-sm text-gray-100 disabled:opacity-50"
+              data-testid="climb-target"
+            />
+            {climb && (
+              <span className="flex items-center gap-1" data-testid="climb-thermo" title={`Started at ♩ = ${climb.start}; now ${climb.bpm}; target ${climb.target}`}>
+                <span className="relative h-8 w-2 overflow-hidden rounded-full bg-gray-700">
+                  <span
+                    className={`absolute bottom-0 left-0 w-full transition-all ${climb.reached ? 'bg-emerald-400' : 'bg-amber-400'}`}
+                    style={{ height: `${climbPercent(climb)}%` }}
+                  />
+                </span>
+                <span className="flex flex-col leading-none">
+                  <span className="text-[10px] text-gray-500">{climb.target}</span>
+                  <span className="font-mono text-amber-200">{climb.bpm}</span>
+                  <span className="text-[10px] text-gray-500">{climb.start}</span>
+                </span>
+              </span>
+            )}
           </span>
       </>
     ),

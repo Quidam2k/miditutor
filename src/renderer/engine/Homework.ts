@@ -18,6 +18,8 @@ export interface HomeworkItem {
   daily_goal?: number | null;
   title?: string;
   file?: string | null;
+  /** Every library file the title matched, when more than one did (file = the first). */
+  files?: string[];
   url?: string | null;
 }
 
