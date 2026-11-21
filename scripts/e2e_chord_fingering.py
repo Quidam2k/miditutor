@@ -6,7 +6,8 @@ Start a hidden test app with a scratch folder holding a COPY of the score, never
 then, with a Python that has Playwright:
     python scripts/e2e_chord_fingering.py <copy>/sorcerers-apprentice.musicxml
 
-Uses bar 25's left-hand chord (D-flat 3 over B 2), which starts with Db3 = 3 and B2 empty.
+Uses bar 25's left-hand chord (D-flat 3 over B 2). It first sets the copy's bar 25 to Db3 = 3 and B2 empty
+(prepare_copy), because the library score now has B2 = 4; it refuses to touch a real score.
 """
 from __future__ import annotations
 
@@ -43,6 +44,37 @@ def bar_notes(path: Path, bar: int) -> dict[tuple[str, str], str | None]:
         finger = re.search(r"<fingering[^>]*>(\d)", note)
         out[(step + (alter.group(1) if alter else ""), octave)] = finger.group(1) if finger else None
     return out
+
+
+def prepare_copy(path: Path) -> None:
+    """Put bar 25 in the start state the checks assume: Db3 = 3, B2 empty (#6654 fixture).
+
+    The library score has since gained B2 = 4, so a plain copy no longer starts empty.
+    Only ever touches a scratch copy, never his library or a MidiTutor Pieces folder."""
+    real = str(path.resolve()).replace("\\", "/").lower()
+    if "/personal/piano/library" in real or "miditutor pieces" in real:
+        sys.exit(f"refusing to edit {path}: that is a real score, pass a scratch copy")
+    xml = path.read_text(encoding="utf-8")
+    m = re.search(r'<measure[^>]*number="25".*?</measure>', xml, re.S)
+
+    def fix(note: re.Match) -> str:
+        n = note.group(0)
+        if "<rest" in n:
+            return n
+        step = re.search(r"<step>(.)</step>", n).group(1)
+        alter = re.search(r"<alter>(-?\d)</alter>", n)
+        octave = re.search(r"<octave>(\d)", n).group(1)
+        key = (step + (alter.group(1) if alter else ""), octave)
+        if key == ("B", "2"):
+            n = re.sub(r"\s*<fingering[^>]*>\d</fingering>", "", n)
+            n = re.sub(r"\s*<technical>\s*</technical>", "", n)
+            n = re.sub(r"\s*<notations>\s*</notations>", "", n)
+        elif key == ("D-1", "3"):
+            n = re.sub(r"(<fingering[^>]*>)\d(</fingering>)", r"\g<1>3\g<2>", n)
+        return n
+
+    measure = re.sub(r"<note\b.*?</note>", fix, m.group(0), flags=re.S)
+    path.write_text(xml[: m.start()] + measure + xml[m.end():], encoding="utf-8")
 
 
 def wait_saved(page, path: Path, want, label):
@@ -102,6 +134,7 @@ def chord_at_cursor(page):
 
 def main() -> int:
     score = Path(sys.argv[1])
+    prepare_copy(score)
     before = score.read_text(encoding="utf-8").count("<fingering")
     start = bar_notes(score, 25)
     check(start[("D-1", "3")] == "3" and start[("B", "2")] is None, "copy starts Db3 = 3, B2 empty", start)
@@ -113,6 +146,7 @@ def main() -> int:
         page.get_by_role("button", name="Score", exact=True).click()
         page.wait_for_selector("[data-testid=loop-bars]", timeout=30000)
         tid(page, "score-wheel-fingers").check()  # #5630: off by default
+        tid(page, "wheel-steps").check()  # #10259 checks walk the note-a-notch wheel (#6369 made it opt-in)
         page.wait_for_timeout(1500)
         sel = page.locator("select").first
         value = sel.evaluate(
