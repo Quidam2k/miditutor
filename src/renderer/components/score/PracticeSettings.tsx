@@ -44,7 +44,7 @@ export function PracticeSettings({ btn }: { btn: string }) {
   const s = useSettingsStore();
   return (
     <div className="relative">
-      <button onClick={() => setOpen(!open)} className={btn} data-testid="practice-settings">
+      <button title="Open or close the practice settings." onClick={() => setOpen(!open)} className={btn} data-testid="practice-settings">
         ⚙ Practice
       </button>
       {notes && <LessonNotes onClose={() => setNotes(false)} />}

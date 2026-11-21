@@ -66,7 +66,7 @@ export function HomeworkExercise() {
         const piece = item.kind === 'piece' && !!item.file;
         const playable = drill || piece;
         return (
-          <button
+          <button title="Start practising this homework item. A piece opens in the Score tab."
             key={item.id}
             disabled={!playable}
             data-testid={piece ? 'homework-piece' : undefined}
@@ -100,7 +100,7 @@ export function HomeworkExercise() {
 function ItemDrill({ item, onBack }: { item: HomeworkItem; onBack: () => void }) {
   return (
     <div className="flex flex-col items-center gap-4 w-full">
-      <button onClick={onBack} className="self-start text-sm text-indigo-300 hover:text-indigo-200">
+      <button title="Go back to the list of homework items." onClick={onBack} className="self-start text-sm text-indigo-300 hover:text-indigo-200">
         ← Homework list
       </button>
       {item.kind === 'triads' ? <TriadDrill item={item} /> : <SequenceDrill item={item} />}
@@ -123,7 +123,7 @@ function SequenceDrill({ item }: { item: HomeworkItem }) {
             {item.types?.length ? 'Scale type:' : "JP's note doesn't say which minor. Scale type:"}
           </span>
           {choices.map((c) => (
-            <button
+            <button title="Practise the scale in this form."
               key={c}
               onClick={() => setType(c)}
               className={`px-3 py-1 rounded-md text-sm font-medium capitalize ${
@@ -246,7 +246,7 @@ function SequenceRun({ item, offsets: initial, title, type }: {
         ))}
       </div>
       {seq.mistakes > 0 && <p className="text-sm text-gray-400">Wrong keys this hand: {seq.mistakes}</p>}
-      <button onClick={restart} data-testid="scale-restart" className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-sm text-gray-100">
+      <button title="Start this exercise again from the beginning." onClick={restart} data-testid="scale-restart" className="px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-sm text-gray-100">
         Restart
       </button>
       <div className="w-full max-w-5xl">

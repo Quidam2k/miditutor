@@ -177,7 +177,7 @@ export function IntervalExercise() {
           JP's interval set: minor 2nd up to the octave. Two notes appear on the staff; play both
           (together or one after the other){intervalNameIt ? ' and pick its name' : ''}. Goal: {DAILY_GOAL} right today.
         </p>
-        <button
+        <button title="Begin the interval practice."
           onClick={startExercises}
           // Nothing is asked before the record is read, or a save would overwrite it with one answer.
           disabled={mine === null}

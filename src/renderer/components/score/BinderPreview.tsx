@@ -31,7 +31,7 @@ export function BinderPreview({ data, busy, onPrint, onSavePdf, onCancel }: {
           {data.pages} page{data.pages === 1 ? '' : 's'}, {data.pages * 2} sides, two-sided long edge
         </span>
         <span className="flex-1" />
-        <button
+        <button title="Print these pages for your binder now."
           type="button"
           onClick={onPrint}
           disabled={busy}
@@ -52,7 +52,7 @@ export function BinderPreview({ data, busy, onPrint, onSavePdf, onCancel }: {
             Save as PDF
           </button>
         )}
-        <button
+        <button title="Close this preview without printing."
           type="button"
           onClick={onCancel}
           disabled={busy}

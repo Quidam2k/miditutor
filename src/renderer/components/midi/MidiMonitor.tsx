@@ -63,7 +63,7 @@ export function MidiMonitor() {
           <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-400">
             Note log
           </h2>
-          <button
+          <button title="Empty the list of notes you have played."
             onClick={clearLog}
             className="rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-400 hover:bg-gray-700"
           >

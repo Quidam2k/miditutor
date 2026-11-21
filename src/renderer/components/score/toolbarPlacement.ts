@@ -25,7 +25,6 @@ export const PLACEMENT = {
   bare: 'more',
   handZones: 'more',
   chordMoves: 'more',
-  openPiece: 'more',
   trainingWheels: 'more',
   miniStaff: 'more',
   readAhead: 'more',

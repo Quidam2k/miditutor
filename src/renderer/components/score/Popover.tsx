@@ -60,7 +60,7 @@ export function Popover({ label, badge, testId, btn, wide, onOpenChange, childre
 
   return (
     <div ref={ref} className="relative">
-      <button
+      <button title="Open or close this menu."
         type="button"
         data-testid={testId}
         aria-expanded={open}

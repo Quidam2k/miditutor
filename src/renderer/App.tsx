@@ -95,7 +95,7 @@ export function App() {
           </h1>
           <nav className="flex items-center gap-1">
             {tabs.map((t) => (
-              <button
+              <button title="Switch to this screen."
                 key={t.id}
                 onClick={() => go(t.id)}
                 className={`rounded-md px-3 py-1 text-sm font-medium transition-colors ${

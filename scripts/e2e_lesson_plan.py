@@ -31,16 +31,24 @@ def spans(lesson):
     return [(s["first"], s["last"], s["need"]) for s in (lesson or {}).get("steps") or []]
 
 
+def lesson_btn(page):
+    """#6655: the toolbar Lesson plan button is gone; the Loops menu row is the one way in."""
+    if not page.get_by_test_id("loops-panel").is_visible():
+        page.get_by_test_id("loops").click()
+        time.sleep(0.3)
+    return page.get_by_test_id("lesson-plan-menu")
+
+
 def full_run(page):
     load("Lesson plan (e2e)", 10)
     set_loop(1, 10)
-    check("button off before 5 laps", page.get_by_test_id("lesson-plan").is_disabled() and not screen().get("lessonReady"))
+    check("button off before 5 laps", lesson_btn(page).is_disabled() and not screen().get("lessonReady"))
     for _ in range(5):
         lap(range(1, 11), wrong_in=(4, 9))
     time.sleep(0.5)
-    check("button on after 5 laps", bool(screen().get("lessonReady")) and page.get_by_test_id("lesson-plan").is_enabled())
+    check("button on after 5 laps", bool(screen().get("lessonReady")) and lesson_btn(page).is_enabled())
     seq = tc.state()["eventSeq"]
-    page.get_by_test_id("lesson-plan").click()
+    lesson_btn(page).click()
     time.sleep(1)
     lesson = screen().get("lesson")
     print("plan:", spans(lesson))
@@ -78,7 +86,7 @@ def stop_run(page):
         lap(range(1, 5), wrong_in=(2,))
     time.sleep(3)  # let the every-5-laps spot check land before the snapshot
     before = screen().get("spots")
-    page.get_by_test_id("lesson-plan").click()
+    lesson_btn(page).click()
     time.sleep(1)
     lesson = screen().get("lesson")
     print("plan:", spans(lesson), "spots before:", before)
@@ -87,7 +95,7 @@ def stop_run(page):
     lap(range(1, 4), wrong_in=(2,))
     time.sleep(0.5)
     seq = tc.state()["eventSeq"]
-    page.get_by_test_id("lesson-plan").click()  # Stop lesson plan
+    lesson_btn(page).click()  # Stop lesson plan
     time.sleep(1)
     check("Stop -> his loop 1-4", loop_now() == (1, 4) and screen().get("lesson") is None)
     check("Stop logged", any(e.get("on") is False and e.get("why") == "button" for e in events_since(seq, "lesson")))
@@ -123,7 +131,7 @@ def backwards_run(page):
     for _ in range(5):
         lap(range(1, 5), wrong_in=(2,))
     time.sleep(0.5)
-    page.get_by_test_id("lesson-plan").click()
+    lesson_btn(page).click()
     time.sleep(1)
     check("plan on (looping 1-3)", screen().get("lesson") is not None and loop_now() == (1, 3))
     seq = tc.state()["eventSeq"]

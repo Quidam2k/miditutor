@@ -74,7 +74,7 @@ def main() -> int:
         time.sleep(0.5)
         page.locator("[data-testid=report-bar]").first.click()
         time.sleep(0.8)
-        check(page.locator("[data-testid=clear-loop]").count() == 1, "clicking the bar loops it")
+        check(page.locator("[data-testid=loop-tools]").count() == 1, "clicking the bar loops it")  # #6655: loop tools show with a loop
         page.locator("[data-testid=practice-report]").click()
         tc.request("DELETE", "/loop")
 

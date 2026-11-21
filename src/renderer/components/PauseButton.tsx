@@ -33,7 +33,7 @@ export function PauseBanner() {
       <span>
         ⏸ Paused: what you play is ignored (no mistakes, no sounds, no stats). It lets go by itself after {PAUSE_MAX_MS / 60000} minutes, or when you change screen or piece or press Restart.
       </span>
-      <button onClick={() => setPaused(false)} className="rounded bg-amber-500 px-2 py-0.5 font-medium text-black" data-testid="pause-resume">
+      <button title="Stop the pause now: the app listens to your playing again." onClick={() => setPaused(false)} className="rounded bg-amber-500 px-2 py-0.5 font-medium text-black" data-testid="pause-resume">
         Resume
       </button>
     </div>

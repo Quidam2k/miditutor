@@ -20,7 +20,7 @@ export class ScoreErrorBoundary extends Component<{ children: ReactNode }, { err
     return (
       <div className="mx-auto max-w-xl rounded border border-red-700 bg-red-950/40 p-4 text-sm text-red-200" data-testid="score-draw-error">
         <p>This score couldn&apos;t be drawn: {error.message}</p>
-        <button
+        <button title="Try drawing the score again."
           onClick={() => this.setState({ error: null })}
           className="mt-3 rounded bg-gray-700 px-3 py-1 text-gray-100 hover:bg-gray-600"
         >

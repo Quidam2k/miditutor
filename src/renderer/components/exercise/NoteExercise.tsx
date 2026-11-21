@@ -463,7 +463,7 @@ export function NoteExercise() {
             );
           })}
           {(mixUps.length > 0 || drilling) && (
-            <button
+            <button title="Practise only the notes you mix up, or go back to practising all notes."
               onClick={toggleDrill}
               data-testid="note-mixup-drill"
               className="mt-2 text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-100"
@@ -475,7 +475,7 @@ export function NoteExercise() {
       </div>
 
       {slowest.length > 0 && (
-        <button onClick={resetStats} className="text-xs text-gray-500 hover:text-gray-300 underline">
+        <button title="Clear your saved note timings and start counting again from zero." onClick={resetStats} className="text-xs text-gray-500 hover:text-gray-300 underline">
           Reset stats
         </button>
       )}

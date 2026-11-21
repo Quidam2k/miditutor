@@ -130,7 +130,7 @@ export function MixBuilder({ title, plan, easyXml, harderXml, easyTrust, harderT
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {sources.map(({ key, label, xml }) => (
-                  <button
+                  <button title="Use this version for these bars in your own mix."
                     key={key}
                     type="button"
                     data-section={k}
@@ -156,10 +156,10 @@ export function MixBuilder({ title, plan, easyXml, harderXml, easyTrust, harderT
           </p>
           {error && <p className="text-sm text-red-400">{error}</p>}
           <div className="flex justify-end gap-2 pt-1">
-            <button type="button" onClick={onClose} className="rounded-md bg-gray-800 px-3 py-1 text-sm hover:bg-gray-700">
+            <button title="Close without saving your mix." type="button" onClick={onClose} className="rounded-md bg-gray-800 px-3 py-1 text-sm hover:bg-gray-700">
               Cancel
             </button>
-            <button
+            <button title="Save your mix of easy and harder bars."
               type="button"
               onClick={save}
               disabled={saving}

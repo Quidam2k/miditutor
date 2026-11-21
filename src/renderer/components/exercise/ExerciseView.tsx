@@ -132,7 +132,7 @@ function ToggleGroup({
     <div className="flex items-center gap-1.5">
       <span className="text-xs text-gray-500 uppercase tracking-wider mr-1">{label}</span>
       {options.map((opt) => (
-        <button
+        <button title="Choose this option for the exercise."
           key={opt.value}
           onClick={() => onChange(opt.value)}
           className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${

@@ -54,15 +54,11 @@ def piece_events(seq):
 
 
 def click_open(page):
-    btn = page.get_by_role("button", name="Open piece…")
-    if not btn.first.is_visible():
-        page.get_by_test_id("menu-more").click()
-        page.get_by_test_id("menu-more-panel").wait_for(timeout=5000)
-        btn = page.get_by_role("button", name="Open piece…")
+    # #6655: "Open piece..." is now the piece list's last entry, "Add from file...".
     try:
-        btn.first.click(no_wait_after=True, timeout=3000)
-    except Exception as e:  # modal dialog may stall the click ack
-        print(f"INFO: click returned: {type(e).__name__}")
+        page.get_by_test_id("piece-select").select_option("__add-from-file", no_wait_after=True, timeout=3000)
+    except Exception as e:  # modal dialog may stall the ack
+        print(f"INFO: select returned: {type(e).__name__}")
 
 
 def find_dialog(Desktop):

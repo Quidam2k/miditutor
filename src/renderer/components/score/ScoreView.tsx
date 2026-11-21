@@ -107,6 +107,8 @@ interface Piece {
   group?: PieceGroupRef;
 }
 
+/** #6655: the piece list's last entry; picking it opens the file picker instead of changing piece. */
+const ADD_FROM_FILE = '__add-from-file';
 // One order for the piece list (#9611): alphabetical by the shown title, ignoring
 // case and leading punctuation ('O Sole Mio files under O); "The" is not stripped.
 const sortKey = (label: string) => label.replace(/^[^\p{L}\p{N}]+/u, '');
@@ -686,6 +688,7 @@ export function ScoreView() {
   const handRef = useRef(hand);
   const [staffCount, setStaffCount] = useState(0);
   const [openError, setOpenError] = useState('');
+  const arrowPickRef = useRef(false); // #6655: the piece list was last changed by an arrow key
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [following, setFollowing] = useState(true);
   const [watching, setWatching] = useState(false);
@@ -4291,7 +4294,7 @@ export function ScoreView() {
     loopBars: !!loopBars || picking !== 'off', watch: watching, keepGoing: keeping, missSound,
     simple: simplePieces.includes(piece.label), bare: !!bareNow, handZones: zonesOn, chordMoves: chordsOn,
     trainingWheels: showKeyboard && trainingWheels, miniStaff: showKeyboard && miniStaff, readAhead,
-    scoreWheelFingers, keyWheelFingers, everyBarNumbers: !strip && everyBarNumbers, bigNotes: strip && stripFitInk,
+    scoreWheelFingers, keyWheelFingers: showKeyboard && keyWheelFingers, everyBarNumbers: !strip && everyBarNumbers, bigNotes: strip && stripFitInk,
     reverseWheel: strip && reverseWheel,
   } as Partial<Record<string, boolean>>)[id] ?? false;
   const corral = useCorral(ORDER, staticFront, controlOn);
@@ -4302,7 +4305,7 @@ export function ScoreView() {
       <>
         <div role="group" aria-label="Hand" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
           {(['both', 'right', 'left'] as const).map((value) => (
-            <button
+            <button title="Choose which hand to practise: both, right only or left only."
               key={value}
               data-testid={`hand-${value}`}
               aria-pressed={hand === value}
@@ -4348,7 +4351,7 @@ export function ScoreView() {
     ),
     follow: (
       <>
-        <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300">
+        <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="On: the app checks each note you play and moves along the score with you. Off: it ignores what you play.">
           <input type="checkbox" checked={following} onChange={(e) => setFollowing(e.target.checked)} />
           Follow my playing
         </label>
@@ -4356,7 +4359,7 @@ export function ScoreView() {
     ),
     keyboard: (
       <>
-        <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300">
+        <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="Show or hide the on-screen keyboard under the score.">
           <input type="checkbox" checked={showKeyboard} onChange={(e) => setShowKeyboard(e.target.checked)} />
           Keyboard
         </label>
@@ -4364,109 +4367,44 @@ export function ScoreView() {
     ),
     loopBars: (
       <>
+          {/* #6655: a real on/off. On, a click turns the loop off; to change its bars, type in the Selected boxes.
+              Fixed width, so its label changing never moves the row. */}
           <button
             onClick={() => {
-              setPicking(picking === 'off' ? 'start' : 'off');
               setPickStart(null);
+              if (picking !== 'off') setPicking('off');
+              else if (loopBars) applyLoop(null);
+              else setPicking('start');
             }}
             disabled={status !== 'ready' || watching || keeping}
-            className={`${btn} ${loopBtn}`}
+            aria-pressed={!!loopBars || picking !== 'off'}
+            className={`${btn} ${loopBtn} w-36`}
+            title={picking !== 'off' ? 'Click the bars on the score. Click here again to stop picking.'
+              : loopBars ? 'Loop is on. Click to turn it off. To loop different bars, type them in the Selected boxes below.'
+                : 'Loop some bars: click this, then the first bar and the last bar on the score'}
             data-testid="loop-bars"
           >
-            {picking === 'start' ? 'Click first bar…' : picking === 'end' ? 'Click last bar…' : 'Loop bars'}
+            {picking === 'start' ? 'Click first bar…' : picking === 'end' ? 'Click last bar…' : loopBars ? 'Loop: on' : 'Loop bars'}
           </button>
-          {loopBars && (
-            <button onClick={() => applyLoop(null)} disabled={watching || keeping} className={btn} data-testid="clear-loop">
-              Clear loop
-            </button>
-          )}
-          {loopBars && (
-            <button
-              onClick={toggleBackwards}
-              disabled={watching || !!block || !!chunk?.out || (!chunk && loopBars.first === loopBars.last)}
-              className={`${btn} ${chunk && !chunk.out ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
-              title="Loop the last bar; after enough clean laps, add the bar before it, until the whole loop"
-              data-testid="build-backwards"
-            >
-              {chunk && !chunk.out ? 'Backwards: on' : 'Build backwards'}
-            </button>
-          )}
-          {loopBars && (
-            <button
-              onClick={toggleOutward}
-              disabled={watching || !!block || (!!chunk && !chunk.out) || (!chunk && loopBars.first === firstPieceBar && loopBars.last === lastBar)}
-              className={`${btn} ${chunk?.out ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
-              title="Loop just this spot; after enough clean laps, add a bar on each side, until it fills the smallest starred range around it (or the whole piece)"
-              data-testid="build-outward"
-            >
-              {chunk?.out ? 'Outward: on' : 'Build outward'}
-            </button>
-          )}
-          {loopBars && (
-            <button
-              onClick={lesson ? () => stopLesson('button') : startLesson}
-              disabled={watching || keeping || !!block || !!chunk || (!lesson && !lessonReady)}
-              className={`${btn} ${lesson ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
-              title={lesson ? 'Stop the lesson plan: back to your own loop'
-                : lessonReady ? 'Loops the rough spots of your last laps one by one until clean, then the whole loop'
-                  : `Play the loop ${LESSON_MIN_LAPS} times first`}
-              data-testid="lesson-plan"
-            >
-              {lesson ? 'Stop lesson plan' : 'Lesson plan'}
-            </button>
-          )}
-          {chunk && (
-            <label className="flex items-center gap-1 text-sm text-gray-300" title="Clean laps per chunk: first, then every later one">
-              Clean laps
-              <input
-                value={backwardTargets}
-                onChange={(e) => setBackwardTargets(e.target.value)}
-                className="w-14 rounded bg-gray-800 px-1 font-mono text-gray-100"
-                data-testid="backwards-targets"
-              />
-            </label>
-          )}
-          {loopBars && !chunk && (
-            <button
-              onClick={toggleBlock}
-              disabled={watching || keeping}
-              className={`${btn} ${block ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
-              title="Press each hand position of the loop as one chord: hold, let go, three clean holds, then the next position. No timing."
-              data-testid="block"
-            >
-              {block ? 'Block: on' : 'Block'}
-            </button>
-          )}
-          {loopBars && !chunk && block && (
-            <button
-              onClick={() => setBlockTipOpen((o) => !o)}
-              className={btn}
-              title="How Block works"
-              aria-label="How Block works"
-              data-testid="block-help"
-            >
-              ?
-            </button>
-          )}
       </>
     ),
     prev: (
       <>
-          <button onClick={prevStep} disabled={status !== 'ready' || watching || keeping} className={btn}>
+          <button title="Move back one note or chord in the score." onClick={prevStep} disabled={status !== 'ready' || watching || keeping} className={btn}>
             ◀ Prev
           </button>
       </>
     ),
     next: (
       <>
-          <button onClick={() => manualMove(1)} disabled={status !== 'ready' || finished || watching} className={btn}>
+          <button title="Move forward one note or chord in the score." onClick={() => manualMove(1)} disabled={status !== 'ready' || finished || watching} className={btn}>
             Next ▶
           </button>
       </>
     ),
     watch: (
       <>
-          <button onClick={toggleWatch} disabled={status !== 'ready' || keeping} className={btn} data-testid="watch">
+          <button title="The app plays the piece for you while you watch. Click again to stop." onClick={toggleWatch} disabled={status !== 'ready' || keeping} className={btn} data-testid="watch">
             {watching ? '■ Stop' : '▶ Play it for me'}
           </button>
       </>
@@ -4486,7 +4424,7 @@ export function ScoreView() {
               {keeping ? '■ Stop' : '⏵ Keep going'}
             </button>
             <span className="text-xs text-gray-400">♩ =</span>
-            <input
+            <input title="The tempo Keep going uses, in beats per minute."
               type="number"
               min={20}
               max={240}
@@ -4538,31 +4476,12 @@ export function ScoreView() {
                 const st = useSettingsStore.getState();
                 if (st.climbTargets[piece.label] !== undefined) st.setClimbTarget(piece.label, clampBpm(climbTarget));
               }}
-              className="w-14 rounded bg-gray-800 px-1 text-sm text-gray-100 disabled:opacity-50"
+              className={`w-14 rounded bg-gray-800 px-1 text-sm text-gray-100 disabled:opacity-50 ${climbOn ? '' : 'invisible'}`}
+              title="The tempo Climb works up to"
+              aria-hidden={!climbOn}
+              tabIndex={climbOn ? undefined : -1}
               data-testid="climb-target"
             />
-            <span
-              className={`font-mono ${clickState === 'roland-missing' || clickState === 'roland-lost' ? 'text-amber-300' : 'text-gray-300'}`}
-              title={"The tempo now, and who is clicking: the app, or the Roland piano's own metronome (Practice settings).\nThe Roland only shows \"Roland\" once the app has switched its metronome on.\nIf the piano is not found or does not start, the app clicks instead."}
-              data-testid="click-readout"
-            >
-              {clickReadout}
-            </span>
-            {climb && (
-              <span className="flex items-center gap-1" data-testid="climb-thermo" title={`Started at ♩ = ${climb.start}; now ${climb.bpm}; target ${climb.target}`}>
-                <span className="relative h-8 w-2 overflow-hidden rounded-full bg-gray-700">
-                  <span
-                    className={`absolute bottom-0 left-0 w-full transition-all ${climb.reached ? 'bg-emerald-400' : 'bg-amber-400'}`}
-                    style={{ height: `${climbPercent(climb)}%` }}
-                  />
-                </span>
-                <span className="flex flex-col leading-none">
-                  <span className="text-[10px] text-gray-500">{climb.target}</span>
-                  <span className="font-mono text-amber-200">{climb.bpm}</span>
-                  <span className="text-[10px] text-gray-500">{climb.start}</span>
-                </span>
-              </span>
-            )}
           </span>
       </>
     ),
@@ -4641,15 +4560,6 @@ export function ScoreView() {
         )}
       </>
     ),
-    openPiece: (
-      <>
-        {window.tutorBridge && (
-          <button onClick={openPiece} className={btn}>
-            Open piece…
-          </button>
-        )}
-      </>
-    ),
     trainingWheels: (
       <>
         {showKeyboard && (
@@ -4704,6 +4614,51 @@ export function ScoreView() {
     ),
     missSound: (
       <>
+        {/* #6655: shown only while the miss sound is on, but its space is kept (the row wraps, so taking
+            it away would reflow the buttons). Left of the box, so ticking it never moves the box. */}
+        <span className={`flex items-center ${missSound ? '' : 'invisible'}`} aria-hidden={!missSound} data-testid="miss-extras">
+          <button
+            type="button"
+            data-testid="miss-sound-test"
+            data-stay
+            className="rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-300 hover:bg-gray-700"
+            title="Play the miss sound once, to hear how loud it is"
+            onClick={() => void playMissSound(missVolume, missKind)}
+          >
+            Test
+          </button>
+          <select
+            data-testid="miss-kind"
+            aria-label="Miss sound"
+            className="ml-1 rounded bg-gray-800 px-1 py-0.5 text-xs text-gray-300"
+            title="Which sound: Click and Buzz are high and sharp so they cut through the piano; Knock is lower, for a speaker with no highs"
+            value={missKind}
+            onChange={(e) => {
+              const kind = e.target.value as typeof missKind;
+              useSettingsStore.getState().setPrefs({ missKind: kind });
+              void playMissSound(missVolume, kind);
+            }}
+          >
+            {MISS_KINDS.map((k) => (
+              <option key={k} value={k}>{MISS_KIND_LABEL[k]}</option>
+            ))}
+          </select>
+          <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="How loud the miss sound is. Turn it up until you can hear it over your playing, then press Test. Past 100% it is boosted and softly clipped, so it gets louder without cracking">
+            Miss volume
+            <input
+              type="range"
+              min={0}
+              max={MISS_VOLUME_MAX}
+              step={5}
+              value={missVolume}
+              data-testid="miss-volume"
+              aria-label="Miss volume"
+              className="w-24"
+              onChange={(e) => useSettingsStore.getState().setPrefs({ missVolume: Number(e.target.value) })}
+            />
+            <span className="w-8 text-xs text-gray-400" data-testid="miss-volume-value">{missVolume}%</span>
+          </label>
+        </span>
         <label
           className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
           title="A short sound the moment a lap stops being clean (a wrong note or a grazed key), so you know it won't count"
@@ -4715,47 +4670,6 @@ export function ScoreView() {
             onChange={(e) => useSettingsStore.getState().setPrefs({ missSound: e.target.checked })}
           />
           Miss sound
-        </label>
-        <button
-          type="button"
-          data-testid="miss-sound-test"
-          data-stay
-          className="ml-1 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-300 hover:bg-gray-700"
-          title="Play the miss sound once, to hear how loud it is"
-          onClick={() => void playMissSound(missVolume, missKind)}
-        >
-          Test
-        </button>
-        <select
-          data-testid="miss-kind"
-          aria-label="Miss sound"
-          className="ml-1 rounded bg-gray-800 px-1 py-0.5 text-xs text-gray-300"
-          title="Which sound: Click and Buzz are high and sharp so they cut through the piano; Knock is lower, for a speaker with no highs"
-          value={missKind}
-          onChange={(e) => {
-            const kind = e.target.value as typeof missKind;
-            useSettingsStore.getState().setPrefs({ missKind: kind });
-            void playMissSound(missVolume, kind);
-          }}
-        >
-          {MISS_KINDS.map((k) => (
-            <option key={k} value={k}>{MISS_KIND_LABEL[k]}</option>
-          ))}
-        </select>
-        <label className="ml-2 flex items-center gap-1.5 text-sm text-gray-300" title="How loud the miss sound is. Turn it up until you can hear it over your playing, then press Test. Past 100% it is boosted and softly clipped, so it gets louder without cracking">
-          Miss volume
-          <input
-            type="range"
-            min={0}
-            max={MISS_VOLUME_MAX}
-            step={5}
-            value={missVolume}
-            data-testid="miss-volume"
-            aria-label="Miss volume"
-            className="w-24"
-            onChange={(e) => useSettingsStore.getState().setPrefs({ missVolume: Number(e.target.value) })}
-          />
-          <span className="w-8 text-xs text-gray-400" data-testid="miss-volume-value">{missVolume}%</span>
         </label>
       </>
     ),
@@ -4780,18 +4694,21 @@ export function ScoreView() {
     ),
     keyWheelFingers: (
       <>
-        <label
-          className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
-          title="On: the scroll wheel over a key on the keyboard changes that note's finger. Off: the wheel there only scrolls"
-        >
-          <input
-            type="checkbox"
-            data-testid="key-wheel-fingers"
-            checked={keyWheelFingers}
-            onChange={(e) => useSettingsStore.getState().setPrefs({ keyWheelFingers: e.target.checked })}
-          />
-          Wheel fingers on keyboard
-        </label>
+        {/* #6655: only with the keyboard showing. */}
+        {showKeyboard && (
+          <label
+            className="ml-2 flex items-center gap-1.5 text-sm text-gray-300"
+            title="On: the scroll wheel over a key on the keyboard changes that note's finger. Off: the wheel there only scrolls"
+          >
+            <input
+              type="checkbox"
+              data-testid="key-wheel-fingers"
+              checked={keyWheelFingers}
+              onChange={(e) => useSettingsStore.getState().setPrefs({ keyWheelFingers: e.target.checked })}
+            />
+            Wheel fingers on keyboard
+          </label>
+        )}
       </>
     ),
     everyBarNumbers: (
@@ -4861,7 +4778,7 @@ export function ScoreView() {
             disabled={status !== 'ready'}
             aria-pressed={chordsOn}
             className={`${btn} ${chordsOn ? 'ring-2 ring-violet-400' : ''}`}
-            title="JP: who moves, who stays? From each chord to the next in the same hand: blue = the key stays, amber = it moves (+2 = two keys up). 'same move' = the change repeats; 'all +5' = the whole hand shifts."
+            title={"Blue ring = keep that key down.\nAmber +N/-N = move that finger N keys up or down for the next chord.\n'same move' = the same change as last time; 'all +5' = the whole hand moves 5 keys."}
             data-testid="chord-moves"
           >
             Chord moves
@@ -4897,10 +4814,20 @@ export function ScoreView() {
             Looking — play or Esc to go back
           </span>
         )}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2" data-testid="toolbar-row">
         <select
           value={pieceId}
-          onChange={(e) => setPieceId(e.target.value)}
+          onKeyDown={(e) => { arrowPickRef.current = e.key.startsWith('Arrow'); }}
+          onMouseDown={() => { arrowPickRef.current = false; }}
+          onChange={(e) => {
+            // #6655: "Add from file…" opens the file picker; the list stays on the piece he had.
+            // Arrowing through the closed list (Windows changes the value per step) never opens it.
+            if (e.target.value === ADD_FROM_FILE) {
+              if (!arrowPickRef.current) void openPiece();
+            } else setPieceId(e.target.value);
+          }}
+          title="The piece to practise. The last entry adds a piece from a file on this computer."
+          data-testid="piece-select"
           className="rounded-md border border-gray-700 bg-gray-900 px-2 py-1 text-sm text-gray-200"
         >
           {favoritePieces.length > 0 && (
@@ -4919,6 +4846,11 @@ export function ScoreView() {
               </option>
             ))}
           </optgroup>
+          {window.tutorBridge && (
+            <option value={ADD_FROM_FILE} data-testid="add-from-file">
+              Add from file…
+            </option>
+          )}
         </select>
         <button
           onClick={() => toggleFavorite(piece.label)}
@@ -4946,7 +4878,7 @@ export function ScoreView() {
           </span>
         )}
         {backTo && backTo.id !== piece.id && (
-          <button onClick={() => setPieceId(backTo.id)} data-testid="sight-back" className={btn}>
+          <button title="Go back to the piece you were on before." onClick={() => setPieceId(backTo.id)} data-testid="sight-back" className={btn}>
             Back to {backTo.label}
           </button>
         )}
@@ -4959,7 +4891,7 @@ export function ScoreView() {
         {versions.length > 1 && (
           <div role="group" aria-label="Version" className="flex overflow-hidden rounded-md border border-gray-700 text-sm">
             {versions.map((v) => (
-              <button
+              <button title="Switch to this version of the song."
                 key={v.id}
                 data-version={v.group.label}
                 aria-pressed={v.id === piece.id}
@@ -4977,14 +4909,14 @@ export function ScoreView() {
           </div>
         )}
         {mixPlan && easyPiece && harderPiece && window.tutorBridge?.saveMix && (
-          <button onClick={() => setMixing(true)} className={btn}>
+          <button title="Build your own version by choosing the easy or harder bars for each section." onClick={() => setMixing(true)} className={btn}>
             {hasMix ? 'Edit my mix' : 'Make my mix'}
           </button>
         )}
         {/* trust.json "no_mix" (#9794): say why, visibly, instead of just dropping the button. */}
         {piece.group?.mixBlocked && (
           <>
-            <button disabled data-mix-blocked className={`${btn} cursor-not-allowed opacity-50`}>
+            <button title="Making your own mix is not available for this piece. The note beside it says why." disabled data-mix-blocked className={`${btn} cursor-not-allowed opacity-50`}>
               {hasMix ? 'Edit my mix' : 'Make my mix'}
             </button>
             <span className="text-xs text-amber-400">{piece.group.mixBlocked}</span>
@@ -5036,7 +4968,7 @@ export function ScoreView() {
         {piece.photo && (
           <div className="flex overflow-hidden rounded-md border border-gray-700 text-sm" role="group" aria-label="Photo or score">
             {(['score', 'photo'] as const).map((v) => (
-              <button
+              <button title="Show the music as notation, or as the photo of the page."
                 key={v}
                 onClick={() => setView(v)}
                 disabled={v === 'score' && !piece.xml}
@@ -5070,7 +5002,7 @@ export function ScoreView() {
           <Popover label="More" badge={hiddenOn ? `${hiddenOn} on` : undefined} testId="menu-more" btn={btn} onOpenChange={corral.hold}>
             {hidden.map(wrapped)}
             {hidden.length === 0 ? <span className="text-xs text-gray-400">Everything is on the main row.</span> : (
-              <button data-stay onClick={corral.showEverything} data-testid="show-everything" className={btn}>Show everything</button>
+              <button title="Put every hidden control back on the main row." data-stay onClick={corral.showEverything} data-testid="show-everything" className={btn}>Show everything</button>
             )}
           </Popover>
           <PracticeReport btn={btn} piece={pieceName} onLoopBar={(bar) => applyLoop({ first: bar, last: bar })} onAddSpot={addSpotAt} onBlockBar={(bar) => {
@@ -5079,34 +5011,12 @@ export function ScoreView() {
           }} disabled={watching || keeping || status !== 'ready'} />
           <PracticeSettings btn={btn} />
           {slot('loopBars')}
-          {chords && (
-            <span data-testid="chords-msg" className="text-xs text-violet-300">
-              {chords.changes} chord change{chords.changes === 1 ? '' : 's'}
-              {chords.changes > 0 && `, ${chords.kept} keep a note, ${chords.same} repeat the last move`}
-            </span>
-          )}
-          {zones && (
-            <span data-testid="zones-msg" className="text-xs text-sky-300">
-              Right {zones.right} position{zones.right === 1 ? '' : 's'}, left {zones.left};{' '}
-              {zones.shifts.length ? `${zones.shifts.length} jump${zones.shifts.length === 1 ? '' : 's'} to plan` : 'no jumps'}
-            </span>
-          )}
           {/* While it plays for him, the timer owns the cursor. */}
           {slot('prev')}
           {slot('next')}
           {slot('watch')}
           {slot('keepGoing')}
-          {keep && (
-            <span className="text-sm text-amber-200" data-testid="keep-status">
-              {keep.count > 0 ? `Count-in… ${keep.count}` : `Lap ${keep.lap} at ♩ = ${keep.bpm}: ${keep.hit} right, ${keep.wrong} wrong`}
-            </span>
-          )}
-          {keepLast && (
-            <span className="text-sm text-gray-300" data-testid="keep-last">
-              {keepLast}
-            </span>
-          )}
-          <button
+          <button title="Go back to the start (of your loop, if one is on) and begin again."
             onClick={restartByHand}
             disabled={status !== 'ready'}
             className="rounded-md bg-indigo-600 px-3 py-1 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
@@ -5125,7 +5035,7 @@ export function ScoreView() {
           {CLIMB_HOW_TO.map((line) => (
             <p key={line}>{line}</p>
           ))}
-          <button onClick={closeClimbTip} className="mt-1 rounded bg-amber-500 px-3 py-0.5 font-medium text-gray-950 hover:bg-amber-400" data-testid="climb-tip-got-it">
+          <button title="Close this explanation." onClick={closeClimbTip} className="mt-1 rounded bg-amber-500 px-3 py-0.5 font-medium text-gray-950 hover:bg-amber-400" data-testid="climb-tip-got-it">
             Got it
           </button>
         </div>
@@ -5136,7 +5046,7 @@ export function ScoreView() {
           {blockHowTo(block.positions.length).map((line) => (
             <p key={line}>{line}</p>
           ))}
-          <button onClick={closeBlockTip} className="mt-1 rounded bg-yellow-500 px-3 py-0.5 font-medium text-gray-950 hover:bg-yellow-400" data-testid="block-tip-got-it">
+          <button title="Close this explanation." onClick={closeBlockTip} className="mt-1 rounded bg-yellow-500 px-3 py-0.5 font-medium text-gray-950 hover:bg-yellow-400" data-testid="block-tip-got-it">
             Got it
           </button>
         </div>
@@ -5215,7 +5125,7 @@ export function ScoreView() {
               {picking === 'off' && (
                 // #6513: one list of his loops: starred ranges and trouble spots together, by bar.
                 <Popover label={`Loops ${loopCount}`} testId="loops" btn={`${btn} px-1.5 py-0.5`} wide>
-                  {/* #6582: the lesson plan, where he looks for loop tools. Same button rule as the toolbar one; starting it
+                  {/* #6582: the lesson plan, where he looks for loop tools (its only home since #6655); starting it
                       keeps his selected loop (Stop puts it back exactly). */}
                   {loopBars && (
                     <button
@@ -5245,7 +5155,7 @@ export function ScoreView() {
                     </button>
                   )}
                   {overall && overall.last - overall.first < MAX_SPOT_BARS && !spotList.some((sp) => !sp.ticked && sp.first === overall.first && sp.last === overall.last) && (
-                    <button onClick={() => putSpot(overall)} disabled={watching || keeping} className={btn} data-testid="spot-add">
+                    <button title="Add the bars you have selected to your list of trouble spots." onClick={() => putSpot(overall)} disabled={watching || keeping} className={btn} data-testid="spot-add">
                       + Add {spanText(overall)} as a spot
                     </button>
                   )}
@@ -5322,6 +5232,61 @@ export function ScoreView() {
                   {chunk && <span data-testid="loop-now">· now looping {loopBars.first}–{loopBars.last}</span>}
                   <span>· Lap <span className="font-mono" data-testid="loop-lap">{lap}</span></span>
                   {lapBpm && <span className="text-yellow-200/80">(last lap ♩ = {lapBpm})</span>}
+                  {/* #6655: the tools that only work on a loop live with the loop, so they come and go with it
+                      and never move the toolbar. */}
+                  <span className="ml-2 flex flex-wrap items-center gap-2" data-testid="loop-tools" data-ctl="loopBars">
+                    <button
+                      onClick={toggleBackwards}
+                      disabled={watching || !!block || !!chunk?.out || (!chunk && loopBars.first === loopBars.last)}
+                      className={`${btn} ${chunk && !chunk.out ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+                      title="Loop the last bar; after enough clean laps, add the bar before it, until the whole loop"
+                      data-testid="build-backwards"
+                    >
+                      {chunk && !chunk.out ? 'Backwards: on' : 'Build backwards'}
+                    </button>
+                    <button
+                      onClick={toggleOutward}
+                      disabled={watching || !!block || (!!chunk && !chunk.out) || (!chunk && loopBars.first === firstPieceBar && loopBars.last === lastBar)}
+                      className={`${btn} ${chunk?.out ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+                      title="Loop just this spot; after enough clean laps, add a bar on each side, until it fills the smallest starred range around it (or the whole piece)"
+                      data-testid="build-outward"
+                    >
+                      {chunk?.out ? 'Outward: on' : 'Build outward'}
+                    </button>
+                    {chunk && (
+                      <label className="flex items-center gap-1 text-sm text-gray-300" title="How many clean laps before the loop grows: the first number is for the first chunk, the second for every later one">
+                        Clean laps
+                        <input
+                          value={backwardTargets}
+                          onChange={(e) => setBackwardTargets(e.target.value)}
+                          className="w-14 rounded bg-gray-800 px-1 font-mono text-gray-100"
+                          data-testid="backwards-targets"
+                        />
+                      </label>
+                    )}
+                    {!chunk && (
+                      <button
+                        onClick={toggleBlock}
+                        disabled={watching || keeping}
+                        className={`${btn} ${block ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+                        title="Press each hand position of the loop as one chord: hold, let go, three clean holds, then the next position. No timing."
+                        data-testid="block"
+                      >
+                        {block ? 'Block: on' : 'Block'}
+                      </button>
+                    )}
+                    {!chunk && block && (
+                      <button
+                        onClick={() => setBlockTipOpen((o) => !o)}
+                        className={btn}
+                        title="How Block works"
+                        aria-label="How Block works"
+                        data-testid="block-help"
+                      >
+                        ?
+                      </button>
+                    )}
+                  </span>
                 </>
               )}
             </span>
@@ -5329,7 +5294,7 @@ export function ScoreView() {
           {lesson && (
             <span className="flex items-center gap-2 font-semibold text-yellow-300" data-testid="lesson-status">
               {lessonLabel(lesson)}
-              <button onClick={skipLesson} className="rounded px-2 py-0.5 text-yellow-200 hover:bg-yellow-800/40" data-testid="lesson-skip">
+              <button title="Skip this step of the lesson plan and go on to the next one." onClick={skipLesson} className="rounded px-2 py-0.5 text-yellow-200 hover:bg-yellow-800/40" data-testid="lesson-skip">
                 Skip step
               </button>
             </span>
@@ -5359,11 +5324,59 @@ export function ScoreView() {
               {BLOCK_WRONG_NOTE}
             </span>
           )}
+          {/* #6655: messages live here, not between the buttons, so they never push a button along. */}
+          {keep && (
+            <span className="text-sm text-amber-200" data-testid="keep-status">
+              {keep.count > 0 ? `Count-in… ${keep.count}` : `Lap ${keep.lap} at ♩ = ${keep.bpm}: ${keep.hit} right, ${keep.wrong} wrong`}
+            </span>
+          )}
+          {keepLast && (
+            <span className="text-sm text-gray-300" data-testid="keep-last">
+              {keepLast}
+            </span>
+          )}
+          {chords && (
+            <span data-testid="chords-msg" className="text-xs text-violet-300">
+              {chords.changes} chord change{chords.changes === 1 ? '' : 's'}
+              {chords.changes > 0 && `, ${chords.kept} keep a note, ${chords.same} repeat the last move`}
+            </span>
+          )}
+          {zones && (
+            <span data-testid="zones-msg" className="text-xs text-sky-300">
+              Right {zones.right} position{zones.right === 1 ? '' : 's'}, left {zones.left};{' '}
+              {zones.shifts.length ? `${zones.shifts.length} jump${zones.shifts.length === 1 ? '' : 's'} to plan` : 'no jumps'}
+            </span>
+          )}
           {/* His live tempo, big enough to read from the bench (#8979). */}
           <span className="text-gray-400" data-testid="tempo">
             <span className="font-mono text-2xl font-bold text-white">♩ = {pace ?? '—'}</span>
             {markedBpm && <span className="text-gray-500"> ({piece.targetBpm ? "target" : "marked"} {markedBpm})</span>}
           </span>
+          {/* #6655: the click readout and the Climb thermometer change size mid-run, so they sit here, not in the button row. */}
+          {(shown('keepGoing') || keeping) && (
+            <span
+              className={`font-mono text-xs ${clickState === 'roland-missing' || clickState === 'roland-lost' ? 'text-amber-300' : 'text-gray-300'}`}
+              title={"The tempo now, and who is clicking: the app, or the Roland piano's own metronome (Practice settings).\nThe Roland only shows \"Roland\" once the app has switched its metronome on.\nIf the piano is not found or does not start, the app clicks instead."}
+              data-testid="click-readout"
+            >
+              {clickReadout}
+            </span>
+          )}
+          {climb && (
+            <span className="flex items-center gap-1" data-testid="climb-thermo" title={`Started at ♩ = ${climb.start}; now ${climb.bpm}; target ${climb.target}`}>
+              <span className="relative h-8 w-2 overflow-hidden rounded-full bg-gray-700">
+                <span
+                  className={`absolute bottom-0 left-0 w-full transition-all ${climb.reached ? 'bg-emerald-400' : 'bg-amber-400'}`}
+                  style={{ height: `${climbPercent(climb)}%` }}
+                />
+              </span>
+              <span className="flex flex-col leading-none">
+                <span className="text-[10px] text-gray-500">{climb.target}</span>
+                <span className="font-mono text-amber-200">{climb.bpm}</span>
+                <span className="text-[10px] text-gray-500">{climb.start}</span>
+              </span>
+            </span>
+          )}
           <span className="min-w-[14rem] font-medium" data-testid="feedback">
             {feedback.kind === 'wrong' && (
               <span className="text-red-400">
@@ -5412,7 +5425,7 @@ export function ScoreView() {
         >
           <span className="text-xl font-semibold text-green-200">✓ {reached}</span>
           {/* Focused so the trackball click or Enter both go again (#5382). */}
-          <button
+          <button title="Play it again from the start."
             autoFocus
             onClick={restartByHand}
             className="rounded-md bg-green-600 px-5 py-2 text-lg font-semibold text-white hover:bg-green-500"
@@ -5429,7 +5442,7 @@ export function ScoreView() {
             {advice.sub && <span className="block text-amber-200/80">{advice.sub}</span>}
           </span>
           {advice.action && (
-            <button
+            <button title="Do what the tip suggests."
               onClick={actOnAdvice}
               className="rounded bg-amber-600 px-3 py-1 font-semibold text-white hover:bg-amber-500"
               data-testid={`advice-${advice.action.kind}`}
@@ -5437,10 +5450,10 @@ export function ScoreView() {
               {actionLabel(advice.action)}
             </button>
           )}
-          <button onClick={() => closeAdvice('not-today')} className="rounded px-2 py-1 text-amber-200 hover:bg-amber-800/40" data-testid="advice-not-today">
+          <button title="Hide this tip for the rest of today." onClick={() => closeAdvice('not-today')} className="rounded px-2 py-1 text-amber-200 hover:bg-amber-800/40" data-testid="advice-not-today">
             Not today
           </button>
-          <button onClick={() => closeAdvice('close')} className="rounded px-2 py-1 text-amber-200 hover:bg-amber-800/40" aria-label="Close" data-testid="advice-close">
+          <button title="Close this tip." onClick={() => closeAdvice('close')} className="rounded px-2 py-1 text-amber-200 hover:bg-amber-800/40" aria-label="Close" data-testid="advice-close">
             ×
           </button>
         </div>
@@ -5541,9 +5554,9 @@ export function ScoreView() {
                   })()}
                   <button data-testid="page-next" disabled={spreadView.at === last} onClick={turn(1)} className="px-1 disabled:opacity-30" title="Turn forward (Page Down)">›</button>
                 </div>
-                <button data-testid="page-edge-back" aria-label="Turn back" disabled={spreadView.at === 0} onClick={turn(-1)}
+                <button title="Turn back one page." data-testid="page-edge-back" aria-label="Turn back" disabled={spreadView.at === 0} onClick={turn(-1)}
                   className={`${edge} left-0`} style={{ top: spreadView.top, height: spreadView.height }}>‹</button>
-                <button data-testid="page-edge-forward" aria-label="Turn forward" disabled={spreadView.at === last} onClick={turn(1)}
+                <button title="Turn forward one page." data-testid="page-edge-forward" aria-label="Turn forward" disabled={spreadView.at === last} onClick={turn(1)}
                   className={`${edge} right-0`} style={{ top: spreadView.top, height: spreadView.height }}>›</button>
               </>
             );
@@ -5568,7 +5581,7 @@ export function ScoreView() {
             {fingerPick.alts?.length ? ` (${fingerPick.target.staff === 1 ? 'right' : 'left'} hand)` : ''}: finger
           </span>
           {fingerPick.alts?.length ? (
-            <button
+            <button title="Change the finger of the other note at this spot instead."
               onClick={() => {
                 const [next, ...rest] = fingerPick.alts ?? [];
                 if (next) openPick(fingerPick.x, fingerPick.y, next, [...rest, fingerPick.target]);
@@ -5580,7 +5593,7 @@ export function ScoreView() {
             </button>
           ) : null}
           {(['1', '2', '3', '4', '5'] as const).map((d) => (
-            <button key={d} onClick={() => applyFinger(d)} className="rounded bg-purple-700 px-2 py-1 text-sm font-bold text-white hover:bg-purple-600">
+            <button title="Give this note this finger number." key={d} onClick={() => applyFinger(d)} className="rounded bg-purple-700 px-2 py-1 text-sm font-bold text-white hover:bg-purple-600">
               {d}
             </button>
           ))}
@@ -5593,7 +5606,7 @@ export function ScoreView() {
           >
             {fingerPick.held ? 'Re-strike' : "Hold (don't re-strike)"}
           </button>
-          <button onClick={() => setFingerPick(null)} className="rounded px-2 py-1 text-sm text-gray-400">Cancel</button>
+          <button title="Close this finger box without changing anything." onClick={() => setFingerPick(null)} className="rounded px-2 py-1 text-sm text-gray-400">Cancel</button>
         </div>
       )}
       {/* Over the score at the pointer, so it can't push the music out from under it. */}

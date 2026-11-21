@@ -956,7 +956,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
   if (loadError || !piece) {
     return (
       <div data-testid="review-piece">
-        <button onClick={onBack} className="mb-3 text-sm text-gray-400 hover:text-white">← All pieces</button>
+        <button title="Go back to the list of pieces." onClick={onBack} className="mb-3 text-sm text-gray-400 hover:text-white">← All pieces</button>
         {loadError
           ? <p className="text-red-400" data-testid="review-error">{loadError}</p>
           : <p className="text-gray-400">Lining up the scan…</p>}
@@ -976,11 +976,11 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
 
   return (
     <div className="w-full" data-testid="review-piece">
-      <button onClick={onBack} className="mb-3 text-sm text-gray-400 hover:text-white">← All pieces</button>
+      <button title="Go back to the list of pieces." onClick={onBack} className="mb-3 text-sm text-gray-400 hover:text-white">← All pieces</button>
       <div className="mb-3 flex flex-wrap items-baseline gap-x-4">
         <h2 className="text-xl font-semibold">{piece.title}</h2>
         {hasLines && (
-          <button
+          <button title="Done checking this score: send your review."
             data-testid="review-submit-top"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => void submitReview()}
@@ -1010,7 +1010,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
       {hasLines && sys && (
         <>
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <button
+            <button title="Go to the previous line of the score."
               data-testid="review-prev"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => go(lineIdx - 1)}
@@ -1022,7 +1022,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
             <span data-testid="review-line-label" className="text-sm text-gray-200">
               Line {lineIdx + 1} of {systems.length}
             </span>
-            <button
+            <button title="Go to the next line of the score."
               data-testid="review-next"
               onMouseDown={(e) => e.preventDefault()}
               onClick={forward}
@@ -1129,7 +1129,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
 
           {overlay && (
             <div className="mb-3">
-              <input
+              <input title="Slide to show more or less of the scan under the score."
                 type="range"
                 data-testid="review-wipe"
                 aria-label="Slide the score off the scan"
@@ -1187,7 +1187,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
                     Bar {pm.measure}{staffWords(pm.staff)}
                     {pm.notes.length > 0 && <span className="text-amber-200">: {describeNotes(pm.notes)}</span>}
                   </span>
-                  <input
+                  <input title="Type what looks wrong in this bar if you like. Press Enter to save the mark."
                     data-testid="review-mark-input"
                     autoFocus={i === pending.length - 1}
                     placeholder="what's wrong? (optional)"
@@ -1205,7 +1205,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
                 </div>
               ))}
               <div className="flex gap-2">
-                <button
+                <button title="Save the bar or bars you marked as wrong."
                   data-testid="review-mark-submit"
                   onClick={() => void submitMarks()}
                   disabled={busy}
@@ -1213,7 +1213,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
                 >
                   Save {pending.length > 1 ? `${pending.length} marks` : 'mark'}
                 </button>
-                <button
+                <button title="Remove the most recent mark that you have not saved yet."
                   data-testid="review-mark-drop"
                   onClick={dropLast}
                   className="rounded bg-gray-800 px-3 py-1 text-sm hover:bg-gray-700"
@@ -1225,7 +1225,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
           )}
 
           <div className="mb-6 flex flex-wrap items-center gap-x-6 gap-y-2">
-            <button
+            <button title="Done checking this score: send your review."
               ref={submitRef}
               data-testid="review-submit"
               onClick={() => void submitReview()}
@@ -1300,7 +1300,7 @@ function MarksList(props: {
                 {m.status === 'open' && (
                   <>
                     <CheckBadge check={props.checks[m.id]} />
-                    <button
+                    <button title="Take back this mark so this bar is no longer reported as wrong."
                       onClick={(e) => {
                         e.stopPropagation();
                         props.onWithdraw(m.id);
@@ -1389,7 +1389,7 @@ function CheckDetail(props: {
   // Clicks in here are not "jump to this mark".
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   const retry = (
-    <button
+    <button title="Check this mark again."
       onClick={() => props.onRecheck(mark.id)}
       disabled={props.busy}
       className="rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-700 disabled:opacity-40"
@@ -1437,7 +1437,7 @@ function CheckDetail(props: {
       )}
       <div className="flex flex-wrap items-center gap-2">
         {ready && (
-          <button
+          <button title="Accept the proposed fix for this bar."
             data-testid="review-accept"
             onClick={() => props.onAccept(proposal.id)}
             disabled={props.busy || !view?.musicxml}
@@ -1446,13 +1446,13 @@ function CheckDetail(props: {
             Accept
           </button>
         )}
-        <input
+        <input title="Say what is still wrong with the proposed fix, if you like."
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="What's still wrong? (optional)"
           className="min-w-0 flex-1 rounded bg-gray-800 px-2 py-1 text-sm"
         />
-        <button
+        <button title="Tell us the proposed fix did not solve it. Your note is sent with it."
           data-testid="review-still-wrong"
           onClick={() => {
             props.onReject(mark.id, text.trim());
@@ -1542,10 +1542,10 @@ function ReviewList({ sort, onSort, onOpen }: { sort: SortMode; onSort: (s: Sort
     <div className="mx-auto max-w-3xl" data-testid="review-list">
       <h2 className="mb-3 text-xl font-semibold">Review</h2>
       <div className="mb-4 flex gap-2">
-        <button data-testid="review-sort-learning" onClick={() => onSort('learning')} className={toggle('learning')}>
+        <button title="Put the pieces you are still learning at the top of the list." data-testid="review-sort-learning" onClick={() => onSort('learning')} className={toggle('learning')}>
           Learning first
         </button>
-        <button data-testid="review-sort-worst" onClick={() => onSort('worst')} className={toggle('worst')}>
+        <button title="Put the scores that most need checking at the top of the list." data-testid="review-sort-worst" onClick={() => onSort('worst')} className={toggle('worst')}>
           Worst first
         </button>
       </div>
@@ -1553,7 +1553,7 @@ function ReviewList({ sort, onSort, onOpen }: { sort: SortMode; onSort: (s: Sort
       {!list && !error && <p className="text-gray-400">Loading…</p>}
       <div className="space-y-1">
         {shown.map((s) => (
-          <button
+          <button title="Open this score to review it against the scan."
             key={s.slug}
             data-testid={`review-row-${s.slug}`}
             onClick={() => onOpen(s.slug)}

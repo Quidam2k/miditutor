@@ -97,10 +97,10 @@ with sync_playwright() as p:
     check(page.locator("[data-testid=loop-status]").count() == 1, "loop kept after Restart")
     check(bar(page) == first, f"Restart -> bar {first}", bar(page))
 
-    page.click("[data-testid=clear-loop]")
+    page.click("[data-testid=loop-bars]")  # #6655: Loop bars turns the loop off (no Clear loop)
     page.get_by_role("button", name="Restart", exact=True).click()
     page.wait_for_timeout(800)
-    check(bar(page) == 1, "Clear loop + Restart -> bar 1", bar(page))
+    check(bar(page) == 1, "loop off + Restart -> bar 1", bar(page))
     browser.close()
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")

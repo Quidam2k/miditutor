@@ -433,7 +433,7 @@ def loop_checks(page) -> None:
     check(screen()["backwards"]["clean"] == 0, "the lap he scrolled in isn't clean", screen()["backwards"])
     play_lap()
     check(screen()["backwards"]["clean"] == 1, "the next lap, played whole, is", screen()["backwards"])
-    page.get_by_test_id("clear-loop").click()
+    page.get_by_test_id("loop-bars").click()  # #6655: turns the loop off
     page.wait_for_timeout(300)
 
 
@@ -509,7 +509,7 @@ def box_hold_checks(page) -> None:
     check(len({tuple(r) for r in seen["rects"]}) == 1 and seen["rects"][0] == [round(rect["x"]), round(rect["y"])],
           "the last-bar box never moved under the pointer", (seen["rects"], rect))
     check(page.evaluate(scroll_tops) == tops, "nothing scrolled under the box")
-    page.get_by_test_id("clear-loop").click()
+    page.get_by_test_id("loop-bars").click()  # #6655: turns the loop off
     page.wait_for_timeout(300)
 
 
@@ -630,7 +630,7 @@ def box_checks(page) -> None:
     page.mouse.wheel(0, -100)
     page.wait_for_timeout(1200)
     check(screen()["loop"]["firstBar"] == 23, "and its first bar", screen()["loop"])
-    page.get_by_test_id("clear-loop").click()
+    page.get_by_test_id("loop-bars").click()  # #6655: turns the loop off
     page.wait_for_timeout(300)
 
     # Reverse: only the off-note move in Strip.
