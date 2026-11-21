@@ -24,6 +24,7 @@ import { contentSha256 } from './main/contentSha';
 import { confirmedLines, paperPageStarts } from './shared/binderPrint';
 import { parseNotebook } from './shared/lessonNotebook';
 import { sendToPaper } from './main/binderPaper';
+import { UnsavedQueue, resolveScoreFile, serial, writeFileAtomic } from './main/scoreFiles';
 import { SavedMix, VersionMap, applyTrust, groupOf, mixPlanOf, parseMixes, parseVersions, withMixes } from './shared/versions';
 
 if (started) {
@@ -143,13 +144,21 @@ const readMixes = async (dir: string): Promise<Record<string, SavedMix>> => {
 
 // The renderer splices the mix (it has the DOM); main checks it belongs to an aligned song and writes it.
 // #9988: his fingering edit, written back over a score already in the pieces folder.
-const writeScore = async (slug: string, musicxml: string) => {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error('bad piece name');
-  const file = path.join(piecesDir(), `${slug}.musicxml`);
-  await fs.access(file);
-  if (!isScoreXml(musicxml)) throw new Error('not a MusicXML score');
-  await fs.writeFile(file, musicxml, 'utf8');
-};
+// #6654: any plain file stem in the folder (pushed pieces are named by title), checked to stay
+// inside it, and written atomically.
+// Writes go one at a time, in the order asked, so an older score never lands over a newer one.
+const scoreWrites = serial();
+const writeScore = (stem: string, musicxml: string) =>
+  scoreWrites(async () => {
+    const file = await resolveScoreFile(piecesDir(), stem);
+    if (!isScoreXml(musicxml)) throw new Error('not a MusicXML score');
+    await writeFileAtomic(file, musicxml);
+  });
+
+// #6654: finger edits a save refused, kept by note position until a save works. In userData,
+// not the Pieces folder, so a sync from the desk never touches it.
+let unsavedQueue: UnsavedQueue | null = null;
+const unsaved = () => (unsavedQueue ??= new UnsavedQueue(path.join(app.getPath('userData'), 'unsaved-edits.json'), piecesDir));
 
 // #5723 binder print. The review layout (pushed from the desk with the score) says where
 // his paper's pages start and how many lines he has confirmed; no layout = no page breaks.
@@ -469,6 +478,10 @@ const startTutorApi = () => {
   ipcMain.handle('pieces:list', listPieces);
   ipcMain.handle('pieces:saveMix', (_e, slug: string, mix) => saveMix(slug, mix));
   ipcMain.handle('pieces:writeScore', (_e, slug: string, musicxml: string) => writeScore(slug, musicxml));
+  ipcMain.handle('pieces:unsavedAdd', (_e, stem: string, edits: unknown) => unsaved().add(stem, Array.isArray(edits) ? edits : []));
+  ipcMain.handle('pieces:unsavedFor', (_e, stem: string) => unsaved().for(stem));
+  ipcMain.handle('pieces:unsavedClear', (_e, stem: string, upTo: unknown) => unsaved().clear(stem, typeof upTo === 'number' ? upTo : null));
+  ipcMain.handle('pieces:unsavedFailed', (_e, stem: string) => unsaved().failed(stem));
   ipcMain.handle('pieces:binderInfo', (_e, slug: string) => binderInfo(slug));
   ipcMain.handle('pieces:printBinder', (_e, slug: string, html: string) => printBinder(slug, html));
   ipcMain.handle('pieces:savePagesPdf', (_e, slug: string, html: string) => savePagesPdf(slug, html));

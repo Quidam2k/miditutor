@@ -45,6 +45,14 @@ describe('isPieceFileName', () => {
     expect(isPieceFileName('._o-from-o.musicxml')).toBe(false);
     expect(isPieceFileName('notes.txt')).toBe(false);
   });
+
+  it('skips .pre-<fix> backups but not titles that merely contain "pre" (#6654)', () => {
+    expect(isPieceFileName('sorcerers-apprentice.pre-b3-4-fix.musicxml')).toBe(false);
+    expect(isPieceFileName('sorcerers-apprentice.pre-annotate.musicxml')).toBe(false);
+    expect(isPieceFileName('Prelude in C.musicxml')).toBe(true);
+    expect(isPieceFileName('pre-war-blues.musicxml')).toBe(true);
+    expect(isPieceFileName('The Sorcerer\'s Apprentice.musicxml')).toBe(true);
+  });
 });
 
 describe('pieceFileName', () => {

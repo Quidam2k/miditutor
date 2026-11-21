@@ -42,10 +42,18 @@ export function pieceTitle(xml: string, filePath: string): string {
   return /\s/.test(fromFile) && a.length > 0 && a.length < b.length && a.every((w, i) => w === b[i]) ? fromFile : own;
 }
 
-/** True for a file name the Pieces folder lists (dot files and other types are skipped). */
+/**
+ * A hand-fix or annotate backup (`<slug>.pre-<fix>.musicxml`), never a piece. sync_pieces.sh
+ * skips the same names; #6654: one listed beside the real file was practised and fingered by mistake.
+ */
+export function isBackupFileName(name: string): boolean {
+  return /\.pre-[^.]*\.[^.]+$/i.test(name);
+}
+
+/** True for a file name the Pieces folder lists (dot files, backups and other types are skipped). */
 export function isPieceFileName(name: string): boolean {
   const ext = name.split('.').pop()?.toLowerCase() ?? '';
-  return !name.startsWith('.') && (MUSICXML_EXTENSIONS as readonly string[]).includes(ext);
+  return !name.startsWith('.') && !isBackupFileName(name) && (MUSICXML_EXTENSIONS as readonly string[]).includes(ext);
 }
 
 /** Safe file name for a pushed piece saved into the Pieces folder. */

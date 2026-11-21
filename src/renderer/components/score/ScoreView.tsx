@@ -70,6 +70,8 @@ import { ChordOverlay, type ChordRing, type ChordTag } from './ChordOverlay';
 import { chordChanges, movedBy } from '../../engine/ChordMoves';
 import { MixBuilder } from './MixBuilder';
 import { OriginalScan, useScanLayout } from './OriginalScan';
+import { applyQueued, droppedLine, isFinalSaveError, waitingLine } from './unsavedEdits';
+import type { UnsavedEdit } from '../../../main/scoreFiles';
 import { holdsOf, planSpread, setFingering, setHold, spreadFingering, type Digit, type FingerTarget } from '../../../shared/fingering';
 import { ChordSymbol, chordSymbol, playsChord } from './chordSymbols';
 import {
@@ -3831,14 +3833,103 @@ export function ScoreView() {
       return;
     }
     const slug = scanSlug;
-    void bridge
-      .writeScore(slug, result.xml)
-      .then(() => (scanLayout && bridge.reviewAppend ? bridge.reviewAppend(slug, { kind: 'fingering', ...pick.target, digit }) : null))
-      .then((sent) => setFingerMsg(sent
+    saveFingers(slug, result.xml, [{ ...pick.target, digit, name: pick.name }], what, async () => {
+      const sent = scanLayout && bridge.reviewAppend ? await bridge.reviewAppend(slug, { kind: 'fingering', ...pick.target, digit }) : null;
+      return sent
         ? `${what}: saved; the library copy updates next time Review runs on the desk.`
-        : `${what}: saved here (no scan review for this piece, so a re-sync from the desk will undo it).`))
-      .catch((err: unknown) => setFingerMsg(`${what}, but saving failed: ${err instanceof Error ? err.message : String(err)}`));
+        : `${what}: saved here (no scan review for this piece, so a re-sync from the desk will undo it).`;
+    });
   };
+
+  // #6654: a finger save that fails for a reason that may pass (disk, a busy file) keeps the
+  // change in main's unsaved-edits.json; the next save writes the whole score, so a success
+  // clears this piece's queue once it has been put back on screen (queueShownRef).
+  const queueShownRef = useRef(new Set<string>());
+  const editSeqRef = useRef(0);
+  const saveFingers = (slug: string, xml: string, edits: Omit<UnsavedEdit, 'stem' | 'at' | 'mtimeMs' | 'tries'>[], what: string, after: () => Promise<string>) => {
+    const bridge = window.tutorBridge;
+    if (!bridge?.writeScore) return;
+    editSeqRef.current += 1;
+    // The written score holds every edit on screen up to now, so waiting ones queued before
+    // this moment are saved with it; one queued later (a save that failed meanwhile) stays.
+    const started = Date.now();
+    void bridge
+      .writeScore(slug, xml)
+      .then(async () => {
+        if (queueShownRef.current.has(slug)) await bridge.unsavedClear?.(slug, started);
+        return after();
+      })
+      .then((msg) => setFingerMsg(msg))
+      .catch(async (err: unknown) => {
+        const why = err instanceof Error ? err.message : String(err);
+        if (isFinalSaveError(why) || !bridge.unsavedAdd) {
+          setFingerMsg(`${what}, but it can't be saved (this session only): ${why}`);
+          return;
+        }
+        try {
+          const waiting = await bridge.unsavedAdd(slug, edits);
+          queueShownRef.current.add(slug);
+          setFingerMsg(`${what}. ${waitingLine(waiting)}`);
+        } catch {
+          setFingerMsg(`${what}, but saving failed: ${why}`);
+        }
+      });
+  };
+
+  // #6654: when a piece opens, finger changes still waiting for it go back on screen and are saved.
+  useEffect(() => {
+    const bridge = window.tutorBridge;
+    // Only once the new piece is drawn: on a switch, status is still 'ready' from the last one.
+    if (!scanSlug || status !== 'ready' || drawnPieceRef.current !== piece.id || queueShownRef.current.has(scanSlug)) return;
+    const pending = bridge?.unsavedFor;
+    const clear = bridge?.unsavedClear;
+    const failed = bridge?.unsavedFailed;
+    const write = bridge?.writeScore;
+    if (!pending || !clear || !failed || !write) return;
+    const slug = scanSlug;
+    const xml = piece.xml;
+    const seq = editSeqRef.current;
+    let live = true;
+    void (async () => {
+      const { edits, stale } = await pending(slug);
+      // He edited while we looked: leave the queue for the next opening rather than draw over it.
+      if (!live || seq !== editSeqRef.current) return;
+      queueShownRef.current.add(slug);
+      if (edits.length === 0 && stale.length === 0) return;
+      const started = Date.now();
+      const back = applyQueued(xml, edits);
+      const notes = [
+        droppedLine(back.dropped),
+        stale.length ? `${stale.length} waiting finger change${stale.length === 1 ? '' : 's'} left off: the score was updated since.` : '',
+      ].filter(Boolean).join(' ');
+      if (back.applied.length === 0) {
+        await clear(slug, started);
+        setFingerMsg(notes);
+        return;
+      }
+      showEditedXml(back.xml);
+      try {
+        await write(slug, back.xml);
+        await clear(slug, started);
+        const n = back.applied.length;
+        setFingerMsg(`Saved ${n} finger change${n === 1 ? '' : 's'} that were waiting. ${notes}`.trim());
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
+        if (isFinalSaveError(why)) {
+          await clear(slug, started);
+          setFingerMsg(`Finger changes for this piece can't be saved (${why}); they are on screen for this session only. ${notes}`.trim());
+          return;
+        }
+        const { left, dropped } = await failed(slug);
+        const gaveUp = dropped.length ? ` Gave up on ${dropped.length} after repeated tries; they stay on screen this session only.` : '';
+        setFingerMsg(`${left ? waitingLine(left) : ''}${gaveUp} ${notes}`.trim());
+      }
+    })().catch((err) => console.warn('[pieces] unsaved edits:', err));
+    return () => {
+      live = false;
+    };
+    // Once per piece opening; piece.xml is read at that moment.
+  }, [scanSlug, status]);
 
   // #5947: every other spot with exactly these pitches (same staff, same octave) gets this spot's
   // whole fingering; a note that already has a different finger is kept. There is no undo, so the
@@ -3864,13 +3955,11 @@ export function ScoreView() {
     }
     const slug = scanSlug;
     const append = scanLayout && bridge.reviewAppend ? bridge.reviewAppend : null;
-    void bridge
-      .writeScore(slug, result.xml)
-      .then(async () => {
-        for (const c of result.changes) await append?.(slug, { kind: 'fingering', measure: c.measure, staff: c.staff, onset: c.onset, midi: c.midi, digit: c.digit });
-      })
-      .then(() => setFingerMsg(`${what}: saved.`))
-      .catch((err: unknown) => setFingerMsg(`${what}, but saving failed: ${err instanceof Error ? err.message : String(err)}`));
+    const edits = result.changes.map((c) => ({ measure: c.measure, staff: c.staff, onset: c.onset, midi: c.midi, digit: c.digit }));
+    saveFingers(slug, result.xml, edits, what, async () => {
+      for (const c of edits) await append?.(slug, { kind: 'fingering', ...c });
+      return `${what}: saved.`;
+    });
   };
 
   const prevStep = () => {

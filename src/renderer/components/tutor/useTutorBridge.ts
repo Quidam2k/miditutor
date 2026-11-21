@@ -6,6 +6,7 @@ import { rememberRef } from '../score/lastPiece';
 import type { RendererCommand } from '../../../main/tutorApi';
 import type { RecordingStatus } from '../../../main/recorder';
 import type { InviteState } from '../../../main/invite';
+import type { UnsavedEdit } from '../../../main/scoreFiles';
 import type { PieceTrust } from '../../../shared/trust';
 import type { PieceGroupRef } from '../../../shared/versions';
 import type { MixChoice } from '../../../shared/mix';
@@ -24,6 +25,11 @@ interface TutorBridge {
   openPiece: () => Promise<{ title: string; musicxml: string } | null>;
   listPieces?: () => Promise<{ file: string; title: string; musicxml: string; trust?: PieceTrust; group?: PieceGroupRef }[]>;
   writeScore?: (slug: string, musicxml: string) => Promise<void>;
+  /** #6654: finger edits a save refused, waiting to be saved (main keeps them in userData). */
+  unsavedAdd?: (stem: string, edits: Omit<UnsavedEdit, 'stem' | 'at' | 'mtimeMs' | 'tries'>[]) => Promise<number>;
+  unsavedFor?: (stem: string) => Promise<{ edits: UnsavedEdit[]; stale: UnsavedEdit[] }>;
+  unsavedClear?: (stem: string, upTo: number | null) => Promise<number>;
+  unsavedFailed?: (stem: string) => Promise<{ left: number; dropped: UnsavedEdit[] }>;
   binderInfo?: (slug: string) => Promise<{ pageStarts: number[]; confirmed: number; total: number }>;
   // sent: set when the Mac really queued paper (#6090)
   printBinder?: (slug: string, html: string) => Promise<{ pdf: string; bytes: number; sent?: { printer: string; job: string } }>;

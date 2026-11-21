@@ -19,6 +19,11 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   saveMix: (slug: string, mix: unknown) => ipcRenderer.invoke('pieces:saveMix', slug, mix),
   // #9988: overwrite <slug>.musicxml in the pieces folder (his fingering edit).
   writeScore: (slug: string, musicxml: string) => ipcRenderer.invoke('pieces:writeScore', slug, musicxml),
+  // #6654: finger edits a save refused, kept by main until a save works.
+  unsavedAdd: (stem: string, edits: unknown) => ipcRenderer.invoke('pieces:unsavedAdd', stem, edits),
+  unsavedFor: (stem: string) => ipcRenderer.invoke('pieces:unsavedFor', stem),
+  unsavedClear: (stem: string, upTo: number | null) => ipcRenderer.invoke('pieces:unsavedClear', stem, upTo),
+  unsavedFailed: (stem: string) => ipcRenderer.invoke('pieces:unsavedFailed', stem),
   // #5723 binder print: { pageStarts, confirmed, total } from review/<slug>.layout.json, then the PDF + print dialog.
   binderInfo: (slug: string) => ipcRenderer.invoke('pieces:binderInfo', slug),
   printBinder: (slug: string, html: string) => ipcRenderer.invoke('pieces:printBinder', slug, html),
