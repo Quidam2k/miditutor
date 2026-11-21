@@ -55,9 +55,11 @@ with sync_playwright() as p:
     for b in boxes:
         seen.setdefault(b["id"], b)
     top_row = list(seen.values())
-    page.mouse.click(top_row[2]["x"], top_row[2]["y"])
-    page.mouse.click(top_row[3]["x"], top_row[3]["y"])
-    page.wait_for_timeout(500)
+    # #6660: no picking on the score; the bars go in the Selected boxes.
+    for testid, value in (("loop-first", 3), ("loop-last", 4)):
+        page.get_by_test_id(testid).fill(str(value))
+        page.get_by_test_id(testid).press("Enter")
+        page.wait_for_timeout(400)
     status = page.locator("[data-testid=loop-status]")
     check(status.count() == 1, "loop set", page.locator("body").inner_text()[:400])
     loop_text = status.inner_text() if status.count() else ""
@@ -101,6 +103,11 @@ with sync_playwright() as p:
     page.get_by_role("button", name="Restart", exact=True).click()
     page.wait_for_timeout(800)
     check(bar(page) == 1, "loop off + Restart -> bar 1", bar(page))
+    # #6660: on again brings back the same bars.
+    page.click("[data-testid=loop-bars]")
+    page.wait_for_timeout(800)
+    check(page.get_by_test_id("loop-first").input_value() == str(first) and bar(page) == first,
+          "Loop bars on again -> the same bars", (page.get_by_test_id("loop-first").input_value(), bar(page)))
     browser.close()
 
 print("FAILED: " + ", ".join(FAILS) if FAILS else "ALL PASS")

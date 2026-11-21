@@ -261,54 +261,23 @@ def wheel(page, point: dict, dy: int, times: int) -> None:
 
 
 def wheel_checks(page) -> None:
+    """#6660 (Todd 65582): there is no picking mode. Loop bars is on/off; a click or the wheel on the score
+    never sets loop bars (they come from the Selected boxes or the Loops list)."""
     set_layout(page, "strip")
     clear_loop()
     page.get_by_test_id("loop-bars").click()
-    wait_for(lambda: screen().get("pickingLoop") == "start", "picking the first bar")
-    # On a notehead on purpose: this used to open the finger picker over the music.
-    point = head_point(page)
-    page.mouse.click(point["x"], point["y"])
-    wait_for(lambda: screen().get("pickingLoop") == "end", "picking the last bar")
-    check(page.get_by_test_id("finger-picker").count() == 0, "strip: picking a bar on a note opens no finger picker")
-
-    before = score_scroller(page, "scrollLeft")
-    bar_before = page.get_by_test_id("bar-now").input_value()
-    if not before:
-        check(False, "strip: the score panel can scroll sideways")
-        return
-    wheel(page, before, 120, 8)
-    after = score_scroller(page, "scrollLeft")
-    check(after["pos"] - before["pos"] > 8 * 40, "strip: the wheel slides the music while picking", f"{before['pos']} -> {after['pos']}")
-    check(page.get_by_test_id("bar-now").input_value() == bar_before, "strip: the cursor stays put while picking")
-    check(screen().get("pickingLoop") == "end", "strip: still picking the last bar", str(screen().get("pickingLoop")))
-
-    wheel(page, after, -120, 2)
-    back = score_scroller(page, "scrollLeft")
-    check(back["pos"] < after["pos"], "strip: the wheel slides back", f"{after['pos']} -> {back['pos']}")
-
+    wait_for(lambda: screen().get("loopOn") is True, "loop mode on")
+    check("pickingLoop" not in screen(), "no picking state any more", str(screen().get("pickingLoop")))
+    loop_before = screen().get("loop")
     point = bar_point(page)
     page.mouse.click(point["x"], point["y"])
-    wait_for(lambda: bool(screen().get("loop")), "the loop to be set")
-    loop = screen().get("loop") or {}
-    check(loop.get("firstBar", 0) < loop.get("lastBar", 0), "strip: a bar found by wheel ends the loop", str(loop))
-
-    for layout in ("pages", "scroll"):
-        set_layout(page, layout)
-        clear_loop()
-        page.get_by_test_id("loop-bars").click()
-        wait_for(lambda: screen().get("pickingLoop") == "start", f"{layout}: picking the first bar")
-        point = bar_point(page)
-        page.mouse.click(point["x"], point["y"])
-        wait_for(lambda: screen().get("pickingLoop") == "end", f"{layout}: picking the last bar")
-        before = score_scroller(page, "scrollTop")
-        if not before:
-            check(False, f"{layout}: the score can scroll down")
-        else:
-            wheel(page, before, 200, 4)
-            after = score_scroller(page, "scrollTop")
-            check(after["pos"] != before["pos"], f"{layout}: the wheel scrolls while picking", f"{before['pos']} -> {after['pos']}")
+    page.wait_for_timeout(400)
+    if page.get_by_test_id("finger-picker").count():
         page.keyboard.press("Escape")
         page.wait_for_timeout(200)
+    check(screen().get("loop") == loop_before, "a click on the score doesn't change the loop", str(screen().get("loop")))
+    page.get_by_test_id("loop-bars").click()
+    wait_for(lambda: screen().get("loopOn") is False, "loop mode off")
     set_layout(page, "strip")
 
 

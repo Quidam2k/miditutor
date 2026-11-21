@@ -799,10 +799,12 @@ export function ScoreView() {
   wrongCountRef.current = wrongCount;
   const [pace, setPace] = useState<number | null>(null);
   const [wrongFlash, setWrongFlash] = useState(false);
-  // Loop range (#5004): 'start'/'end' while he is clicking bars to set it.
-  const [picking, setPicking] = useState<'off' | 'start' | 'end'>('off');
+  // Loop range (#5004). #6660: Loop bars is a plain on/off. On with no bars yet (loopArmed), nothing
+  // loops until he types bars in the Selected boxes or picks a Loops row; pickStart is a typed first bar.
+  const [loopArmed, setLoopArmed] = useState(false);
   const [pickStart, setPickStart] = useState<number | null>(null);
   const [loopBars, setLoopBars] = useState<{ first: number; last: number } | null>(null);
+  const loopOn = loopArmed || !!loopBars;
   // #6369: the range a spin over the range boxes is showing, shaded before it lands.
   const [previewBars, setPreviewBars] = useState<{ first: number; last: number } | null>(null);
   const [lap, setLap] = useState(1);
@@ -1039,6 +1041,11 @@ export function ScoreView() {
   const [xmlEdits, setXmlEdits] = useState<Record<string, string>>({});
   const listed = onScreen ?? PIECES[0];
   const piece = xmlEdits[listed.id] ? { ...listed, xml: xmlEdits[listed.id] } : listed;
+  // A different piece starts with loop mode off (a fingering reload keeps the same piece.id).
+  useEffect(() => {
+    setLoopArmed(false);
+    setPickStart(null);
+  }, [piece.id]);
   const versions = piece.group ? versionsOf(piece.group.slug) : [];
   // My mix (#9627): the builder needs both source scores loaded.
   const [mixing, setMixing] = useState(false);
@@ -1319,7 +1326,7 @@ export function ScoreView() {
       // #6531: his starred ranges for this piece, and the layout on screen.
       stars: starsInOrder(starsOf(pieceStars, piece.label)),
       scoreLayout,
-      pickingLoop: picking === 'off' ? null : picking,
+      loopOn,
       playedMarks: marks.length,
       wrongMarks: marks.filter((m) => m.wrong).length,
       redAccidentals: marks.flatMap((m) => (m.accidental ? [m.accidental] : [])),
@@ -1333,7 +1340,7 @@ export function ScoreView() {
       lesson: lesson ? { main: lesson.main, steps: lesson.steps, at: lesson.at, clean: lesson.clean, need: lesson.steps[lesson.at].need } : null,
       lessonReady,
     });
-  }, [advice, lesson, lessonReady, pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, picking, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget, clickReadout]);
+  }, [advice, lesson, lessonReady, pieceName, pieceLabels, status, hand, measure, keep, keepLast, remaining, wrongCount, feedback, pace, marks, noteName, loopBars, lap, lapBpm, loopOn, exprMarks, exprFindings, chunk, reached, block, zones, chords, readAhead, blanked, pieceSpots, pieceStars, scoreLayout, markedBpm, climb, climbTarget, clickReadout]);
 
   // Where a played note goes: x from the written notehead(s) at that step, y
   // from the staff's top line plus the diatonic offset of the played pitch,
@@ -1930,6 +1937,7 @@ export function ScoreView() {
         if (!range) return;
         f.setRange(range.first, range.last);
         setLoopBars({ first, last });
+        setLoopArmed(false); // on with bars; loopArmed is only "on, no bars yet"
         // Build backwards moving its own loop isn't him choosing a range (#5259).
         if (!keepChunk) useSettingsStore.getState().setPieceLoop(pieceLabelRef.current, { first, last });
         // #6460: a range he chose: bars inside it he keeps missing join his trouble spots.
@@ -1939,8 +1947,8 @@ export function ScoreView() {
         f.clearRange();
         setLoopBars(null);
         reportEvent('loop', { cleared: true });
+        setLoopArmed(false); // no loop is loop mode off
       }
-      setPicking('off');
       setPickStart(null);
       setLapBpm(null);
       restart();
@@ -2468,19 +2476,20 @@ export function ScoreView() {
     chunkEvent(edited, { edited: true });
   };
 
-  // Typed instead of clicked: the same two steps as clicking the first bar and the last.
+  // #6660: bars change only here (and from the Loops list). With bars, a box edits that end; loop on with
+  // no bars yet, the first bar typed waits for the last.
+  // A first bar past the loop's end (or a last bar before its start) moves the loop there, same length.
   const typedFirst = (bar: number) => {
-    if (picking === 'off') {
-      if (overall) editRange({ first: bar, last: overall.last });
-    } else if (followerRef.current?.steps.some((st) => st.measure === bar)) {
-      setPickStart(bar);
-      setPicking('end');
-    }
+    const end = followerRef.current?.steps.at(-1)?.measure ?? bar;
+    if (overall && bar > overall.last) applyLoop({ first: bar, last: Math.min(end, bar + overall.last - overall.first) });
+    else if (overall) editRange({ first: bar, last: overall.last });
+    else if (followerRef.current?.steps.some((st) => st.measure === bar)) setPickStart(bar);
   };
   const typedLast = (bar: number) => {
-    if (picking !== 'off') {
-      if (pickStart !== null) applyLoop({ first: pickStart, last: bar });
-    } else if (overall) editRange({ first: overall.first, last: bar });
+    const start = followerRef.current?.steps[0]?.measure ?? bar;
+    if (overall && bar < overall.first) applyLoop({ first: Math.max(start, bar - (overall.last - overall.first)), last: bar });
+    else if (overall) editRange({ first: overall.first, last: bar });
+    else applyLoop({ first: pickStart ?? bar, last: bar });
   };
 
   // #5521: glow the noteheads of steps first..last, one beat after another, `times` over.
@@ -2612,35 +2621,9 @@ export function ScoreView() {
     return grew || hit;
   }, [applyLoop, syncUi, celebrateLap, startWave]);
 
-  // Bar under a click on the score, from OSMD's bar layout.
-  const barAt = (clientX: number, clientY: number): number | null => {
-    const osmd = osmdRef.current;
-    const container = containerRef.current;
-    if (!osmd || !container) return null;
-    for (const [bar, b] of barBoxes(osmd)) {
-      const svg = pageSvgOf(osmd, container, bar - 1);
-      if (!svg) continue;
-      const r = svg.getBoundingClientRect();
-      const x = clientX - r.left;
-      const y = clientY - r.top;
-      if (x >= b.x && x <= b.x + b.w && y >= b.y - 10 && y <= b.y + b.h + 10) return bar;
-    }
-    return null;
-  };
 
-  const onScoreClick = (e: React.MouseEvent) => {
-    if (picking === 'off' || status !== 'ready') return;
-    const bar = barAt(e.clientX, e.clientY);
-    if (bar === null) return;
-    if (picking === 'start') {
-      setPickStart(bar);
-      setPicking('end');
-    } else {
-      applyLoop({ first: pickStart ?? bar, last: bar });
-    }
-  };
 
-  // Shade the loop (or the start bar while picking). Recomputed after any re-layout.
+  // Shade the loop (or the first bar he typed, before the last). Recomputed after any re-layout.
   useEffect(() => {
     const osmd = osmdRef.current;
     const container = containerRef.current;
@@ -2694,7 +2677,7 @@ export function ScoreView() {
     const range = useSettingsStore.getState().pieceLoops[piece.label];
     if (!range || !followerRef.current || !stepRangeOf(followerRef.current.steps, range.first, range.last)) {
       setPickStart(null);
-      setPicking('start');
+      setLoopArmed(true); // #6660: loop on, waiting for bars in the Selected boxes
     } else if (pendingOpen.backwards) startBackwards(range);
     else applyLoop(range);
   }, [pendingOpen, piece.id, drawn]);
@@ -2850,19 +2833,18 @@ export function ScoreView() {
     [endLook],
   );
 
-  // Esc clears the loop (or cancels picking). Looking away, it only brings him back (#6369).
+  // Esc turns the loop off (its bars stay remembered). Looking away, it only brings him back (#6369).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (endLook()) return;
-      if (picking !== 'off') {
-        setPicking('off');
-        setPickStart(null);
-      } else if (loopBars) applyLoop(null);
+      setPickStart(null);
+      if (loopBars) applyLoop(null);
+      else setLoopArmed(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [picking, loopBars, applyLoop, endLook]);
+  }, [loopBars, applyLoop, endLook]);
 
   // #6373: P flips to Pages and back to the layout he came from (a trackball button can send P).
   // In Pages, Page Up / Page Down and the mouse's back / forward buttons turn a spread.
@@ -3035,8 +3017,6 @@ export function ScoreView() {
         setStaffCount(osmd.Sheet.Staves.length);
         const { steps, exprMarksParsed } = buildFollower(osmd);
         setLoopBars(null);
-        setPicking('off');
-        setPickStart(null);
         restart();
         // After his fingering edit re-renders the score, put him back where he was.
         // A relaunch or parked-drill restore wins; a re-layout snapshot is used only for its own piece.
@@ -3638,8 +3618,7 @@ export function ScoreView() {
 
   // #9988: tap a notehead to give it a finger number, or (#10146) mark it "hold".
   const onScoreTap = (ev: React.MouseEvent) => {
-    // #5410: choosing a loop's bars, a click on a note picks its bar; no finger picker over the music.
-    if (watching || picking !== 'off' || !(ev.target instanceof Element)) return;
+    if (watching || !(ev.target instanceof Element)) return;
     const hit = noteAt(ev.target, ev.clientY);
     if (hit) openPick(ev.clientX, ev.clientY, hit);
   };
@@ -3655,9 +3634,8 @@ export function ScoreView() {
   const setHoverTarget = (next: FingerTarget | null) =>
     setWheelTarget((was) => (was && next && sameTarget(was, next) ? was : next));
 
-  // The wheel over a score note edits its finger only with the switch on, not during
-  // Play it for me, and not while choosing a loop's bars.
-  const wheelOnScore = scoreWheelFingers && !watching && picking === 'off';
+  // The wheel over a score note edits its finger only with the switch on, and not during Play it for me.
+  const wheelOnScore = scoreWheelFingers && !watching;
   const onScoreHover = (ev: React.MouseEvent) => {
     if (hoverKey !== null) setHoverKey(null);
     const on = wheelOnScore && ev.target instanceof Element ? noteAt(ev.target, ev.clientY) : null;
@@ -3671,9 +3649,9 @@ export function ScoreView() {
       return;
     }
     // #5630: with "Wheel fingers on keyboard" off, the wheel over a key only scrolls.
-    const hits = keyWheelFingers && !watching && picking === 'off' ? keyTargets(hoverKey) : [];
+    const hits = keyWheelFingers && !watching ? keyTargets(hoverKey) : [];
     setHoverTarget(hits.length === 1 ? hits[0] : null);
-  }, [hoverKey, cursorStep, watching, picking, drawn, keyWheelFingers]);
+  }, [hoverKey, cursorStep, watching, drawn, keyWheelFingers]);
 
   // A save or a re-fit redraws the score under a pointer that hasn't moved: find what it's on
   // again, or the next notch of the same spin would scroll instead of edit.
@@ -4059,8 +4037,7 @@ export function ScoreView() {
         return;
       }
     }
-    // Choosing a loop's bars edits no finger, even if a note was yellow as he started.
-    const target = picking === 'off' ? wheelTarget : null;
+    const target = wheelTarget;
     // #6373: in Pages, a notch off the notes turns a spread.
     if (!target && scoreLayout === 'pages') {
       ev.preventDefault();
@@ -4077,12 +4054,6 @@ export function ScoreView() {
     const up = notch < 0;
     if (!target) {
       const way = reverseWheel ? (-notch as -1 | 1) : notch;
-      // #5410: choosing a loop's bars, the wheel slides the music a bar per notch to find the
-      // next one. The cursor stays where it is.
-      if (picking !== 'off') {
-        slideStripBar(way);
-        return;
-      }
       // #10259: one note per notch. The loop itself never changes; the wheel stops at its edges,
       // and Shift+wheel goes past them to tag notes outside it. #5560: so does a notch after a
       // pause at the edge, for one hand on a trackball.
@@ -4286,12 +4257,12 @@ export function ScoreView() {
     }
   };
 
-  const loopBtn = picking !== 'off' || loopBars ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : '';
+  const loopBtn = loopOn ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : '';
 
   // #6062: which controls are ON, whether or not they are on the front row (the "N on" count on More).
   const controlOn = (id: string): boolean => ({
     hand: hand !== 'both', layout: scoreLayout !== 'strip', follow: following, keyboard: showKeyboard,
-    loopBars: !!loopBars || picking !== 'off', watch: watching, keepGoing: keeping, missSound,
+    loopBars: loopOn, watch: watching, keepGoing: keeping, missSound,
     simple: simplePieces.includes(piece.label), bare: !!bareNow, handZones: zonesOn, chordMoves: chordsOn,
     trainingWheels: showKeyboard && trainingWheels, miniStaff: showKeyboard && miniStaff, readAhead,
     scoreWheelFingers, keyWheelFingers: showKeyboard && keyWheelFingers, everyBarNumbers: !strip && everyBarNumbers, bigNotes: strip && stripFitInk,
@@ -4367,24 +4338,30 @@ export function ScoreView() {
     ),
     loopBars: (
       <>
-          {/* #6655: a real on/off. On, a click turns the loop off; to change its bars, type in the Selected boxes.
-              Fixed width, so its label changing never moves the row. */}
+          {/* #6655/#6660: a plain on/off (Todd 65582). On brings back the bars he looped last on this piece;
+              bars change only in the Selected boxes or from Loops. Fixed width, so its label never moves the row. */}
           <button
             onClick={() => {
               setPickStart(null);
-              if (picking !== 'off') setPicking('off');
-              else if (loopBars) applyLoop(null);
-              else setPicking('start');
+              if (loopOn) {
+                if (loopBars) applyLoop(null);
+                else setLoopArmed(false);
+                return;
+              }
+              const last = useSettingsStore.getState().pieceLoops[pieceLabelRef.current];
+              const f = followerRef.current;
+              if (last && f && stepRangeOf(f.steps, last.first, last.last)) applyLoop(last);
+              else setLoopArmed(true);
             }}
             disabled={status !== 'ready' || watching || keeping}
-            aria-pressed={!!loopBars || picking !== 'off'}
+            aria-pressed={loopOn}
             className={`${btn} ${loopBtn} w-36`}
-            title={picking !== 'off' ? 'Click the bars on the score. Click here again to stop picking.'
-              : loopBars ? 'Loop is on. Click to turn it off. To loop different bars, type them in the Selected boxes below.'
-                : 'Loop some bars: click this, then the first bar and the last bar on the score'}
+            title={loopOn
+              ? 'Loop is on. Click to turn it off (your bars are remembered). To change the bars, type them in the Selected boxes or pick one from Loops.'
+              : 'Loop on/off. On, it loops the bars you used last on this piece. To change them, type in the Selected boxes or pick from Loops.'}
             data-testid="loop-bars"
           >
-            {picking === 'start' ? 'Click first bar…' : picking === 'end' ? 'Click last bar…' : loopBars ? 'Loop: on' : 'Loop bars'}
+            {loopOn ? 'Loop: on' : 'Loop bars'}
           </button>
       </>
     ),
@@ -5077,36 +5054,36 @@ export function ScoreView() {
           <span className="text-gray-400">
             Wrong notes: <span className="inline-block w-[3ch] font-mono text-gray-200">{wrongCount}</span>
           </span>
-          {(overall || picking !== 'off') && (
+          {(overall || loopOn) && (
             <span className="flex flex-wrap items-center gap-1 text-yellow-300" data-testid="loop-status">
               Selected
               <BarInput
                 testId="loop-first"
-                value={picking === 'off' ? overall?.first ?? null : pickStart}
+                value={overall?.first ?? pickStart}
                 from={measure}
                 last={lastBar}
                 onCommit={typedFirst}
-                onPreview={(bar) => setPreviewBars(bar === null || picking !== 'off' || !overall ? null : { first: Math.min(bar, overall.last), last: Math.max(bar, overall.last) })}
+                onPreview={(bar) => setPreviewBars(bar === null || !overall ? null : { first: Math.min(bar, overall.last), last: Math.max(bar, overall.last) })}
                 disabled={watching || keeping}
-                focus={picking === 'start'}
-                title="First bar of the range"
+                focus={loopOn && !overall && pickStart === null}
+                title={overall ? 'First bar of the loop. Type or spin to change it.' : 'Type the first bar to loop'}
               />
               –
               <BarInput
                 testId="loop-last"
-                value={picking === 'off' ? overall?.last ?? null : null}
+                value={overall?.last ?? null}
                 from={pickStart ?? measure}
                 last={lastBar}
                 onCommit={typedLast}
                 onPreview={(bar) => {
-                  const first = picking === 'off' ? overall?.first : pickStart;
+                  const first = overall?.first ?? pickStart;
                   setPreviewBars(bar === null || first == null ? null : { first: Math.min(first, bar), last: Math.max(first, bar) });
                 }}
                 disabled={watching || keeping}
-                focus={picking === 'end'}
-                title="Last bar of the range"
+                focus={loopOn && !overall && pickStart !== null}
+                title={overall ? 'Last bar of the loop. Type or spin to change it.' : 'Type the last bar to loop'}
               />
-              {picking === 'off' && overall && (
+              {overall && (
                 <button
                   onClick={() => {
                     useSettingsStore.getState().toggleStar(pieceLabelRef.current, overall);
@@ -5122,112 +5099,110 @@ export function ScoreView() {
                   {overallStarred ? '★' : '☆'}
                 </button>
               )}
-              {picking === 'off' && (
-                // #6513: one list of his loops: starred ranges and trouble spots together, by bar.
-                <Popover label={`Loops ${loopCount}`} testId="loops" btn={`${btn} px-1.5 py-0.5`} wide>
-                  {/* #6582: the lesson plan, where he looks for loop tools (its only home since #6655); starting it
-                      keeps his selected loop (Stop puts it back exactly). */}
-                  {loopBars && (
-                    <button
-                      onClick={lesson ? () => stopLesson('button') : startLesson}
-                      disabled={watching || keeping || !!block || !!chunk || (!lesson && !lessonReady)}
-                      className={`${btn} ${lesson ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
-                      title={lesson ? 'Stop the lesson plan: back to your own loop'
-                        : lessonReady ? 'Loops the rough spots of your last laps one by one until clean, then the whole loop'
-                          : `Play the loop ${LESSON_MIN_LAPS} times first`}
-                      data-testid="lesson-plan-menu"
-                    >
-                      {lesson ? 'Stop lesson plan' : lessonReady ? 'Lesson plan: work the rough spots of this loop' : `Lesson plan (play the loop ${LESSON_MIN_LAPS} times first)`}
-                    </button>
-                  )}
-                  {lastMerge && (
-                    <button
-                      data-stay
-                      onClick={() => {
-                        const undone = useSettingsStore.getState().undoLastMerge(piece.label);
-                        if (undone) reportEvent('spot', { unmerged: undone.to, restored: undone.from.length });
-                      }}
-                      className={btn}
-                      data-testid="spot-unmerge"
-                      title="Splits that one joined spot back into the separate spots it replaced. Your selected loop stays as it is."
-                    >
-                      ↶ Undo join: {spanText(lastMerge.to)} → back to {lastMerge.from.length} separate spot{lastMerge.from.length === 1 ? '' : 's'}
-                    </button>
-                  )}
-                  {overall && overall.last - overall.first < MAX_SPOT_BARS && !spotList.some((sp) => !sp.ticked && sp.first === overall.first && sp.last === overall.last) && (
-                    <button title="Add the bars you have selected to your list of trouble spots." onClick={() => putSpot(overall)} disabled={watching || keeping} className={btn} data-testid="spot-add">
-                      + Add {spanText(overall)} as a spot
-                    </button>
-                  )}
-                  {loopRows.length === 0 && (
-                    <span className="text-xs text-gray-400">
-                      No loops yet. Star a range with ☆, and bars you keep missing or slowing down on get added here.
+              {/* #6513: one list of his loops: starred ranges and trouble spots together, by bar. */}
+              <Popover label={`Loops ${loopCount}`} testId="loops" btn={`${btn} px-1.5 py-0.5`} wide>
+                {/* #6582: the lesson plan, where he looks for loop tools (its only home since #6655); starting it
+                    keeps his selected loop (Stop puts it back exactly). */}
+                {loopBars && (
+                  <button
+                    onClick={lesson ? () => stopLesson('button') : startLesson}
+                    disabled={watching || keeping || !!block || !!chunk || (!lesson && !lessonReady)}
+                    className={`${btn} ${lesson ? 'bg-yellow-500 text-gray-950 hover:bg-yellow-400' : ''}`}
+                    title={lesson ? 'Stop the lesson plan: back to your own loop'
+                      : lessonReady ? 'Loops the rough spots of your last laps one by one until clean, then the whole loop'
+                        : `Play the loop ${LESSON_MIN_LAPS} times first`}
+                    data-testid="lesson-plan-menu"
+                  >
+                    {lesson ? 'Stop lesson plan' : lessonReady ? 'Lesson plan: work the rough spots of this loop' : `Lesson plan (play the loop ${LESSON_MIN_LAPS} times first)`}
+                  </button>
+                )}
+                {lastMerge && (
+                  <button
+                    data-stay
+                    onClick={() => {
+                      const undone = useSettingsStore.getState().undoLastMerge(piece.label);
+                      if (undone) reportEvent('spot', { unmerged: undone.to, restored: undone.from.length });
+                    }}
+                    className={btn}
+                    data-testid="spot-unmerge"
+                    title="Splits that one joined spot back into the separate spots it replaced. Your selected loop stays as it is."
+                  >
+                    ↶ Undo join: {spanText(lastMerge.to)} → back to {lastMerge.from.length} separate spot{lastMerge.from.length === 1 ? '' : 's'}
+                  </button>
+                )}
+                {overall && overall.last - overall.first < MAX_SPOT_BARS && !spotList.some((sp) => !sp.ticked && sp.first === overall.first && sp.last === overall.last) && (
+                  <button title="Add the bars you have selected to your list of trouble spots." onClick={() => putSpot(overall)} disabled={watching || keeping} className={btn} data-testid="spot-add">
+                    + Add {spanText(overall)} as a spot
+                  </button>
+                )}
+                {loopRows.length === 0 && (
+                  <span className="text-xs text-gray-400">
+                    No loops yet. Star a range with ☆, and bars you keep missing or slowing down on get added here.
+                  </span>
+                )}
+                {openSpots > 0 && (
+                  <span className="text-xs leading-snug text-gray-400" data-testid="loops-legend">
+                    <b className="text-gray-300">Alone</b>: you looped just that spot (the loop sits inside it) with no wrong notes.{' '}
+                    <b className="text-gray-300">In context</b>: you played through it in a longer loop or the whole piece, with no wrong notes inside the spot (misses elsewhere don't count against it).
+                    A spot comes off the list when both reach {spotClean}. Picking a row replaces your selected loop.
+                  </span>
+                )}
+                {loopRows.map(({ first, last, star, spot }) => {
+                  const id = `${first}-${last}`;
+                  const done = !!spot?.ticked && !star;
+                  return (
+                    <span key={id} className="flex items-center gap-2" data-testid={spot ? `spot-${id}` : undefined}>
+                      <span className={`w-4 text-center ${star ? 'text-yellow-300' : 'text-transparent'}`} aria-hidden>★</span>
+                      {done ? (
+                        <span className="flex-1 font-mono text-gray-500">{spotLabel(spot!, spotClean)}</span>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            editRange({ first, last });
+                            reportEvent(star ? 'star-pick' : 'spot-pick', { firstBar: first, lastBar: last });
+                          }}
+                          disabled={watching || keeping}
+                          className={`${btn} flex-1 text-left font-mono`}
+                          data-testid={star ? `starred-${id}` : `spot-loop-${id}`}
+                          title={spot && !spot.ticked
+                            ? `Loop these bars (replaces your selected loop). Alone ${Math.min(spot.alone, spotClean)}/${spotClean}: clean laps of just this spot. In context ${Math.min(spot.inContext, spotClean)}/${spotClean}: clean passes through it inside a longer loop or the whole piece.`
+                            : 'Loop these bars (replaces your selected loop)'}
+                        >
+                          {spot && !spot.ticked ? spotLabel(spot, spotClean) : first === last ? `Bar ${first}` : `Bars ${first}–${last}`}
+                        </button>
+                      )}
+                      {star && (
+                        <button
+                          data-stay
+                          onClick={() => useSettingsStore.getState().toggleStar(pieceLabelRef.current, { first, last })}
+                          className="px-1 text-gray-400 hover:text-red-300"
+                          title="Remove this star"
+                          aria-label={`Remove star ${first}–${last}`}
+                          data-testid={`unstar-${id}`}
+                        >
+                          ☆✕
+                        </button>
+                      )}
+                      {spot && !spot.ticked && (
+                        <button
+                          data-stay
+                          onClick={() => {
+                            useSettingsStore.getState().dismissSpot(pieceLabelRef.current, spot);
+                            reportEvent('spot', { removed: { first, last } });
+                          }}
+                          className="px-1 text-gray-400 hover:text-red-300"
+                          title="Take this spot off the list"
+                          aria-label={`Remove spot ${first}–${last}`}
+                          data-testid={`spot-x-${id}`}
+                        >
+                          ✕
+                        </button>
+                      )}
                     </span>
-                  )}
-                  {openSpots > 0 && (
-                    <span className="text-xs leading-snug text-gray-400" data-testid="loops-legend">
-                      <b className="text-gray-300">Alone</b>: you looped just that spot (the loop sits inside it) with no wrong notes.{' '}
-                      <b className="text-gray-300">In context</b>: you played through it in a longer loop or the whole piece, with no wrong notes inside the spot (misses elsewhere don't count against it).
-                      A spot comes off the list when both reach {spotClean}. Picking a row replaces your selected loop.
-                    </span>
-                  )}
-                  {loopRows.map(({ first, last, star, spot }) => {
-                    const id = `${first}-${last}`;
-                    const done = !!spot?.ticked && !star;
-                    return (
-                      <span key={id} className="flex items-center gap-2" data-testid={spot ? `spot-${id}` : undefined}>
-                        <span className={`w-4 text-center ${star ? 'text-yellow-300' : 'text-transparent'}`} aria-hidden>★</span>
-                        {done ? (
-                          <span className="flex-1 font-mono text-gray-500">{spotLabel(spot!, spotClean)}</span>
-                        ) : (
-                          <button
-                            onClick={() => {
-                              editRange({ first, last });
-                              reportEvent(star ? 'star-pick' : 'spot-pick', { firstBar: first, lastBar: last });
-                            }}
-                            disabled={watching || keeping}
-                            className={`${btn} flex-1 text-left font-mono`}
-                            data-testid={star ? `starred-${id}` : `spot-loop-${id}`}
-                            title={spot && !spot.ticked
-                              ? `Loop these bars (replaces your selected loop). Alone ${Math.min(spot.alone, spotClean)}/${spotClean}: clean laps of just this spot. In context ${Math.min(spot.inContext, spotClean)}/${spotClean}: clean passes through it inside a longer loop or the whole piece.`
-                              : 'Loop these bars (replaces your selected loop)'}
-                          >
-                            {spot && !spot.ticked ? spotLabel(spot, spotClean) : first === last ? `Bar ${first}` : `Bars ${first}–${last}`}
-                          </button>
-                        )}
-                        {star && (
-                          <button
-                            data-stay
-                            onClick={() => useSettingsStore.getState().toggleStar(pieceLabelRef.current, { first, last })}
-                            className="px-1 text-gray-400 hover:text-red-300"
-                            title="Remove this star"
-                            aria-label={`Remove star ${first}–${last}`}
-                            data-testid={`unstar-${id}`}
-                          >
-                            ☆✕
-                          </button>
-                        )}
-                        {spot && !spot.ticked && (
-                          <button
-                            data-stay
-                            onClick={() => {
-                              useSettingsStore.getState().dismissSpot(pieceLabelRef.current, spot);
-                              reportEvent('spot', { removed: { first, last } });
-                            }}
-                            className="px-1 text-gray-400 hover:text-red-300"
-                            title="Take this spot off the list"
-                            aria-label={`Remove spot ${first}–${last}`}
-                            data-testid={`spot-x-${id}`}
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </span>
-                    );
-                  })}
-                </Popover>
-              )}
-              {picking === 'off' && loopBars && (
+                  );
+                })}
+              </Popover>
+              {loopBars && (
                 <>
                   {chunk && <span data-testid="loop-now">· now looping {loopBars.first}–{loopBars.last}</span>}
                   <span>· Lap <span className="font-mono" data-testid="loop-lap">{lap}</span></span>
@@ -5495,10 +5470,9 @@ export function ScoreView() {
       <div
         ref={panelRef}
         data-testid="score-panel"
-        onClick={onScoreClick}
         className={`overflow-x-auto rounded-lg bg-white p-4 ring-4 transition-shadow ${
           wrongFlash ? 'ring-red-500' : 'ring-transparent'
-        } ${picking !== 'off' ? 'cursor-pointer' : ''} ${strip ? `flex min-h-0 flex-1 ${stripFitInk ? 'overflow-y-hidden' : 'overflow-y-auto'}` : ''}`}
+        } ${strip ? `flex min-h-0 flex-1 ${stripFitInk ? 'overflow-y-hidden' : 'overflow-y-auto'}` : ''}`}
         style={strip ? { alignItems: 'safe center' } : undefined}
       >
         {showPhoto && piece.photo && (

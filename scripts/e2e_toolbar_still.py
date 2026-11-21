@@ -1,5 +1,6 @@
 """#6655 end-to-end: the Score toolbar's button row holds still. Switching the loop, Climb or Miss sound must
 not move any button in [data-testid=toolbar-row]; loop-only tools exist only while a loop is on.
+#6660: Loop bars is a plain on/off; on brings back the piece's last bars, a piece with none loops nothing.
 
 Run against a RUNNING hidden muted test copy (see memory hidden-test-copy-must-be-muted). Never the owner's
 piano (ports 47810 / 47800):
@@ -116,14 +117,49 @@ def check_loop(page, base):
     check("loop off by clicking Loop: on", not screen().get("loop"))
     check("loop off: loop-tools gone", page.locator("[data-testid=loop-tools]").count() == 0)
     check("loop off: button row did not move", same(base, measure(page)))
+    # #6660: on again brings back this piece's last bars; there is no picking mode.
+    page.locator(LOOP).click()
+    time.sleep(0.5)
+    loop = screen().get("loop") or {}
+    check("on again: the same bars 2-5", (loop.get("firstBar"), loop.get("lastBar")) == (2, 5))
+    check("on again: text is 'Loop: on'", loop_text(page) == "Loop: on")
+    check("on again: button row did not move", same(base, measure(page)))
     page.locator(LOOP).click()
     time.sleep(0.3)
-    check("picking: text starts with 'Click first bar'", loop_text(page).startswith("Click first bar"))
-    check("picking: button row did not move", same(base, measure(page)))
+    check("off again: text is 'Loop bars'", loop_text(page) == "Loop bars")
+    check("off again: loop off", not screen().get("loop") and screen().get("loopOn") is False)
+    check("off again: button row did not move", same(base, measure(page)))
+
+
+def check_no_bars(page):
+    """#6660: a piece with no bars yet: Loop bars is on but loops nothing until bars are typed."""
+    print("-- no bars yet")
+    load(f"No loop yet (e2e) {int(time.time())}", 8)
+    time.sleep(1)
+    base = measure(page)
+    page.locator(LOOP).click()
+    time.sleep(0.5)
+    check("no bars: Loop bars is on", screen().get("loopOn") is True and loop_text(page) == "Loop: on")
+    check("no bars: nothing loops", not screen().get("loop"))
+    first, last = page.get_by_test_id("loop-first"), page.get_by_test_id("loop-last")
+    check("no bars: the Selected boxes show, empty", first.is_visible() and first.input_value() == "" and last.input_value() == "")
+    check("no bars: button row did not move", same(base, measure(page)))
+    score = page.locator("[data-testid=score-panel] g.vf-measure").first.bounding_box()
+    if score:
+        page.mouse.click(score["x"] + score["width"] / 2, score["y"] + 2)
+        time.sleep(0.4)
+        if page.locator("[data-testid=finger-picker]").count():
+            page.keyboard.press("Escape")
+    check("no bars: a click on the score sets no bars", not screen().get("loop") and screen().get("loopOn") is True)
+    for box, bar in ((first, 3), (last, 4)):
+        box.fill(str(bar))
+        box.press("Enter")
+        time.sleep(0.4)
+    loop = screen().get("loop") or {}
+    check("no bars: typed 3-4 loops 3-4", (loop.get("firstBar"), loop.get("lastBar")) == (3, 4))
     page.locator(LOOP).click()
     time.sleep(0.3)
-    check("picking stopped: text is 'Loop bars'", loop_text(page) == "Loop bars")
-    check("picking stopped: button row did not move", same(base, measure(page)))
+    check("no bars: off again", not screen().get("loop") and screen().get("loopOn") is False)
 
 
 def check_climb(page):
@@ -222,6 +258,7 @@ def main():
             for w, h in VIEWPORTS:
                 per_viewport(page, w, h)
             once(page)
+            check_no_bars(page)
         finally:
             tc.request("DELETE", "/loop")
             set_viewport(page, 1920, 1080)
