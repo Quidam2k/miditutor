@@ -11,7 +11,7 @@ import expressionXml from '../../assets/expression-test.musicxml?raw';
 import { MISS_KINDS, MISS_KIND_LABEL, MISS_VOLUME_MAX, initAudio, playChime, playChord, playFanfare, playLapChime, playMissSound, playNote, missGateOpen, releaseChords } from '../../audio/AudioEngine';
 import { emitRep } from '../../store/useRepStore';
 import { overrunNote, startOverrun, type Overrun } from '../../engine/Overrun';
-import { beatMs, clampBpm, closeLap, countInBeats, countInClicks, keepNote, lapBeats, lapClicks, lapEndMs, lapLabel, oddMeter, startKeep, stepAt, type Click, type KeepRun } from '../../engine/KeepGoing';
+import { beatMs, clampBpm, closeLap, countInBeats, countInClicks, keepNote, lapBeats, lapClicks, lapEndMs, lapLabel, oddMeter, startKeep, CLIMB_HOW_TO, stepAt, type Click, type KeepRun } from '../../engine/KeepGoing';
 import { climbLabel, climbLap, climbPercent, parseTempo, startClimb, type Climb } from '../../engine/TempoClimb';
 import { rolandOffNow, rolandSend, setRolandSink } from '../../engine/RolandMetronome';
 import { markedTempo, playedTempo } from '../../engine/Tempo';
@@ -83,7 +83,7 @@ import {
   staffOffsetSteps,
   writtenName,
 } from '../../../shared/notation';
-import { dropChordRests } from '../../engine/chordRests';
+import { forOsmd } from '../../engine/osmdXml';
 
 // Milestone 2: the score follows live MIDI. Each OSMD cursor position becomes a
 // ScoreStep (the notes that must be newly struck there); ScoreFollower decides
@@ -715,6 +715,15 @@ export function ScoreView() {
     return () => setRolandSink(null);
   }, []);
   const climbOn = useSettingsStore((s) => s.climbOn);
+  // #6598: Climb's how-to card; opens by itself the first time he ticks Climb.
+  const [climbTipOpen, setClimbTipOpen] = useState(false);
+  useEffect(() => {
+    if (climbOn && !useSettingsStore.getState().climbTipSeen) setClimbTipOpen(true);
+  }, [climbOn]);
+  const closeClimbTip = useCallback(() => {
+    setClimbTipOpen(false);
+    useSettingsStore.getState().setPrefs({ climbTipSeen: true });
+  }, []);
   const rolandClickOn = useSettingsStore((s) => s.rolandClick);
   const keepClickOn = useSettingsStore((s) => s.keepClick);
   // #6587 B: who is clicking right now (null = not running); 'roland-on' only after the on write went out.
@@ -3013,7 +3022,7 @@ export function ScoreView() {
     const cursorObs = keepCursorHeight(container);
 
     osmd
-      .load(dropChordRests(latestXmlRef.current))
+      .load(forOsmd(latestXmlRef.current))
       .then(() => {
         if (disposed) return;
         osmd.render();
@@ -4419,6 +4428,15 @@ export function ScoreView() {
               />
               Climb to ♩
             </label>
+            <button
+              onClick={() => (climbTipOpen ? closeClimbTip() : setClimbTipOpen(true))}
+              className="rounded bg-gray-800 px-1.5 text-gray-200 hover:bg-gray-700"
+              title="How Climb works"
+              aria-label="How Climb works"
+              data-testid="climb-help"
+            >
+              ?
+            </button>
             <input
               type="number"
               min={20}
@@ -5011,6 +5029,17 @@ export function ScoreView() {
 
       {showOriginal && scanLayout && scanSlug && status === 'ready' && (
         <OriginalScan slug={scanSlug} layout={scanLayout} bar={measure} />
+      )}
+      {status === 'ready' && climbTipOpen && (
+        <div className="rounded-md border border-amber-500/60 bg-amber-950/40 px-3 py-2 text-sm text-amber-100" data-testid="climb-tip">
+          <div className="font-semibold text-amber-300">How Climb works</div>
+          {CLIMB_HOW_TO.map((line) => (
+            <p key={line}>{line}</p>
+          ))}
+          <button onClick={closeClimbTip} className="mt-1 rounded bg-amber-500 px-3 py-0.5 font-medium text-gray-950 hover:bg-amber-400" data-testid="climb-tip-got-it">
+            Got it
+          </button>
+        </div>
       )}
       {status === 'ready' && block && blockTipOpen && (
         <div className="rounded-md border border-yellow-500/60 bg-yellow-950/40 px-3 py-2 text-sm text-yellow-100" data-testid="block-tip">

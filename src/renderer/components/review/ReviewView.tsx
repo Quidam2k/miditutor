@@ -16,11 +16,10 @@ import {
 } from '../../../shared/review';
 import { BarSpan, MarkNote, NoteBox, barsUnder, describeNotes, markNotes, notesInCircle, notesInShare } from '../../../shared/reviewCircle';
 import { BarFit, StaffFit, alignBar, pageLineBar, stepBar } from '../../../shared/reviewOverlay';
-import { addBeams } from '../../engine/autoBeam';
 import { drawRangeByPosition } from '../score/drawRange';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { PieceTrust, trustMark } from '../../../shared/trust';
-import { dropChordRests } from '../../engine/chordRests';
+import { forOsmd } from '../../engine/osmdXml';
 
 // Scan review (#9664): check an OMR'd score against the scan, one printed line at
 // a time. Lines are presumed right (#5729): a click on a bar flags it (click again
@@ -648,7 +647,7 @@ function PieceReview({ slug, onBack }: { slug: string; onBack: () => void }) {
       stretchLastSystemLine: true,
     });
     osmd
-      .load(addBeams(dropChordRests(xmlRef.current)))
+      .load(forOsmd(xmlRef.current))
       .then(() => !disposed && setEngine(osmd))
       .catch((e) => !disposed && setScoreError(errText(e)));
     return () => {
@@ -1484,7 +1483,7 @@ function BarRender({ label, xml, measure }: { label: string; xml: string; measur
       drawUpToMeasureNumber: measure,
     });
     osmd
-      .load(dropChordRests(xml))
+      .load(forOsmd(xml))
       .then(() => {
         if (disposed) return;
         drawRangeByPosition(osmd);

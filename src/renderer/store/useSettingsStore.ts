@@ -130,6 +130,8 @@ interface SettingsState {
   stripFitInk: boolean;
   /** #6086: he has dismissed (or got through) Block's how-to card; the "?" brings it back. */
   blockTipSeen: boolean;
+  /** #6598: he has dismissed Climb's how-to card; the "?" beside Climb brings it back. */
+  climbTipSeen: boolean;
 
   /** Set any of the plain number/boolean preferences above. */
   setPrefs: (prefs: Partial<Pick<SettingsState, PrefKey>>) => void;
@@ -172,7 +174,7 @@ interface SettingsState {
   markHomeworkPracticed: (id: string) => void;
 }
 
-export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'climbOn' | 'climbReaction' | 'rolandClick' | 'adviceOn' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'missKind' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'wristReminder' | 'spotClean';
+export type PrefKey = 'grazeMs' | 'minVelocity' | 'keepAwake' | 'trainingWheels' | 'hintsOffNew' | 'keyFirst' | 'eyesUp' | 'eyesUpMs' | 'readAhead' | 'keepClick' | 'keepStepUp' | 'climbOn' | 'climbReaction' | 'rolandClick' | 'adviceOn' | 'celebrateChime' | 'celebrateWave' | 'celebrateFinale' | 'missSound' | 'missVolume' | 'missKind' | 'miniStaff' | 'scoreWheelFingers' | 'keyWheelFingers' | 'everyBarNumbers' | 'stripFitInk' | 'blockTipSeen' | 'climbTipSeen' | 'wristReminder' | 'spotClean';
 
 /** Today's date on this machine's clock (Pacific on Pinocchio), so the goal resets at local midnight. */
 export function localDay(now = new Date()): string {
@@ -248,6 +250,7 @@ export const useSettingsStore = create<SettingsState>()(
       everyBarNumbers: true,
       stripFitInk: true,
       blockTipSeen: false,
+      climbTipSeen: false,
       setPrefs: (prefs) => set(prefs),
       setReverseWheel: (on) => set({ reverseWheel: on }),
       setWheelSteps: (on) => set({ wheelSteps: on }),

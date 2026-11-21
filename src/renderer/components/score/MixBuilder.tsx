@@ -5,7 +5,7 @@ import { MixChoice, mixTrust, spliceMix } from '../../../shared/mix';
 import type { PieceTrust } from '../../../shared/trust';
 import type { MixPlan } from '../../../shared/versions';
 import { drawRangeByPosition } from './drawRange';
-import { dropChordRests } from '../../engine/chordRests';
+import { forOsmd } from '../../engine/osmdXml';
 
 // "My mix" builder (#9627): each section of the song is drawn twice, Easy on the left and
 // Harder on the right, and he clicks the one he wants to play. Picking is by sight.
@@ -63,7 +63,7 @@ function Thumb({ xml, range }: { xml: string; range: [number, number] }) {
           drawFromMeasureNumber: range[0],
           drawUpToMeasureNumber: range[1],
         });
-        await osmd.load(dropChordRests(xml));
+        await osmd.load(forOsmd(xml));
         if (disposed) return;
         osmd.zoom = 0.45;
         drawRangeByPosition(osmd);

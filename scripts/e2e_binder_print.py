@@ -143,6 +143,9 @@ def run(pieces: Path) -> None:
     # (fingers are text too, 1-5, so only numbers above 5 count as bar numbers here)
     check(firsts[1:] in ([23, 51], [24, 52]), "pages break where his paper does (bars 23 and 51)",
           str(firsts))
+    # #6612: eighths beamed by the meter (Sorcerer's 9/8 and 3/8 had a flag on every eighth before).
+    beams_n = len(re.findall(r'class="vf-beam', html))
+    check(beams_n >= 30, "eighths are beamed in the print (#6612)", f"vf-beam groups={beams_n}")
     # #6584: the teacher PDF
     tpdf = pieces / "print" / f"{VERIFIED}-pages.pdf"
     thtml = (pieces / "print" / f"{VERIFIED}-pages.html").read_text(encoding="utf-8")

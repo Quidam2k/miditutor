@@ -113,6 +113,14 @@ export function countInClicks(steps: ScoreStep[], first: number): Click[] {
   return Array.from({ length: n }, (_, j) => ({ rel: j - n, down: j === 0 }));
 }
 
+/** Climb's how-to card, plain words (#6598). The Roland line follows oddMeter: its click only in 4/4. */
+export const CLIMB_HOW_TO = [
+  'Climb plays your loop at a tempo that grows with you. Tick Climb and type the tempo (♩) you want to reach.',
+  'Press Keep going. It starts at your last tempo here (or 70% of the target), counts you in, and clicks while you play.',
+  'Clean laps move the tempo up; rough laps bring it down. Reach the target and it celebrates.',
+  'The readout beside it shows the tempo now and who is clicking. The Roland piano clicks only when every bar of your loop is in 4/4 and Roland click is ticked in Practice settings; otherwise (3/4, 6/8, 9/8...) the app clicks.',
+];
+
 /** The first time signature in the loop (or its count-in bar) that is not 4/4, e.g. "6/8"; null if all 4/4 or unknown. */
 export function oddMeter(steps: ScoreStep[], first: number, last: number): string | null {
   for (let i = first; i <= last; i++) {

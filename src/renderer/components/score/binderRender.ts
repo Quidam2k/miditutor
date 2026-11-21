@@ -4,7 +4,7 @@ import {
 } from '../../../shared/binderPrint';
 import { orderChordFingers } from './chordFingers';
 import { drawRangeByPosition } from './drawRange';
-import { dropChordRests } from '../../engine/chordRests';
+import { forOsmd } from '../../engine/osmdXml';
 
 interface FingeringEntry {
   FingeringEntries?: { SVGNode?: unknown }[];
@@ -67,7 +67,7 @@ async function osmdPageStarts(div: HTMLDivElement, musicxml: string): Promise<nu
     drawFingerings: true,
     cursorsOptions: [],
   });
-  await osmd.load(dropChordRests(musicxml));
+  await osmd.load(forOsmd(musicxml));
   osmd.render();
   const firsts = (osmd.GraphicSheet?.MusicPages ?? []).map(
     (page) => page.MusicSystems?.[0]?.GraphicalMeasures?.[0]?.[0]?.parentSourceMeasure?.measureListIndex);
@@ -133,7 +133,7 @@ export async function renderBinderHtml(opts: {
           stretchLastSystemLine: k < ranges.length - 1,
           ...(range ? { drawFromMeasureNumber: range[0], drawUpToMeasureNumber: range[1] } : {}),
         });
-        await osmd.load(dropChordRests(musicxml));
+        await osmd.load(forOsmd(musicxml));
         orderChordFingers(osmd);
         drawRangeByPosition(osmd);
         if (gap !== undefined) osmd.EngravingRules.MinimumDistanceBetweenSystems = gap;

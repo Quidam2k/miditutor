@@ -45,6 +45,23 @@ def main():
         page.get_by_test_id("keep-bpm").blur()
         if not page.get_by_test_id("climb-on").is_checked():
             page.get_by_test_id("climb-on").check()
+        # #6598: the how-to card opens by itself the first time (fresh user data), Got it closes it, ? reopens it.
+        # On a fresh profile it opens by itself; once dismissed it stays shut and "?" opens it.
+        try:
+            page.get_by_test_id("climb-tip").wait_for(timeout=3000)
+            auto = True
+        except Exception:
+            auto = False
+            print("(climb card already dismissed in this profile; opening it with ?)")
+            page.get_by_test_id("climb-help").click()
+        tip = page.get_by_test_id("climb-tip").text_content() or ""
+        check(f"Climb how-to shows ({'opened by itself' if auto else 'via ?'})", "How Climb works" in tip and "in 4/4" in tip)
+        page.get_by_test_id("climb-tip-got-it").click()
+        check("Got it closes the card", page.get_by_test_id("climb-tip").count() == 0)
+        page.get_by_test_id("climb-help").click()
+        check("? reopens it", page.get_by_test_id("climb-tip").count() == 1)
+        page.get_by_test_id("climb-help").click()
+        check("? closes it again", page.get_by_test_id("climb-tip").count() == 0)
         page.get_by_test_id("climb-target").fill(str(BPM))
         page.get_by_test_id("climb-target").blur()
         time.sleep(0.3)
@@ -69,7 +86,8 @@ def main():
         print("lap 1 climb:", reached[0])
         check("clean lap at target -> reached", reached[0].get("change") == "reached")
         check("celebrate climb event", bool([e for e in events_since(seq, "celebrate") if e.get("what") == "climb"]))
-        c = screen().get("climb") or {}
+        # The screen report trails the event by a render; give it a moment.
+        c = wait_for(lambda: (screen().get("climb") or {}) if (screen().get("climb") or {}).get("reached") else None, 3) or {}
         check("screen climb reached, 100%", c.get("reached") is True and c.get("percent") == 100)
         check("summary says reached", "reached" in (page.get_by_test_id("keep-last").text_content() or ""))
 
