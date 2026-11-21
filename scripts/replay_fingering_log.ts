@@ -3,7 +3,7 @@
  * score, as the app would have saved them. Read-only on its inputs; writes only --out.
  *
  *   npx tsx scripts/replay_fingering_log.ts --log <day.jsonl> --from <ms> --to <ms> \
- *     --edited <copy he edited.musicxml> --target <real score.musicxml> --out <result.musicxml>
+ *     --edited <copy he edited.musicxml> --target <real score.musicxml> --out <result.musicxml>  *     [--events-out <file.jsonl>]   (one review 'fingering' event per change made on the target)
  *
  * Every edit is replayed on BOTH copies. A bar whose notes differ between them is skipped and
  * listed; a tap whose note isn't on both is listed; a spread's changes on the target must equal
@@ -54,6 +54,7 @@ for (let i = 0; i < Math.max(em.length, tm.length); i++) if (bare(em[i] ?? '') !
 
 const problems: string[] = [];
 const key = (c: FingerTarget & { digit: string }) => `${c.measure}/${c.staff}/${c.onset}/${c.midi}=${c.digit}`;
+const applied: (FingerTarget & { digit: string | null; ts: number })[] = [];
 let taps = 0;
 let spreads = 0;
 for (const e of events) {
@@ -72,6 +73,7 @@ for (const e of events) {
     }
     edited = a.xml;
     target = b.xml;
+    applied.push({ ...t, digit: e.digit ?? null, ts: e.timestamp });
     taps++;
     continue;
   }
@@ -91,7 +93,10 @@ for (const e of events) {
   for (const c of b.changes) {
     if (!want.has(key(c)) || differs.has(c.measure)) continue;
     const r = setFingering(target, c, c.digit, impl);
-    if (r.ok) target = r.xml;
+    if (r.ok) {
+      target = r.xml;
+      applied.push({ measure: c.measure, staff: c.staff, onset: c.onset, midi: c.midi, digit: c.digit, ts: e.timestamp });
+    }
     else problems.push(`${label}: spread change ${key(c)} failed on target: ${r.reason}`);
   }
   if (onlyEdited.length || onlyTarget.length) {
@@ -123,6 +128,14 @@ for (let i = 0; i < after.length; i++) {
 }
 
 writeFileSync(arg('out'), target, 'utf8');
+if (process.argv.includes('--events-out')) {
+  const received = Date.now();
+  writeFileSync(arg('events-out'), applied.map((c, i) => JSON.stringify({
+    kind: 'fingering', measure: c.measure, staff: c.staff, onset: c.onset, midi: c.midi, digit: c.digit,
+    id: `replay-6654-${c.ts}-${i}`, origin: 'replay-6654', ts: c.ts, received,
+  })).join('\n') + '\n', 'utf8');
+  console.log(`review events written: ${applied.length}`);
+}
 console.log(`events ${events.length}: ${taps} taps + ${spreads} spreads replayed; bars differing between copies: ${[...differs].sort((a, b) => a - b).join(', ') || 'none'}`);
 console.log(`notes whose finger changed on the target: ${changed}`);
 console.log(lines.join('\n'));
