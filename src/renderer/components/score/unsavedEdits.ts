@@ -1,7 +1,7 @@
 // #6654: finger edits a save refused are kept (main writes them to userData/unsaved-edits.json)
-// and saved later. Each one is put back by note position with setFingering, so an edit whose
+// and saved later (#6661: tie marks too). Each one is put back by note position with setMark, so an edit whose
 // note is no longer there (the score changed) is dropped and named, never forced onto another note.
-import { setFingering, type Digit, type XmlImpl } from '../../../shared/fingering';
+import { setMark, type NoteMark, type XmlImpl } from '../../../shared/fingering';
 import type { UnsavedEdit } from '../../../main/scoreFiles';
 
 export interface Requeued {
@@ -16,7 +16,7 @@ export function applyQueued(xml: string, edits: readonly UnsavedEdit[], impl?: X
   const applied: UnsavedEdit[] = [];
   const dropped: Requeued['dropped'] = [];
   for (const e of edits) {
-    const r = setFingering(out, { measure: e.measure, staff: e.staff, onset: e.onset, midi: e.midi }, e.digit as Digit | null, impl);
+    const r = setMark(out, { measure: e.measure, staff: e.staff, onset: e.onset, midi: e.midi }, e.digit as NoteMark, impl);
     if (r.ok) {
       out = r.xml;
       applied.push(e);

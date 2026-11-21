@@ -308,6 +308,43 @@ export function setHold(xml: string, target: FingerTarget, on: boolean, impl?: X
   return editAt(xml, target, (doc, note) => editHold(doc, note, on), impl);
 }
 
+/**
+ * #6661: one edit he can make from the note picker, as saved in the unsaved queue and sent to
+ * the desk: a finger (null removes it), or the "hold" (tie to previous) mark on or off. Kept to
+ * one value so the queue and the review event carry both; an older build refuses hold/unhold.
+ */
+export type NoteMark = Digit | null | 'hold' | 'unhold';
+
+export const isNoteMark = (m: unknown): m is NoteMark => m === null || (typeof m === 'string' && /^([1-5]|hold|unhold)$/.test(m));
+
+export function setMark(xml: string, target: FingerTarget, mark: NoteMark, impl?: XmlImpl): FingerResult {
+  if (mark === 'hold' || mark === 'unhold') return setHold(xml, target, mark === 'hold', impl);
+  return setFingering(xml, target, mark, impl);
+}
+
+/**
+ * #6661 "Tie to next": the next note of the same pitch on the same staff, after this one, in
+ * print order, that he would strike (rests and other notes between are fine; grace and cue notes
+ * and the far ends of printed ties are skipped). null if none.
+ */
+export function nextSamePitch(xml: string, target: FingerTarget, impl?: XmlImpl): FingerTarget | null {
+  try {
+    const parsed = parseScore(xml, impl);
+    if (typeof parsed === 'string') return null;
+    let found: FingerTarget | null = null;
+    const later = (a: FingerTarget, b: FingerTarget) => a.measure > b.measure || (a.measure === b.measure && a.onset > b.onset + 1e-6);
+    walkNotes(parsed.part, Infinity, (note, at) => {
+      if (at.staff !== target.staff || at.midi !== target.midi || child(note, 'grace') || child(note, 'cue') || !later(at, target)) return;
+      // The far end of a printed tie is already held: the next note he strikes is after it.
+      if (children(note, 'tie').some((t) => t.getAttribute('type') === 'stop')) return;
+      if (!found || later(found, at)) found = at;
+    });
+    return found;
+  } catch {
+    return null;
+  }
+}
+
 /** #10146: every note marked "hold"; [] when the score can't be read. */
 export function holdsOf(xml: string, impl?: XmlImpl): FingerTarget[] {
   if (!xml.includes('other-play')) return [];

@@ -76,7 +76,7 @@ export type ReviewEvent = EventBase & (
   | { kind: 'accept_request'; mark: string; proposal: string }
   /** "Try again" pressed on Pinocchio. */
   | { kind: 'recheck'; mark: string }
-  /** #9988: he tapped a note and picked a finger (null = remove), on either box. */
+  /** #9988: he tapped a note and picked a finger (null = remove), on either box; #6661: or 'hold'/'unhold' (tie to previous). */
   | { kind: 'fingering'; measure: number; staff: number; onset: number; midi: number; digit: string | null }
   /** Solace wrote that fingering into the library score: it went from `before` to `after`. */
   | { kind: 'fingered'; request: string; before: string; after: string }

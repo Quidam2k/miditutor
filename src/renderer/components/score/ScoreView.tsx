@@ -72,7 +72,7 @@ import { MixBuilder } from './MixBuilder';
 import { OriginalScan, useScanLayout } from './OriginalScan';
 import { applyQueued, droppedLine, isFinalSaveError, waitingLine } from './unsavedEdits';
 import type { UnsavedEdit } from '../../../main/scoreFiles';
-import { holdsOf, planSpread, setFingering, setHold, spreadFingering, type Digit, type FingerTarget } from '../../../shared/fingering';
+import { holdsOf, nextSamePitch, planSpread, setFingering, setHold, spreadFingering, type Digit, type FingerTarget } from '../../../shared/fingering';
 import { ChordSymbol, chordSymbol, playsChord } from './chordSymbols';
 import {
   WrittenNote,
@@ -184,7 +184,12 @@ interface FingerPick {
   name: string;
   held: boolean;
   alts?: FingerTarget[];
+  /** #6661 "Tie to next": the next note of this pitch on this staff, and whether it is tied already. */
+  next?: { target: FingerTarget; held: boolean } | null;
 }
+
+/** #6661: "Tie to next" reaches at most this many bars ahead, so a slip can't tie a note pages away. */
+const TIE_NEXT_MAX_BARS = 4;
 
 /** A printed chord symbol (<harmony>) and the OSMD object it came from. */
 type StepChord = ChordSymbol & { container: OsmdChordContainer };
@@ -427,6 +432,50 @@ function paintFingerings(osmd: OpenSheetMusicDisplay, container: HTMLElement) {
       el.style.fill = '#9ca3af';
     }
   }
+}
+
+// #6661: his tie marks ("hold", tie to previous) are never in the engraving, so draw a small
+// sky-blue arc arriving at each marked notehead from the left, redrawn with every render.
+let holdsMemo: { xml: string; holds: FingerTarget[] } = { xml: '', holds: [] };
+const holdsFor = (xml: string) => (holdsMemo.xml === xml ? holdsMemo : (holdsMemo = { xml, holds: holdsOf(xml) })).holds;
+type OsmdSourceMeasure = { VerticalSourceStaffEntryContainers?: { StaffEntries?: ({ VoiceEntries?: { Notes?: OsmdNote[] }[] } | undefined)[] }[] };
+function paintHolds(osmd: OpenSheetMusicDisplay, holds: FingerTarget[]) {
+  if (!holds.length) return;
+  const measures = (osmd.Sheet as unknown as { SourceMeasures?: OsmdSourceMeasure[] }).SourceMeasures ?? [];
+  measures.forEach((m, i) => {
+    for (const c of m.VerticalSourceStaffEntryContainers ?? []) {
+      for (const se of c.StaffEntries ?? []) {
+        for (const n of (se?.VoiceEntries ?? []).flatMap((ve) => ve.Notes ?? [])) {
+          const at = n.isRest() ? null : targetOf(n, i + 1);
+          if (!at || !holds.some((h) => sameTarget(h, at))) continue;
+          const head = headOf(gNoteOf(osmd, n));
+          const svg = head instanceof SVGGraphicsElement ? head.ownerSVGElement : null;
+          if (!head || !svg) continue;
+          const b = (head as SVGGraphicsElement).getBBox();
+          // The head's own units into the root svg's, both through the screen: one space for both ends.
+          const fromHead = (head as SVGGraphicsElement).getScreenCTM();
+          const toSvg = svg.getScreenCTM()?.inverse();
+          if (!fromHead || !toSvg) continue;
+          const m = toSvg.multiply(fromHead);
+          const pt = (x: number, y: number) => new DOMPoint(x, y).matrixTransform(m);
+          const end = pt(b.x + b.width * 0.15, b.y + b.height * 0.1);
+          const start = pt(b.x - b.width * 1.6, b.y + b.height * 0.1);
+          const lift = Math.max(4, b.height * 1.4);
+          const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          arc.setAttribute('d', `M ${start.x} ${start.y} Q ${(start.x + end.x) / 2} ${start.y - lift} ${end.x} ${end.y}`);
+          arc.setAttribute('fill', 'none');
+          arc.setAttribute('stroke', '#0ea5e9');
+          arc.setAttribute('stroke-width', String(Math.max(1.2, b.height * 0.18)));
+          arc.setAttribute('stroke-linecap', 'round');
+          arc.setAttribute('pointer-events', 'none');
+          arc.setAttribute('class', 'miditutor-tie-mark');
+          arc.setAttribute('data-testid', 'tie-mark');
+          arc.setAttribute('data-target', `${at.measure}:${at.staff}:${at.onset}:${at.midi}`);
+          svg.appendChild(arc);
+        }
+      }
+    }
+  });
 }
 
 // Screen height left for a page under the header, sticky toolbar and keyboard strip.
@@ -3001,6 +3050,7 @@ export function ScoreView() {
       render();
       if (strip && fitStrip(osmd, container, panelRef.current)) render();
       paintFingerings(osmd, container);
+      paintHolds(osmd, holdsFor(latestXmlRef.current));
       liftStrip(osmd, layerRef.current, strip ? panelRef.current : null); // no panel: lift cleared
       centerCursor('auto'); // a re-layout moves the cursor along the strip
       if (scoreLayout === 'pages') showSpread(spreadRef.current, true); // new page divs: hide again
@@ -3612,8 +3662,11 @@ export function ScoreView() {
 
   const openPick = (x: number, y: number, target: FingerTarget, alts?: FingerTarget[]) => {
     setFingerMsg('');
-    const held = holdsOf(piece.xml).some((h) => sameTarget(h, target));
-    setFingerPick({ x, y, target, name: noteName(target.midi), held, alts });
+    const holds = holdsFor(piece.xml);
+    const held = holds.some((h) => sameTarget(h, target));
+    const after = nextSamePitch(piece.xml, target);
+    const next = after && { target: after, held: holds.some((h) => sameTarget(h, after)) };
+    setFingerPick({ x, y, target, name: noteName(target.midi), held, alts, next });
   };
 
   // #9988: tap a notehead to give it a finger number, or (#10146) mark it "hold".
@@ -3728,28 +3781,40 @@ export function ScoreView() {
     setXmlEdits((e) => ({ ...e, [piece.id]: xml }));
   };
 
-  // #10146: mark the picked note "hold, don't re-strike", or take the mark off.
-  const applyHold = (on: boolean) => {
+  // #10146: mark a note "hold, don't re-strike" (#6661: "tie to previous"), or take the mark off.
+  // #6661: via 'next' marks the NEXT note of the picked one's pitch, so it ties to the picked one.
+  // Saved like a finger (#6654 queue, the desk's review log), so a re-sync keeps it.
+  const applyHold = (on: boolean, via: 'previous' | 'next') => {
     const pick = fingerPick;
     setFingerPick(null);
-    if (!pick) return;
-    const result = setHold(piece.xml, pick.target, on);
+    const target = via === 'next' ? pick?.next?.target : pick?.target;
+    if (!pick || !target) return;
+    const result = setHold(piece.xml, target, on);
     if (!result.ok) {
       setFingerMsg(`Couldn't change that note: ${result.reason}`);
       return;
     }
     showEditedXml(result.xml);
-    const what = on ? `${pick.name} is held from before, not struck again` : `${pick.name} is struck again`;
-    reportEvent('hold', { ...pick.target, on, name: pick.name });
+    const name = noteName(target.midi);
+    const bars = target.measure - pick.target.measure;
+    const where = bars === 0 ? 'later in this bar' : bars === 1 ? 'in the next bar' : `${bars} bars later`;
+    const what = via === 'previous'
+      ? (on ? `${name} is tied to the note before: held, not struck again` : `${name} is struck again`)
+      : (on ? `The ${name} ${where} is tied to this one: held, not struck again` : `The ${name} ${where} is struck again`);
+    reportEvent('hold', { ...target, on, name, via });
     const bridge = window.tutorBridge;
     if (!scanSlug || !bridge?.writeScore) {
       setFingerMsg(`${what} (this session only: the piece has no file to save to).`);
       return;
     }
-    void bridge
-      .writeScore(scanSlug, result.xml)
-      .then(() => setFingerMsg(`${what}: saved here (a re-sync from the desk would undo it).`))
-      .catch((err: unknown) => setFingerMsg(`${what}, but saving failed: ${err instanceof Error ? err.message : String(err)}`));
+    const slug = scanSlug;
+    const mark = on ? 'hold' : 'unhold';
+    saveFingers(slug, result.xml, [{ ...target, digit: mark, name }], what, async () => {
+      const sent = scanLayout && bridge.reviewAppend ? await bridge.reviewAppend(slug, { kind: 'fingering', ...target, digit: mark }) : null;
+      return sent
+        ? `${what}: saved; the library copy updates next time Review runs on the desk.`
+        : `${what}: saved here (no scan review for this piece, so a re-sync from the desk will undo it).`;
+    });
   };
 
   const applyFinger = (digit: Digit | null) => {
@@ -5547,7 +5612,7 @@ export function ScoreView() {
         <div
           className="fixed z-50 flex items-center gap-1 rounded-md border border-gray-700 bg-gray-900 p-1 shadow-lg"
           // A key on the strip is at the screen's edge: keep the picker on screen.
-          style={{ left: Math.min(fingerPick.x + 8, window.innerWidth - 460), top: Math.min(fingerPick.y + 8, window.innerHeight - 60) }}
+          style={{ left: Math.max(4, Math.min(fingerPick.x + 8, window.innerWidth - 640)), top: Math.min(fingerPick.y + 8, window.innerHeight - 60) }}
           data-testid="finger-picker"
         >
           <span className="px-1 text-xs text-gray-400" data-testid="finger-pick-name">
@@ -5573,13 +5638,38 @@ export function ScoreView() {
           ))}
           <button onClick={() => applyFinger(null)} title="Remove its finger number" className="rounded bg-gray-700 px-2 py-1 text-sm text-gray-200">×</button>
           <button
-            onClick={() => applyHold(!fingerPick.held)}
-            title={fingerPick.held ? 'Play this note again here' : 'Keep it sounding from before (pedal or held key) instead of playing it again'}
-            className="rounded bg-sky-800 px-2 py-1 text-sm text-white hover:bg-sky-700"
+            onClick={() => applyHold(!fingerPick.held, 'previous')}
+            title={fingerPick.held
+              ? 'Play this note again here'
+              : 'Tie it to the note before: keep that one sounding (held key or pedal) instead of playing this one again'}
+            className={`rounded px-2 py-1 text-sm text-white ${fingerPick.held ? 'bg-sky-600 hover:bg-sky-500' : 'bg-sky-800 hover:bg-sky-700'}`}
             data-testid="hold-toggle"
           >
-            {fingerPick.held ? 'Re-strike' : "Hold (don't re-strike)"}
+            {fingerPick.held ? 'Untie from previous' : 'Tie to previous'}
           </button>
+          {(() => {
+            const next = fingerPick.next;
+            const far = next ? next.target.measure - fingerPick.target.measure : 0;
+            const ok = !!next && far <= TIE_NEXT_MAX_BARS;
+            const why = !next
+              ? `No later ${fingerPick.name} on this staff to tie to`
+              : !ok
+                ? `The next ${fingerPick.name} is ${far} bars later: tap that note and use Tie to previous`
+                : next.held
+                  ? `Play the next ${fingerPick.name} again (bar ${next.target.measure})`
+                  : `Tie the next ${fingerPick.name} (bar ${next.target.measure}) to this one: keep this one sounding instead of playing that one again`;
+            return (
+              <button
+                onClick={() => ok && applyHold(!next.held, 'next')}
+                disabled={!ok}
+                title={why}
+                className={`rounded px-2 py-1 text-sm text-white disabled:opacity-40 ${next?.held && ok ? 'bg-sky-600 hover:bg-sky-500' : 'bg-sky-800 hover:bg-sky-700'}`}
+                data-testid="tie-next-toggle"
+              >
+                {next?.held && ok ? 'Untie from next' : 'Tie to next'}
+              </button>
+            );
+          })()}
           <button title="Close this finger box without changing anything." onClick={() => setFingerPick(null)} className="rounded px-2 py-1 text-sm text-gray-400">Cancel</button>
         </div>
       )}

@@ -14,6 +14,7 @@ import { existsSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Layout, MarkCheck, MarkState, Proposal, ReviewEvent, ReviewState, foldReview, markCheck, orderEvents } from '../shared/review';
+import { isNoteMark } from '../shared/fingering';
 import { pieceTitle } from '../shared/pieceFiles';
 import { contentSha256 } from './contentSha';
 
@@ -806,7 +807,7 @@ export class Review {
 function checkFingering(e: Record<string, unknown>) {
   const int = (v: unknown) => Number.isInteger(v) && (v as number) >= 0;
   if (!int(e.measure) || !int(e.staff) || !int(e.midi) || typeof e.onset !== 'number' || !Number.isFinite(e.onset) ||
-      e.onset < 0 || !(e.digit === null || (typeof e.digit === 'string' && /^[1-5]$/.test(e.digit)))) {
+      e.onset < 0 || !isNoteMark(e.digit)) {
     throw new Error('bad fingering');
   }
 }

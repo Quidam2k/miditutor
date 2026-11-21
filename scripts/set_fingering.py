@@ -1,6 +1,8 @@
 """Set or remove one MusicXML fingering (#9988): the desk applies his taps on Pinocchio to the library score.
 
 Same note-matching rule as src/shared/fingering.ts; an ambiguous match is refused.
+#6661: DIGIT may also be "hold" / "unhold", his tie-to-previous mark, stored as in fingering.ts:
+<play><other-play type="miditutor">hold</other-play></play>, never drawn.
 """
 
 import sys
@@ -86,9 +88,39 @@ def _edit(note, digit):
     _subelement(technical, "fingering", digit)
 
 
+_MARKS = ("1", "2", "3", "4", "5", "hold", "unhold")
+
+
+def _hold_marks(note):
+    return [
+        (play, mark)
+        for play in _children(note, "play")
+        for mark in _children(play, "other-play")
+        if mark.get("type") == "miditutor" and (mark.text or "").strip() == "hold"
+    ]
+
+
+def _edit_hold(note, on):
+    for play, mark in _hold_marks(note):
+        play.remove(mark)
+        if _empty(play):
+            note.remove(play)
+    if not on:
+        return
+    play = _child(note, "play")
+    if play is None:
+        play = ET.Element(_tag(note, "play"))
+        listen = _child(note, "listen")
+        if listen is None:
+            note.append(play)
+        else:
+            note.insert(list(note).index(listen), play)
+    _subelement(play, "other-play", "hold").set("type", "miditutor")
+
+
 def set_fingering(score_path, measure, staff, onset, midi, digit) -> None:
-    if digit is not None and digit not in ("1", "2", "3", "4", "5"):
-        raise ValueError("digit must be 1-5 or null")
+    if digit is not None and digit not in _MARKS:
+        raise ValueError("digit must be 1-5, hold, unhold or none")
 
     try:
         score = Score(score_path)
@@ -149,7 +181,10 @@ def set_fingering(score_path, measure, staff, onset, midi, digit) -> None:
     if len(candidates) > 1:
         raise ValueError(f"ambiguous: {len(candidates)} notes")
 
-    _edit(candidates[0], digit)
+    if digit in ("hold", "unhold"):
+        _edit_hold(candidates[0], digit == "hold")
+    else:
+        _edit(candidates[0], digit)
     score.write(score_path)
 
 
@@ -158,11 +193,11 @@ def main(argv=None) -> int:
     try:
         if len(args) != 6:
             raise ValueError(
-                "usage: set_fingering.py SCORE MEASURE STAFF ONSET MIDI DIGIT"
+                "usage: set_fingering.py SCORE MEASURE STAFF ONSET MIDI DIGIT|hold|unhold|none"
             )
         path, measure, staff, onset, midi, digit = args
-        if digit != "none" and digit not in ("1", "2", "3", "4", "5"):
-            raise ValueError("digit must be 1-5 or null")
+        if digit != "none" and digit not in _MARKS:
+            raise ValueError("digit must be 1-5, hold, unhold or none")
         set_fingering(
             path,
             int(measure),

@@ -24,7 +24,7 @@ import { contentSha256 } from './main/contentSha';
 import { confirmedLines, paperPageStarts } from './shared/binderPrint';
 import { parseNotebook } from './shared/lessonNotebook';
 import { sendToPaper } from './main/binderPaper';
-import { UnsavedQueue, resolveScoreFile, serial, writeFileAtomic } from './main/scoreFiles';
+import { UnsavedQueue, backupOnce, resolveScoreFile, serial, writeFileAtomic } from './main/scoreFiles';
 import { SavedMix, VersionMap, applyTrust, groupOf, mixPlanOf, parseMixes, parseVersions, withMixes } from './shared/versions';
 
 if (started) {
@@ -152,6 +152,10 @@ const writeScore = (stem: string, musicxml: string) =>
   scoreWrites(async () => {
     const file = await resolveScoreFile(piecesDir(), stem);
     if (!isScoreXml(musicxml)) throw new Error('not a MusicXML score');
+    // Todd msg 65534: the day's first edit keeps a copy of the file as it was (userData, never synced).
+    const now = new Date();
+    const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    await backupOnce(file, path.join(app.getPath('userData'), 'score-backups'), day);
     await writeFileAtomic(file, musicxml);
   });
 

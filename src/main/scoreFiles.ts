@@ -4,6 +4,7 @@
 // no symlink or junction that resolves anywhere else.
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { isNoteMark } from '../shared/fingering';
 import { isPieceFileName } from '../shared/pieceFiles';
 
 /** Errors the renderer treats as final (drop the queued edit and say so) rather than retry. */
@@ -50,6 +51,33 @@ export function serial() {
   };
 }
 
+/**
+ * Todd's rule (msg 65534): back things up before replacing them. Before the first change of a
+ * day to a score, copy it to <root>/<day>/<name>; later changes that day leave that copy alone,
+ * so it is always the file as it was when the day began. Returns the copy, or null if there was
+ * nothing to copy or a copy for today already exists.
+ */
+export async function backupOnce(file: string, root: string, day: string): Promise<string | null> {
+  const copy = path.join(root, day, path.basename(file));
+  const tmp = `${copy}.${process.pid}.${++tmpSeq}.tmp`;
+  try {
+    await fs.mkdir(path.dirname(copy), { recursive: true });
+    // Whole copy under a temp name first, then linked in only if today's copy is missing, so a
+    // half-written copy can never become the day's backup.
+    await fs.copyFile(file, tmp);
+    await fs.link(tmp, copy);
+    return copy;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // A copy for today already, or no file yet: nothing to keep. Anything else must never stop
+    // the save itself: say so and go on.
+    if (code !== 'EEXIST' && code !== 'ENOENT') console.warn(`[pieces] backup of ${path.basename(file)} failed: ${(err as Error).message}`);
+    return null;
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
+  }
+}
+
 /** Write via a temp file in the same folder and rename, so a crash never leaves half a file. */
 export async function writeFileAtomic(file: string, text: string): Promise<void> {
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.${process.pid}.${Date.now()}.${++tmpSeq}.tmp`);
@@ -70,7 +98,7 @@ export interface UnsavedEdit {
   staff: number;
   onset: number;
   midi: number;
-  /** The digit, or null to remove the mark. */
+  /** The digit, or null to remove the mark; #6661 'hold' / 'unhold' = the tie-to-previous mark. */
   digit: string | null;
   /** Note name for messages ("F2"). */
   name?: string;
@@ -88,7 +116,7 @@ export const MAX_TRIES = 5;
 const isEdit = (e: unknown): e is UnsavedEdit => {
   const o = e as UnsavedEdit;
   if (o && o.mtimeMs !== undefined && typeof o.mtimeMs !== 'number') return false;
-  return !!o && typeof o.stem === 'string' && (o.digit === null || (typeof o.digit === 'string' && /^[1-5]$/.test(o.digit))) &&
+  return !!o && typeof o.stem === 'string' && isNoteMark(o.digit) &&
     [o.measure, o.staff, o.onset, o.midi].every((n) => typeof n === 'number' && Number.isFinite(n));
 };
 
