@@ -113,16 +113,23 @@ export class AutoInvite {
 /** Real keys: the Roland, or /inject in tests (gated). Not the on-screen keyboard. */
 export const isKeyNote = (source: unknown): boolean => source === 'hardware' || source === 'inject';
 
-type LiveResult =
+export type LiveResult =
   | { ok: true; status: number; body: unknown }
   | { ok: false; error: string };
 
-export function postLive(action: 'on' | 'off', opts: {
+export interface PantheonPost {
   url: string;
   token: string;
   certPem?: string | null;
   timeoutMs?: number;
-}): Promise<LiveResult> {
+}
+
+export function postLive(action: 'on' | 'off', opts: PantheonPost): Promise<LiveResult> {
+  return postPantheon('/api/piano/live', { action }, opts);
+}
+
+/** #6771: one JSON POST to Pantheon, https pinned to its certificate (the invite's path). Never rejects. */
+export function postPantheon(route: string, body: unknown, opts: PantheonPost): Promise<LiveResult> {
   return new Promise((resolve) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -143,13 +150,13 @@ export function postLive(action: 'on' | 'off', opts: {
     };
 
     try {
-      const url = new URL(`${opts.url.replace(/\/+$/, '')}/api/piano/live`);
+      const url = new URL(`${opts.url.replace(/\/+$/, '')}${route}`);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') {
         finish({ ok: false, error: 'unsupported protocol' });
         return;
       }
 
-      const payload = JSON.stringify({ action });
+      const payload = JSON.stringify(body);
       const options: https.RequestOptions = {
         method: 'POST',
         headers: {

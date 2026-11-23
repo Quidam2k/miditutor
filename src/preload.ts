@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('tutorBridge', {
   note: (ev: unknown) => ipcRenderer.send('tutor:note', ev),
   // Pedal, follower verdicts, loop/restart: the debugging feed (#9481).
   event: (ev: unknown) => ipcRenderer.send('tutor:event', ev),
+  // #6771: an error in the window, sent on to Pantheon by main.
+  reportError: (r: unknown) => ipcRenderer.send('app:error', r),
   screen: (state: unknown) => ipcRenderer.send('tutor:screen', state),
   device: (d: unknown) => ipcRenderer.send('tutor:device', d),
   // Native file picker for a MusicXML score; resolves null when cancelled.

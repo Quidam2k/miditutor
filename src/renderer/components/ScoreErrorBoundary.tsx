@@ -1,4 +1,5 @@
 import { Component, type ReactNode } from 'react';
+import { reportError } from '../errors/reportError';
 
 // A score OSMD cannot draw used to unmount the whole app and leave a blank window
 // (New World, 11/19). This keeps the header and tabs, and says what went wrong.
@@ -12,6 +13,7 @@ export class ScoreErrorBoundary extends Component<{ children: ReactNode }, { err
 
   componentDidCatch(error: Error) {
     console.error('[score] could not draw:', error);
+    reportError('score draw', error);
   }
 
   render() {

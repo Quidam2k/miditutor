@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, OpenDialogOptions, powerSaveBlocker, screen, session } from 'electron';
 import { createHash } from 'node:crypto';
+import os from 'node:os';
 import { createWriteStream, WriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -7,7 +8,8 @@ import JSZip from 'jszip';
 import started from 'electron-squirrel-startup';
 import { TutorApi, loadOrCreateToken, RendererCommand } from './main/tutorApi';
 import { Recorder, outputSize } from './main/recorder';
-import { AutoInvite, InviteTimer, isKeyNote, postLive } from './main/invite';
+import { AutoInvite, InviteTimer, isKeyNote, postLive, postPantheon } from './main/invite';
+import { ErrorReporter } from './main/errorReport';
 import { KeepAwake } from './main/keepAwake';
 import { onSomeDisplay, sessionFiles, WindowState } from './main/sessionFiles';
 import { Review, mirrorConfig, reviewConfig, sshRemote } from './main/review';
@@ -69,6 +71,64 @@ const grantMidiPermissions = () => {
 // builds unless MIDITUTOR_ALLOW_INJECT=1.
 let mainWindow: BrowserWindow | null = null;
 let tutorApi: TutorApi | null = null;
+
+// #6771 (asg 14108): every error reaches Pantheon by itself (POST /api/debug-log, flavor miditutor,
+// tag MidiTutorError), so he never has to stop playing to report one. Also one 'app-error' line
+// in the day log. Hidden test copies only log, unless MIDITUTOR_REPORT_ERRORS=1.
+const sendErrors = process.env.MIDITUTOR_HIDDEN !== '1' || process.env.MIDITUTOR_REPORT_ERRORS === '1';
+let errorReporter: ErrorReporter | null = null;
+const reporter = () =>
+  (errorReporter ??= new ErrorReporter({
+    outboxPath: path.join(app.getPath('userData'), 'error-outbox.jsonl'),
+    version: app.getVersion(),
+    machine: process.env.MIDITUTOR_MACHINE || os.hostname(),
+    log: (ev) =>
+      tutorApi?.onEvent({
+        kind: 'app-error', timestamp: Date.parse(ev.timestamp), where: ev.extras.where,
+        message: ev.message, piece: ev.extras.piece, count: ev.extras.count,
+      }),
+    send: async (events, sessionId) => {
+      if (!sendErrors) return { ok: false, error: 'not sent from a hidden test copy' };
+      const url = await pantheonUrl();
+      if (!url) return { ok: false, error: 'no Pantheon url' };
+      const body = { flavor: 'miditutor', session_id: sessionId, device_id: `miditutor-${os.hostname()}`, events };
+      return postPantheon('/api/debug-log', body, { url, token: apiToken, certPem: await pantheonCert(), timeoutMs: 8000 });
+    },
+  }));
+const reportError = (where: string, err: unknown, piece: string | null = null) => {
+  try {
+    const message = err instanceof Error ? err.message : typeof err === 'string' ? err : JSON.stringify(err) ?? String(err);
+    reporter().report({ where, message, piece, stack: err instanceof Error ? err.stack ?? null : null });
+  } catch (e) {
+    console.warn('[errorReport] could not report:', (e as Error).message);
+  }
+};
+process.on('uncaughtException', (err) => {
+  console.error('[main] uncaught:', err);
+  reportError('main uncaught', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[main] unhandled rejection:', err);
+  reportError('main unhandled rejection', err);
+});
+
+// A failure the renderer expects and handles is not an error: a piece with no review files.
+const expectedIpcError = (channel: string, err: unknown) =>
+  channel.startsWith('review:') && (err as NodeJS.ErrnoException)?.code === 'ENOENT';
+
+/** ipcMain.handle, but a handler that throws is reported (channel + message) before the renderer sees it. */
+const handle = (channel: string, listener: Parameters<typeof ipcMain.handle>[1]) =>
+  ipcMain.handle(channel, async (e, ...args) => {
+    try {
+      return await listener(e, ...args);
+    } catch (err) {
+      if (!expectedIpcError(channel, err)) {
+        const piece = /^(pieces|review):/.test(channel) && typeof args[0] === 'string' ? args[0] : null;
+        reportError(`ipc ${channel}`, err, piece);
+      }
+      throw err;
+    }
+  });
 
 // Score file -> MusicXML text. A compressed .mxl is a zip whose container.xml
 // names the score document inside.
@@ -423,6 +483,7 @@ const tellPantheon = async (action: 'on' | 'off') => {
   const result = await postLive(action, { url: await pantheonUrl(), token: apiToken, certPem: await pantheonCert() });
   if (!result.ok) {
     console.warn(`[invite] Pantheon ${action} failed:`, result.error);
+    reportError(`invite ${action}`, result.error);
     tutorApi?.onEvent({ kind: 'invite-error', timestamp: Date.now(), action, error: result.error });
   }
   return result;
@@ -460,8 +521,8 @@ const toggleInvite = async () => {
 
 const startTutorApi = () => {
   recorder = makeRecorder();
-  ipcMain.handle('recorder:status', () => recorder.status());
-  ipcMain.handle('recorder:toggle', () => {
+  handle('recorder:status', () => recorder.status());
+  handle('recorder:toggle', () => {
     if (recorder.status().state === 'recording') {
       stopTake();
     } else {
@@ -477,29 +538,29 @@ const startTutorApi = () => {
     else settleAudio(msg.id, null, { sampleRate: msg.sampleRate, channels: msg.channels });
   });
   ipcMain.on('keepAwake:set', (_e, on: unknown) => keepAwake.setEnabled(on === true));
-  ipcMain.handle('invite:status', () => ({ state: invite.state() }));
-  ipcMain.handle('invite:toggle', toggleInvite);
-  ipcMain.handle('pieces:list', listPieces);
-  ipcMain.handle('pieces:saveMix', (_e, slug: string, mix) => saveMix(slug, mix));
-  ipcMain.handle('pieces:writeScore', (_e, slug: string, musicxml: string) => writeScore(slug, musicxml));
-  ipcMain.handle('pieces:unsavedAdd', (_e, stem: string, edits: unknown) => unsaved().add(stem, Array.isArray(edits) ? edits : []));
-  ipcMain.handle('pieces:unsavedFor', (_e, stem: string) => unsaved().for(stem));
-  ipcMain.handle('pieces:unsavedClear', (_e, stem: string, upTo: unknown) => unsaved().clear(stem, typeof upTo === 'number' ? upTo : null));
-  ipcMain.handle('pieces:unsavedFailed', (_e, stem: string) => unsaved().failed(stem));
-  ipcMain.handle('pieces:binderInfo', (_e, slug: string) => binderInfo(slug));
-  ipcMain.handle('pieces:printBinder', (_e, slug: string, html: string) => printBinder(slug, html));
-  ipcMain.handle('pieces:savePagesPdf', (_e, slug: string, html: string) => savePagesPdf(slug, html));
+  handle('invite:status', () => ({ state: invite.state() }));
+  handle('invite:toggle', toggleInvite);
+  handle('pieces:list', listPieces);
+  handle('pieces:saveMix', (_e, slug: string, mix) => saveMix(slug, mix));
+  handle('pieces:writeScore', (_e, slug: string, musicxml: string) => writeScore(slug, musicxml));
+  handle('pieces:unsavedAdd', (_e, stem: string, edits: unknown) => unsaved().add(stem, Array.isArray(edits) ? edits : []));
+  handle('pieces:unsavedFor', (_e, stem: string) => unsaved().for(stem));
+  handle('pieces:unsavedClear', (_e, stem: string, upTo: unknown) => unsaved().clear(stem, typeof upTo === 'number' ? upTo : null));
+  handle('pieces:unsavedFailed', (_e, stem: string) => unsaved().failed(stem));
+  handle('pieces:binderInfo', (_e, slug: string) => binderInfo(slug));
+  handle('pieces:printBinder', (_e, slug: string, html: string) => printBinder(slug, html));
+  handle('pieces:savePagesPdf', (_e, slug: string, html: string) => savePagesPdf(slug, html));
   // JP's newest lesson entry, written by scripts/homework_sync.py; null until the first sync (#5058).
   // #6112: the lesson notebook (lesson-notebook.jsonl, written by scripts/lesson_notebook_add.py), newest first.
-  ipcMain.handle('notebook:get', readNotebook);
-  ipcMain.handle('homework:get', async () => {
+  handle('notebook:get', readNotebook);
+  handle('homework:get', async () => {
     try {
       return JSON.parse(await fs.readFile(path.join(piecesDir(), 'homework.json'), 'utf8'));
     } catch {
       return null;
     }
   });
-  ipcMain.handle('piece:open', async () => {
+  handle('piece:open', async () => {
     await fs.mkdir(piecesDir(), { recursive: true }).catch(() => undefined);
     const options: OpenDialogOptions = {
       title: 'Open piece',
@@ -522,15 +583,15 @@ const startTutorApi = () => {
   const review = reviewCfg
     ? new Review(reviewCfg, deskCfg?.pinocchio ? sshRemote(deskCfg.pinocchio, deskCfg.library) : null)
     : null;
-  ipcMain.handle('review:info', () => (review ? { library: review.library, mirror: review.mirror } : null));
+  handle('review:info', () => (review ? { library: review.library, mirror: review.mirror } : null));
   if (review) {
-    ipcMain.handle('review:list', () => review.list());
-    ipcMain.handle('review:piece', (_e, slug: string) => review.ensureLayout(slug));
-    ipcMain.handle('review:crop', (_e, slug: string, rel: string) => review.crop(slug, rel));
-    ipcMain.handle('review:append', (_e, slug: string, event: Record<string, unknown>) => review.append(slug, event));
-    ipcMain.handle('review:accept', (_e, slug: string, proposal: string) => review.accept(slug, proposal));
-    ipcMain.handle('review:recheck', (_e, slug: string, mark: string) => review.recheck(slug, mark));
-    ipcMain.handle('review:proposal', (_e, slug: string, proposal: string) => review.proposalView(slug, proposal));
+    handle('review:list', () => review.list());
+    handle('review:piece', (_e, slug: string) => review.ensureLayout(slug));
+    handle('review:crop', (_e, slug: string, rel: string) => review.crop(slug, rel));
+    handle('review:append', (_e, slug: string, event: Record<string, unknown>) => review.append(slug, event));
+    handle('review:accept', (_e, slug: string, proposal: string) => review.accept(slug, proposal));
+    handle('review:recheck', (_e, slug: string, mark: string) => review.recheck(slug, mark));
+    handle('review:proposal', (_e, slug: string, proposal: string) => review.proposalView(slug, proposal));
   }
   const send = (cmd: RendererCommand) => mainWindow?.webContents.send('tutor:command', cmd);
   apiToken = loadOrCreateToken(app.getPath('userData'));
@@ -580,6 +641,12 @@ const startTutorApi = () => {
     if (ev?.kind === 'pedal') recorder.pedalEvent({ down: !!ev.down, timestamp: ev.timestamp ?? Date.now() });
   });
   ipcMain.on('tutor:screen', (_e, st) => tutorApi?.onRendererState(st));
+  // #6771: renderer errors (window error, unhandled rejection, a score that could not draw).
+  ipcMain.on('app:error', (_e, x) => {
+    const where = typeof x?.where === 'string' ? x.where.slice(0, 80) : 'unknown';
+    const err = typeof x?.message === 'string' ? Object.assign(new Error(x.message), { stack: typeof x.stack === 'string' ? x.stack : undefined }) : x;
+    reportError(`renderer ${where}`, err, typeof x?.piece === 'string' ? x.piece : null);
+  });
   ipcMain.on('tutor:device', (_e, d) => tutorApi?.onDevice(d));
   // #9926: the tutor API port is this copy's single-instance claim. Another MidiTutor already holding it
   // (default 47800, or MIDITUTOR_PORT) means this copy exits quietly and logs it. It never focuses or raises
@@ -607,16 +674,16 @@ const hidden = process.env.MIDITUTOR_HIDDEN === '1';
 const useSession = !hidden || process.env.MIDITUTOR_TEST_SESSION === '1';
 const files = () => sessionFiles(app.getPath('userData'));
 
-ipcMain.handle('session:load', () => (useSession ? files().loadSession() : null));
+handle('session:load', () => (useSession ? files().loadSession() : null));
 ipcMain.on('session:save', (_e, snapshot: unknown) => {
   if (useSession) files().saveSession(snapshot).catch((err) => console.error('[session] save failed:', err));
 });
-ipcMain.handle('practice:rollup', (_e, days: number) => tutorApi?.practiceRollup(Math.max(1, Math.min(90, Math.floor(days) || 7))) ?? null);
-ipcMain.handle('noteStats:load', () => (useSession ? files().loadNoteStats() : null));
+handle('practice:rollup', (_e, days: number) => tutorApi?.practiceRollup(Math.max(1, Math.min(90, Math.floor(days) || 7))) ?? null);
+handle('noteStats:load', () => (useSession ? files().loadNoteStats() : null));
 ipcMain.on('noteStats:save', (_e, record: unknown) => {
   if (useSession) files().saveNoteStats(record).catch((err) => console.error('[note-stats] save failed:', err));
 });
-ipcMain.handle('controlUsage:load', () => (useSession ? files().loadControlUsage() : null));
+handle('controlUsage:load', () => (useSession ? files().loadControlUsage() : null));
 ipcMain.on('controlUsage:save', (_e, record: unknown) => {
   if (useSession) files().saveControlUsage(record).catch((err) => console.error('[control-usage] save failed:', err));
 });
@@ -680,7 +747,9 @@ const createWindow = async () => {
 
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     console.error('Render process gone:', details.reason);
+    if (details.reason !== 'clean-exit') reportError('renderer gone', `${details.reason} (exit ${details.exitCode})`);
   });
+  mainWindow.webContents.on('preload-error', (_e, _path, err) => reportError('preload', err));
 
   mainWindow.webContents.on('console-message', (_e, level, message) => {
     const levels = ['verbose', 'info', 'warning', 'error'];
@@ -692,6 +761,7 @@ app.on('ready', async () => {
   grantMidiPermissions();
   if (!(await startTutorApi())) return; // #9926 a second copy: exit before any window exists
   await createWindow();
+  void reporter().flush(); // #6771: errors kept from a run that could not reach Pantheon
 });
 
 app.on('will-quit', () => {
