@@ -24,7 +24,7 @@ import { contentSha256 } from './main/contentSha';
 import { confirmedLines, paperPageStarts } from './shared/binderPrint';
 import { parseNotebook } from './shared/lessonNotebook';
 import { sendToPaper } from './main/binderPaper';
-import { UnsavedQueue, backupOnce, resolveScoreFile, serial, writeFileAtomic } from './main/scoreFiles';
+import { UnsavedQueue, backupOnce, checkPieceStem, resolveScoreFile, serial, writeFileAtomic } from './main/scoreFiles';
 import { SavedMix, VersionMap, applyTrust, groupOf, mixPlanOf, parseMixes, parseVersions, withMixes } from './shared/versions';
 
 if (started) {
@@ -167,7 +167,7 @@ const unsaved = () => (unsavedQueue ??= new UnsavedQueue(path.join(app.getPath('
 // #5723 binder print. The review layout (pushed from the desk with the score) says where
 // his paper's pages start and how many lines he has confirmed; no layout = no page breaks.
 const binderInfo = async (slug: string) => {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error('bad piece name');
+  checkPieceStem(slug);
   const dir = path.join(piecesDir(), 'review');
   const read = (name: string) => fs.readFile(path.join(dir, name), 'utf8').catch(() => '');
   let layout: unknown = null;
@@ -183,7 +183,7 @@ const binderInfo = async (slug: string) => {
 // (print/<slug>-binder.pdf), then the system print dialog opens, two-sided long-edge.
 // MIDITUTOR_PRINT_NO_DIALOG=1 (tests) stops after the PDF.
 const printBinder = async (slug: string, html: string) => {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error('bad piece name');
+  checkPieceStem(slug);
   if (typeof html !== 'string' || !html.startsWith('<!DOCTYPE html>')) throw new Error('not a print page');
   const dir = path.join(piecesDir(), 'print');
   await fs.mkdir(dir, { recursive: true });
@@ -217,7 +217,7 @@ const printBinder = async (slug: string, html: string) => {
 // #6584: the single-sided teacher PDF (print/<slug>-pages.pdf). A file only: never a print dialog,
 // never lp, never sent anywhere.
 const savePagesPdf = async (slug: string, html: string) => {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error('bad piece name');
+  checkPieceStem(slug);
   if (typeof html !== 'string' || !html.startsWith('<!DOCTYPE html>')) throw new Error('not a print page');
   const dir = path.join(piecesDir(), 'print');
   await fs.mkdir(dir, { recursive: true });

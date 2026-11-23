@@ -4,13 +4,20 @@ Hidden, muted test copy over a SCRATCH Pieces folder (never his files) holding:
   sorcerers-apprentice.musicxml, sorcerers-apprentice.pre-b3-4-fix.musicxml (a backup),
   "Todd's Test Piece.musicxml" (a title-named file, as a pushed piece is saved).
     MIDITUTOR_PIECES_DIR=<s>/pieces MIDITUTOR_HIDDEN=1 MIDITUTOR_PORT=47811 \
-      ./out/MidiTutor-win32-x64/MidiTutor.exe --mute-audio --user-data-dir=<s>/ud --remote-debugging-port=9347
+      MIDITUTOR_TEST_SESSION=1 ./out/MidiTutor-win32-x64/MidiTutor.exe --mute-audio --user-data-dir=<s>/ud --remote-debugging-port=9347
+Seed <s>/ud first (before the launch) so the copy starts as his Mac did on 11/23, with the
+backup as the remembered piece:
+    python scripts/e2e_save_names.py seed <s>/ud
 then:
     python scripts/e2e_save_names.py <s>/pieces <s>/ud
 
 Checks:
  1. the picker lists The Sorcerer's Apprentice once (the backup is hidden);
  2. writeScore saves a title-named file and refuses a backup, a path and a missing file;
+ 0. (asg 14109) started from a session that remembered the .pre-* backup, it opens the real
+    sorcerers-apprentice file (his Mac's case: 11/21 build, backup on screen, every save refused);
+ 2b. writeScore saves his piece by its file stem, and binderInfo takes a title-named stem
+    (one stem rule for every path, not the old slug regex);
  3. with the score read-only, a wheel finger edit says "not saved yet" and lands in
     <ud>/unsaved-edits.json; after a reload (as after a restart) with the file writable again,
     opening the piece puts the edit back, saves it, and empties the queue.
@@ -56,7 +63,26 @@ def write_score(page, stem: str, xml: str) -> str:
     )
 
 
+BACKUP_ID = "file:sorcerers-apprentice.pre-b3-4-fix.musicxml"
+LIVE_ID = "file:sorcerers-apprentice.musicxml"
+
+
+def seed(ud: Path) -> int:
+    """His Mac's session.json of 2026-11-23 (the backup on screen), fresh, plus the restore marker."""
+    import time
+    ud.mkdir(parents=True, exist_ok=True)
+    snap = {"at": int(time.time() * 1000), "pieceId": BACKUP_ID, "pieceLabel": "The Sorcerer's Apprentice",
+            "loop": {"first": 9, "last": 23}, "chunk": None, "lap": 34, "wrongCount": 45, "lapWrong": 0,
+            "step": 30, "hand": "both", "following": True, "showOriginal": False}
+    (ud / "session.json").write_text(json.dumps(snap), encoding="utf-8")
+    (ud / "restore-next").write_text("", encoding="utf-8")
+    print(f"seeded {ud}")
+    return 0
+
+
 def main() -> int:
+    if sys.argv[1] == "seed":
+        return seed(Path(sys.argv[2]))
     pieces, ud = Path(sys.argv[1]), Path(sys.argv[2])
     score = pieces / "sorcerers-apprentice.musicxml"
     queue = ud / "unsaved-edits.json"
@@ -67,6 +93,10 @@ def main() -> int:
         page.get_by_role("button", name="Score", exact=True).click()
         page.wait_for_selector("[data-testid=loop-bars]", timeout=30000)
         page.wait_for_timeout(1500)
+
+        # 0. a remembered backup comes back as the real file (asg 14109)
+        on = page.locator("select").first.evaluate("s => s.value")
+        check(on == LIVE_ID, "restore from the backup id opens the real Sorcerer's", on)
 
         # 1. one Sorcerer's in the picker
         names = page.locator("select").first.evaluate("s => [...s.options].map((o) => o.text)")
@@ -86,6 +116,22 @@ def main() -> int:
             check("bad piece name" in got, f"refuses {stem!r}", got)
         check("no such piece" in write_score(page, "not-here", marked), "missing file says no such piece")
         check(backup.read_bytes() == before_backup, "backup untouched")
+
+        # 2b. his piece saves by its stem; binder info takes a title-named stem (asg 14109)
+        live = pieces / "sorcerers-apprentice.musicxml"
+        live_before = live.read_bytes()
+        live_marked = live_before.decode("utf-8").replace("<score-partwise", "<!-- e2e-14109 --><score-partwise", 1)
+        check(write_score(page, "sorcerers-apprentice", live_marked) == "ok", "saves sorcerers-apprentice")
+        check("e2e-14109" in live.read_text(encoding="utf-8"), "sorcerers-apprentice has the new text")
+        live.write_bytes(live_before)
+        binder = page.evaluate(
+            """async (stem) => {
+              try { await window.tutorBridge.binderInfo(stem); return 'ok'; }
+              catch (e) { return String(e && e.message || e); }
+            }""",
+            "Todd's Test Piece",
+        )
+        check("bad piece name" not in binder, "binderInfo takes a title-named stem", binder)
 
         # 3. a failed save is kept, then saved after a reload
         tid(page, "score-wheel-fingers").check()

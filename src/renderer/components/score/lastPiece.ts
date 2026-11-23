@@ -27,7 +27,11 @@ export function resolvePieceId(
   defaultId: string,
 ): string | 'wait' {
   if (!saved) return defaultId;
-  const hit = pieces.find((p) => p.id === saved.id) ?? pieces.find((p) => p.label === saved.label);
+  // #6654 (asg 14109): a build that listed .pre-* backups may have saved one as his piece; it is
+  // no longer listed, so come back to the live file it was copied from.
+  const live = typeof saved.id !== 'string' ? saved.id : saved.id.replace(/^(file:.+?)\.pre-[^.]*(\.[^.]+)$/i, '$1$2');
+  const hit = pieces.find((p) => p.id === saved.id) ?? (live !== saved.id ? pieces.find((p) => p.id === live) : undefined) ??
+    pieces.find((p) => p.label === saved.label);
   if (hit) return hit.id;
   return folderLoaded ? defaultId : 'wait';
 }

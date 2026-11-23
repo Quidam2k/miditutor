@@ -22,6 +22,24 @@ describe('resolvePieceId (#10160)', () => {
     expect(resolvePieceId(saved, FOLDER, true, 'minuet')).toBe('file:sorcerers-apprentice.musicxml');
   });
 
+  it('a saved .pre-* backup comes back as its live file (#6654, asg 14109)', () => {
+    // His Mac's 11/21 build saved the backup as his piece; the backup is no longer listed.
+    const saved = { id: 'file:sorcerers-apprentice.pre-b3-4-fix.musicxml', label: 'Renamed title' };
+    expect(resolvePieceId(saved, FOLDER, true, 'minuet')).toBe('file:sorcerers-apprentice.musicxml');
+  });
+
+  it('backup ids it does not map fall back by title (dotted or doubled suffix)', () => {
+    for (const id of ['file:sorcerers-apprentice.pre-1.2.musicxml', 'file:sorcerers-apprentice.pre-a.pre-b.musicxml']) {
+      expect(resolvePieceId({ id, label: "The Sorcerer's Apprentice" }, FOLDER, true, 'minuet')).toBe('file:sorcerers-apprentice.musicxml');
+    }
+  });
+
+  it('a backup whose live file is gone falls back by title, then the default', () => {
+    expect(resolvePieceId({ id: 'file:gone.pre-x.musicxml', label: "The Sorcerer's Apprentice" }, FOLDER, true, 'minuet'))
+      .toBe('file:sorcerers-apprentice.musicxml');
+    expect(resolvePieceId({ id: 'file:gone.pre-x.musicxml', label: 'Gone' }, FOLDER, true, 'minuet')).toBe('minuet');
+  });
+
   it('a missing file falls back to the default, no error', () => {
     const saved = { id: 'file:gone.musicxml', label: 'Gone' };
     expect(resolvePieceId(saved, FOLDER, true, 'minuet')).toBe('minuet');

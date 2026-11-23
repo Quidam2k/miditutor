@@ -13,16 +13,29 @@ export const NO_PIECE = 'no such piece';
 
 const caseFolds = process.platform === 'darwin' || process.platform === 'win32';
 
+/**
+ * #6654 (asg 14109): the one rule for a piece's file stem on every path that names a piece
+ * (score saves, binder print, teacher PDF, review files). A plain name directly in a folder:
+ * no separators or characters Windows refuses (":" would be an NTFS stream), no dot files,
+ * never a .pre-* backup. Title-named pieces pass; nothing is
+ * slugified, so his files keep their names.
+ */
+export function isPieceStem(stem: unknown): stem is string {
+  return typeof stem === 'string' && !!stem && stem.length <= 200 && stem.trim() === stem &&
+    // eslint-disable-next-line no-control-regex -- what pieceFileName strips: separators, Windows-invalid, control
+    !/[\\/:*?"<>|\u0000-\u001f]/.test(stem) && !stem.startsWith('.') && path.basename(stem) === stem &&
+    isPieceFileName(`${stem}.musicxml`);
+}
+
+/** Throws BAD_PIECE unless `stem` passes isPieceStem. */
+export function checkPieceStem(stem: unknown): string {
+  if (!isPieceStem(stem)) throw new Error(BAD_PIECE);
+  return stem;
+}
+
 /** Absolute path of `<stem>.musicxml` inside `dir`, after following links; throws BAD_PIECE / NO_PIECE. */
 export async function resolveScoreFile(dir: string, stem: unknown, foldCase = caseFolds): Promise<string> {
-  if (
-    typeof stem !== 'string' || !stem || stem.length > 200 || stem.trim() !== stem ||
-    /[\\/\0]/.test(stem) || stem.startsWith('.') || path.basename(stem) !== stem
-  ) {
-    throw new Error(BAD_PIECE);
-  }
-  const name = `${stem}.musicxml`;
-  if (!isPieceFileName(name)) throw new Error(BAD_PIECE);
+  const name = `${checkPieceStem(stem)}.musicxml`;
   const realDir = await fs.realpath(dir);
   let real: string;
   try {

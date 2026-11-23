@@ -6,6 +6,8 @@ import {
   MAX_TRIES,
   UnsavedQueue,
   readUnsaved,
+  checkPieceStem,
+  isPieceStem,
   resolveScoreFile,
   writeFileAtomic,
   writeUnsaved,
@@ -270,5 +272,20 @@ describe('UnsavedQueue', () => {
     await q.add('other', [edit(62)]);
     await q.clear('p', null);
     expect((await q.for('other')).edits).toHaveLength(1);
+  });
+});
+
+describe('isPieceStem / checkPieceStem: one rule for every path (#6654, asg 14109)', () => {
+  it('takes library slugs and title-named pieces', () => {
+    for (const stem of ['sorcerers-apprentice', "The Sorcerer's Apprentice", 'Kum Ba Yah', 'Spin the Wheel (intermediate)']) {
+      expect(isPieceStem(stem)).toBe(true);
+      expect(checkPieceStem(stem)).toBe(stem);
+    }
+  });
+  it('refuses backups, paths, dot files and junk', () => {
+    for (const stem of ['sorcerers-apprentice.pre-b3-4-fix', '../x', 'a/b', 'a\\b', '.hidden', ' padded', '', 'x'.repeat(201), 'ab:c', 'a*b', 'a?b', 'a"b', 'a<b', 'a>b', 'a|b', 'a\u0001b', 7, null]) {
+      expect(isPieceStem(stem)).toBe(false);
+      expect(() => checkPieceStem(stem)).toThrow('bad piece name');
+    }
   });
 });

@@ -17,6 +17,7 @@ import { Layout, MarkCheck, MarkState, Proposal, ReviewEvent, ReviewState, foldR
 import { isNoteMark } from '../shared/fingering';
 import { pieceTitle } from '../shared/pieceFiles';
 import { contentSha256 } from './contentSha';
+import { isPieceStem } from './scoreFiles';
 
 export interface ReviewConfig {
   library: string;
@@ -87,7 +88,6 @@ export function sshRemote(host: string, library: string, dir = process.env.MIDIT
   };
 }
 
-const SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const ID = /^[A-Za-z0-9-]{1,64}$/;
 // review_queue.py exit codes that mean "not now": another check holds the lock, or Solace is short of memory.
 const QUEUE_BUSY = 3;
@@ -175,7 +175,7 @@ export class Review {
   private outboxPath = () => path.join(this.reviewDir(), 'outbox.jsonl');
 
   private check(slug: string) {
-    if (!SLUG.test(slug)) throw new Error(`bad piece name: ${slug}`);
+    if (!isPieceStem(slug)) throw new Error(`bad piece name: ${slug}`);
   }
 
   /** One task at a time (appends, applies, trust writes). */
@@ -432,7 +432,7 @@ export class Review {
       }
       const { slug, ...event } = e ?? {};
       const ids = [event.id, ...(['mark', 'proposal'] as const).filter((k) => k in event).map((k) => event[k])];
-      if (typeof slug !== 'string' || !SLUG.test(slug) || !ids.every((i) => typeof i === 'string' && ID.test(i)) ||
+      if (typeof slug !== 'string' || !isPieceStem(slug) || !ids.every((i) => typeof i === 'string' && ID.test(i)) ||
           typeof event.kind !== 'string' || !PINOCCHIO_KINDS.has(event.kind) || typeof event.ts !== 'number') continue;
       if (!existsSync(this.scorePath(slug))) continue;
       if (event.kind === 'fingering') {
@@ -479,7 +479,7 @@ export class Review {
 
   private async slugsWithEvents() {
     const names = await fs.readdir(this.reviewDir()).catch(() => [] as string[]);
-    return names.filter((n) => n.endsWith('.events.jsonl')).map((n) => n.slice(0, -'.events.jsonl'.length)).filter((s) => SLUG.test(s));
+    return names.filter((n) => n.endsWith('.events.jsonl')).map((n) => n.slice(0, -'.events.jsonl'.length)).filter((s) => isPieceStem(s));
   }
 
   /** His Pinocchio requests not yet carried out: accept the proposal he saw, or check a mark again. */
