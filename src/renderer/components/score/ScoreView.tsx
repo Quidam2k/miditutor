@@ -478,18 +478,35 @@ function paintHolds(osmd: OpenSheetMusicDisplay, holds: FingerTarget[]) {
   });
 }
 
-// Screen height left for a page under the header, sticky toolbar and keyboard strip.
-const PAGE_RESERVE_PX = 320;
-// #6373: the "Pages 3-4 of 7" bar sits in this much room above each spread.
+// #6851: the "Pages 3-4 of 7" bar sits in this much room above each spread.
 const SPREAD_BAR_PX = 40;
+// Room the spread has to itself: panel padding above it, a hair of slack below.
+const PAGE_SLACK_PX = 16 + 20;
+// OSMD's default 5-unit page margins (about 25 px each at his zoom) cost a third of a system.
+const PAGE_MARGIN_TOP = 2;
+const PAGE_MARGIN_BOTTOM = 7; // room for the fingering digits under the bass staff (we draw them after OSMD has paged)
 
-// Pages side by side (#5137): each page is half the panel wide and as tall as the screen
-// allows, not A4, so two pages fill a TV instead of two small portrait sheets.
-// Zoom keeps about a printed page's worth of music on each.
+// The element that scrolls the score view: the app's <main> (the score panel scrolls sideways only).
+function scrollBoxOf(el: HTMLElement): HTMLElement | null {
+  return el.closest('main');
+}
+
+// Pages side by side (#5137): each page is half the panel wide, and (#6851) as tall as the band
+// the music can really be seen in: the scroll area from its top to the keyboard strip. The
+// toolbar scrolls away in Pages, and each spread turn brings the spread to the top, so nothing
+// of a page hides under the keyboard. The zoom stays about a printed page's worth of music
+// on each (it is his note size: never shrunk to make lines fit).
 function fitPages(osmd: OpenSheetMusicDisplay, container: HTMLElement) {
   const w = container.offsetWidth;
   if (!w) return; // hidden behind the photo view: keep the last page size
-  osmd.setCustomPageFormat(w, Math.max(400, window.innerHeight - PAGE_RESERVE_PX - SPREAD_BAR_PX));
+  const box = scrollBoxOf(container);
+  const boxRect = (box ?? document.documentElement).getBoundingClientRect();
+  const bottom = box ? boxRect.bottom : window.innerHeight;
+  const kb = document.querySelector<HTMLElement>('[data-testid=keyboard-strip]');
+  const free = bottom - (kb?.offsetHeight ?? 0) - (box ? boxRect.top : 0) - SPREAD_BAR_PX - PAGE_SLACK_PX;
+  osmd.EngravingRules.PageTopMargin = PAGE_MARGIN_TOP;
+  osmd.EngravingRules.PageBottomMargin = PAGE_MARGIN_BOTTOM;
+  osmd.setCustomPageFormat(w, Math.max(200, free));
   osmd.Zoom = Math.max(0.5, Math.min(1, w / 1100));
 }
 
@@ -1540,14 +1557,12 @@ export function ScoreView() {
     const first = pages[at * 2];
     setSpreadView({ at, pages: pages.length, top: first.offsetTop, height: first.offsetHeight });
     if (!scroll) return;
-    let box: HTMLElement | null = container.parentElement;
-    while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) {
-      box = box.parentElement;
-    }
+    const box = scrollBoxOf(container);
     if (!box) return;
     const b = box.getBoundingClientRect();
     const toolbar = box.querySelector('[data-score-toolbar]')?.getBoundingClientRect();
-    const top = Math.max(b.top, toolbar ? toolbar.bottom : b.top);
+    // #6851: in Pages the toolbar is not sticky, so the spread goes to the very top of the scroll area.
+    const top = layoutRef.current === 'pages' ? b.top : Math.max(b.top, toolbar ? toolbar.bottom : b.top);
     // Room above the pages for the "Pages 3-4 of 7" bar.
     box.scrollTop += first.getBoundingClientRect().top - SPREAD_BAR_PX - top;
   }, []);
@@ -2936,12 +2951,30 @@ export function ScoreView() {
     const at = loopBars ? spreadOfBar(loopBars.first) : null;
     // No page divs yet (the layout change is still redrawing): try again when it is ready.
     if (loopBars && at === null) return;
+    if (!loopBars && !containerRef.current?.querySelector('[id^=osmdCanvasPage]')) return;
     pagesOpenedRef.current = true;
-    if (at === null) return;
-    // The cursor may sit on another spread: leave him on the loop's until the cursor actually moves.
-    holdSpreadAtStepRef.current = cursorStep;
-    showSpread(at, true);
+    if (at !== null) {
+      // The cursor may sit on another spread: leave him on the loop's until the cursor actually moves.
+      holdSpreadAtStepRef.current = cursorStep;
+    }
+    // #6851: bring the spread to the top, clear of the toolbar (no loop: the spread he is on). The rows
+    // above it are still settling on open, so once more a moment later, for the same spread.
+    const open = at ?? spreadRef.current;
+    showSpread(open, true);
+    window.setTimeout(() => { if (pagesOpenedRef.current && spreadRef.current === open) showSpread(open, true); }, 350);
   }, [scoreLayout, status, drawn, loopBars, cursorStep, spreadOfBar, showSpread]); // drawn: each redraw (layout change) re-checks
+  // #6851: the page height is the room above the keyboard strip, so a strip that comes or goes
+  // (Keyboard box, mini staff) needs the pages laid out again.
+  const miniStaffOn = useSettingsStore((s) => s.miniStaff);
+  const stripSeenRef = useRef<string | null>(null);
+  useEffect(() => {
+    const key = `${showKeyboard}/${miniStaffOn}`;
+    const before = stripSeenRef.current;
+    stripSeenRef.current = key;
+    if (before === null || before === key || scoreLayout !== 'pages' || status !== 'ready') return;
+    const t = window.setTimeout(() => osmdRef.current?.render(), 0); // after the strip is in the DOM
+    return () => window.clearTimeout(t);
+  }, [showKeyboard, miniStaffOn, scoreLayout, status]);
   // Playing on past the spread turns it: he is never left on an old one.
   useEffect(() => {
     if (scoreLayout !== 'pages' || status !== 'ready') return;
@@ -3015,6 +3048,7 @@ export function ScoreView() {
     let disposed = false;
     setStatus('loading');
     spreadRef.current = 0;
+    pagesOpenedRef.current = false; // #6851: a new piece opens its spread at the top too
     setSpreadView(null);
 
     const osmd = new OpenSheetMusicDisplay(container, {
@@ -4850,7 +4884,7 @@ export function ScoreView() {
         onClickCapture={noteUse}
         onChangeCapture={(e) => { if ((e.target as HTMLInputElement).type !== 'checkbox') noteUse(e); }}
         data-score-toolbar
-        className="sticky top-0 z-20 -mx-2 flex flex-col gap-2 rounded-b-md bg-gray-950/95 px-2 py-2 backdrop-blur">
+        className={`${scoreLayout === 'pages' ? 'relative' : 'sticky top-0'} z-20 -mx-2 flex flex-col gap-2 rounded-b-md bg-gray-950/95 px-2 py-2 backdrop-blur`}>
         {looking && (
           <span data-testid="looking" className="pointer-events-none absolute right-2 top-full mt-1 rounded bg-sky-700 px-2 py-0.5 text-xs text-white">
             Looking — play or Esc to go back

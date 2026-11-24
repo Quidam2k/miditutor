@@ -45,7 +45,7 @@ export function App() {
   const mainWidth =
     view === 'review' ? 'max-w-7xl'
     : strip ? 'max-w-none min-h-0'
-    : view === 'score' && scoreLayout === 'pages' ? 'max-w-none'
+    : view === 'score' && (scoreLayout === 'pages' || scoreLayout === 'scroll') ? 'max-w-none' // #6852: Scroll gets the full width too, so the sticky toolbar is not a half-width strip over the music
     : 'max-w-3xl';
   // Bumped on every click of Practice (or the title) so it always lands on the drill's start screen.
   const [practiceVisit, setPracticeVisit] = useState(0);
