@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMidiStore } from '../store/useMidiStore';
-import { parseTally, practiceLabel, tallyNote } from '../engine/PracticeTally';
+import { isPracticeNote, parseTally, practiceLabel, tallyNote } from '../engine/PracticeTally';
 
 const STORE_KEY = 'miditutor-practice';
 const SAVE_EVERY_MS = 15000;
@@ -20,9 +20,10 @@ export function TopClock() {
     let savedAt = 0;
     const save = () => localStorage.setItem(STORE_KEY, JSON.stringify(tallyRef.current));
     const unsub = useMidiStore.subscribe((state, prev) => {
-      if (!state.lastNoteOn || state.lastNoteOn === prev.lastNoteOn) return;
-      // A note the tutor injected isn't him playing.
-      if (state.noteLog[0]?.source === 'inject') return;
+      // #7065: read the monitor log, not lastNoteOn: while Pause is on the store withholds lastNoteOn
+      // (nothing judges the note) but the note is still practice, and the timer ticks the same.
+      const entry = state.noteLog[0];
+      if (entry === prev.noteLog[0] || !isPracticeNote(entry)) return;
       const at = Date.now();
       tallyRef.current = tallyNote(tallyRef.current, at);
       setTally(tallyRef.current);

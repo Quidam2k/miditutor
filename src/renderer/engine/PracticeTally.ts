@@ -9,6 +9,12 @@ export interface PracticeTally {
   totalMs: number;
 }
 
+/** #7065: whether a monitor-log entry is him playing a key. Pause does not matter here: paused play
+ *  counts as practice exactly like unpaused (Pause only stops the judging). The tutor's own notes don't. */
+export function isPracticeNote(entry: { kind: string; source?: string } | undefined): boolean {
+  return !!entry && entry.kind === 'noteon' && entry.source !== 'inject';
+}
+
 export function tallyNote(t: PracticeTally | null, now: number): PracticeTally {
   if (!t) return { lastNoteAt: now, totalMs: 0 };
   const gap = now - t.lastNoteAt;
